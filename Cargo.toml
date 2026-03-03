@@ -1,0 +1,10 @@
+[package]
+name = "spartan-whir"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "spartan_whir"
+path = "src/lib.rs"
+
+[dependencies]
