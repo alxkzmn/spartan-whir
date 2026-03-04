@@ -11,7 +11,14 @@ pub enum SpartanWhirError {
     PcsVerificationFailed,
     ProofDecodeFailed,
     UnsupportedMode,
+    UnsupportedStatementType,
     InvalidConfig,
+    WhirCommitFailed,
+    WhirOpenFailed,
+    WhirVerifyFailed,
+    CommitmentMismatch,
+    InvalidPolynomialLength,
+    InvalidNumVariables,
 }
 
 impl core::fmt::Display for SpartanWhirError {
@@ -28,7 +35,14 @@ impl core::fmt::Display for SpartanWhirError {
             Self::PcsVerificationFailed => write!(f, "PCS verification failed"),
             Self::ProofDecodeFailed => write!(f, "proof decode failed"),
             Self::UnsupportedMode => write!(f, "unsupported mode"),
+            Self::UnsupportedStatementType => write!(f, "unsupported statement type"),
             Self::InvalidConfig => write!(f, "invalid configuration"),
+            Self::WhirCommitFailed => write!(f, "WHIR commitment failed"),
+            Self::WhirOpenFailed => write!(f, "WHIR opening failed"),
+            Self::WhirVerifyFailed => write!(f, "WHIR verification failed"),
+            Self::CommitmentMismatch => write!(f, "commitment mismatch"),
+            Self::InvalidPolynomialLength => write!(f, "invalid polynomial length"),
+            Self::InvalidNumVariables => write!(f, "invalid number of variables"),
         }
     }
 }

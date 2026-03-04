@@ -8,3 +8,16 @@ name = "spartan_whir"
 path = "src/lib.rs"
 
 [dependencies]
+whir-p3 = { path = "../whir-p3", default-features = false }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+
+[features]
+default = []
+keccak_no_prefix = []

@@ -5,7 +5,9 @@ extern crate alloc;
 pub mod codec;
 pub mod config;
 pub mod domain_separator;
+pub mod engine;
 pub mod error;
+pub mod hashers;
 pub mod pcs;
 pub mod poly;
 pub mod protocol;
@@ -14,11 +16,22 @@ pub mod security;
 pub mod statement;
 pub mod sumcheck;
 pub mod whir_params;
+pub mod whir_pcs;
 
 pub use codec::{effective_digest_bytes, ProofCodecConfig};
 pub use config::SpartanWhirEngine;
 pub use domain_separator::DomainSeparator;
+pub use engine::{
+    new_koala_keccak_challenger, new_koala_keccak_merkle_compress, new_koala_keccak_merkle_hash,
+    KoalaExtension, KoalaField, KoalaKeccakChallenger, KoalaKeccakCompress, KoalaKeccakEngine,
+    KoalaKeccakFieldHash,
+};
 pub use error::SpartanWhirError;
+pub use hashers::{
+    digest_from_bytes, digest_to_bytes, effective_digest_bytes_for_security_bits,
+    merkle_security_bits_or_default, Keccak256NodeCompress, KeccakFieldLeafHasher,
+    KECCAK_DIGEST_ELEMS,
+};
 pub use pcs::MlePcs;
 pub use poly::{CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint, QuadraticRoundPoly};
 pub use protocol::{ProvingKey, SpartanProof, SpartanProtocol, VerifyingKey};
@@ -29,3 +42,6 @@ pub use sumcheck::{
     prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
 pub use whir_params::WhirParams;
+pub use whir_pcs::{
+    observe_whir_fs_domain_separator, SumcheckStrategy, WhirPcs, WhirPcsConfig, WhirProverData,
+};

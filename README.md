@@ -1,54 +1,47 @@
 # spartan-whir
 
-`spartan-whir` is the Phase 1 contract crate for a Spartan SNARK built on Plonky3-style field/challenger APIs, with WHIR intended as the multilinear PCS backend.
+`spartan-whir` implements a Spartan-oriented API surface with a concrete WHIR multilinear PCS adapter for KoalaBear + Keccak.
 
-This phase is intentionally **API-first**:
+Phase 2 adds a real vertical slice for PCS operations:
 
-- Public traits and type contracts are defined.
-- Methods are stubbed and return typed `Unimplemented` errors where implementation is deferred.
-- Tests focus on contract shape, invariants, and stub behavior.
+- `commit -> open -> verify` works through `whir-p3` via `MlePcs`.
+- Engine is concrete (`KoalaKeccakEngine`) with:
+  - `F = KoalaBear`
+  - `EF = BinomialExtensionField<F, 4>`
+  - `W = u64`, `DIGEST_ELEMS = 4`
+  - Keccak-based Merkle hash/compression and challenger.
+  - Merkle hashers are `KeccakFieldLeafHasher` and `Keccak256NodeCompress`.
+  - Digest truncation is controlled by `merkle_security_bits` via
+    `effective_digest_bytes_for_security_bits(...)`.
+- Point-evaluation statements are supported.
+- Unsupported statement modes (linear/tensor constraints) are rejected in this phase.
 
-No prover/verifier cryptographic logic is implemented yet.
+## Implemented in Phase 2
 
-## Phase 1 Scope
+- `src/engine.rs`
+  - `KoalaKeccakEngine` and constructors for hash/compress/challenger.
+- `src/hashers.rs`
+  - Keccak256 byte-level leaf/node hashers with domain prefixes and digest-byte masking.
+  - Types: `KeccakFieldLeafHasher` and `Keccak256NodeCompress`.
+  - Optional feature: `keccak_no_prefix` disables `0x00`/`0x01` domain prefixes for hash inputs.
+  - EVM-compatible `[u64;4] <-> bytes32` conversions.
+- `src/whir_pcs.rs`
+  - `WhirPcsConfig`, `WhirPcs`, `WhirProverData`.
+  - Real WHIR-backed `MlePcs` implementation.
+  - Correct WHIR Fiat-Shamir domain-separator sequence.
+  - Correct statement ordering (`user claims` then `OOD`) on prover side.
+  - Verify path that relies on verifier-side OOD concatenation from parsed commitment.
+- `src/statement.rs`
+  - `PointEvalClaim.point` is now `MultilinearPoint<E::EF>`.
+- `src/error.rs`
+  - Adapter-specific errors for commit/open/verify/mismatch/shape issues.
 
-Implemented in this crate:
+## Still Stubbed in Phase 2
 
-- Engine/config contracts (`SpartanWhirEngine`, security, WHIR params, codec levers)
-- R1CS data model (`R1csShape`, `R1csWitness`, `R1csInstance`, `SparseMatrix`)
-- PCS statement builder/finalized types (`PcsStatementBuilder` -> `PcsStatement`)
-- PCS trait surface (`MlePcs`)
-- Protocol/key/proof type surface (`SpartanProtocol`, `ProvingKey`, `VerifyingKey`, `SpartanProof`)
-- Sumcheck contract surfaces (outer cubic / inner quadratic round data)
-- Domain separator contract and deterministic encoding
-
-Out of scope in Phase 1:
-
-- Real `setup/prove/verify` internals
-- Real WHIR `commit/open/verify` adapter internals
-- EVM proof encoding/profiling implementation
+- Full Spartan protocol (`SpartanProtocol::setup/prove/verify`)
+- Spartan outer/inner sumcheck protocol internals
+- EVM codec/proof-size profiling implementation
 - Zero-knowledge mode
-
-## Module Map
-
-- `src/config.rs`: engine trait
-- `src/security.rs`: security config + invariants
-- `src/whir_params.rs`: WHIR-only knobs
-- `src/codec.rs`: proof encoding levers
-- `src/error.rs`: typed error taxonomy
-- `src/poly.rs`: polynomial and compressed round-poly types
-- `src/r1cs.rs`: R1CS model and shape validation
-- `src/statement.rs`: PCS statement builder/finalized split
-- `src/pcs.rs`: PCS trait
-- `src/sumcheck.rs`: outer/inner sumcheck contract stubs
-- `src/domain_separator.rs`: transcript/domain binding surface
-- `src/protocol.rs`: protocol/key/proof contract stubs
-
-## Current Status
-
-- `#![cfg_attr(not(test), no_std)]` is enabled.
-- Stubs return `SpartanWhirError::Unimplemented(...)` for deferred logic paths.
-- One linear-constraint future-path test is intentionally `#[ignore]`.
 
 ## Run Tests
 
@@ -56,6 +49,12 @@ Out of scope in Phase 1:
 cargo test
 ```
 
-## Next Phase
+The suite includes Phase 1 contract tests and Phase 2 WHIR adapter tests:
 
-Phase 2 will wire these contracts to concrete WHIR prover/verifier flows, replace stubs with real protocol logic, and begin integrating proof-size and EVM-oriented profiling hooks.
+- roundtrip point-eval proofs
+- constraint-ordering regression guard
+- tampered commitment rejection
+- wrong-evaluation rejection
+- polynomial shape/variable mismatch rejections
+- transcript checkpoint consistency
+- explicit domain-separator sequence alignment

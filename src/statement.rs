@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use crate::{Evaluations, MultilinearPoint, SpartanWhirEngine, SpartanWhirError};
 
 pub struct PointEvalClaim<E: SpartanWhirEngine> {
-    pub point: MultilinearPoint<E::F>,
+    pub point: MultilinearPoint<E::EF>,
     pub value: E::EF,
 }
 
