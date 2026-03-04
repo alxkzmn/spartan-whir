@@ -1,60 +1,69 @@
 # spartan-whir
 
-`spartan-whir` implements a Spartan-oriented API surface with a concrete WHIR multilinear PCS adapter for KoalaBear + Keccak.
+`spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields with `whir-p3` as the multilinear PCS backend.
 
-Phase 2 adds a real vertical slice for PCS operations:
+## Phase 3 Status
 
-- `commit -> open -> verify` works through `whir-p3` via `MlePcs`.
-- Engine is concrete (`KoalaKeccakEngine`) with:
+Phase 3 is now implemented for the concrete backend:
+
+- Engine: `KoalaKeccakEngine`
   - `F = KoalaBear`
   - `EF = BinomialExtensionField<F, 4>`
   - `W = u64`, `DIGEST_ELEMS = 4`
-  - Keccak-based Merkle hash/compression and challenger.
-  - Merkle hashers are `KeccakFieldLeafHasher` and `Keccak256NodeCompress`.
-  - Digest truncation is controlled by `merkle_security_bits` via
-    `effective_digest_bytes_for_security_bits(...)`.
-- Point-evaluation statements are supported.
-- Unsupported statement modes (linear/tensor constraints) are rejected in this phase.
+- PCS: `WhirPcs` (`commit -> open -> verify`)
+- Spartan core:
+  - Real `SpartanProtocol::setup/prove/verify`
+  - Real outer cubic and inner quadratic sumchecks
+  - Real R1CS operations (`pad_regular`, `multiply_vec`, `bind_row_vars`, `evaluate_with_tables`, `witness_to_mle`)
+  - Public instance is external to proof (`verify(vk, instance, proof, challenger)`)
+  - `prove` returns `(instance, proof)`
+- Transcript correctness:
+  - Spartan domain separator + public inputs are absorbed before PCS commit
+  - WHIR verify is split into commitment-parse and finalize phases to preserve transcript continuity
 
-## Implemented in Phase 2
+## Implemented Modules
 
 - `src/engine.rs`
-  - `KoalaKeccakEngine` and constructors for hash/compress/challenger.
+  - Concrete Koala+Keccak engine/challenger constructors
 - `src/hashers.rs`
-  - Keccak256 byte-level leaf/node hashers with domain prefixes and digest-byte masking.
-  - Types: `KeccakFieldLeafHasher` and `Keccak256NodeCompress`.
-  - Optional feature: `keccak_no_prefix` disables `0x00`/`0x01` domain prefixes for hash inputs.
-  - EVM-compatible `[u64;4] <-> bytes32` conversions.
+  - EVM-compatible Keccak leaf/node hashing with digest masking controls
 - `src/whir_pcs.rs`
-  - `WhirPcsConfig`, `WhirPcs`, `WhirProverData`.
-  - Real WHIR-backed `MlePcs` implementation.
-  - Correct WHIR Fiat-Shamir domain-separator sequence.
-  - Correct statement ordering (`user claims` then `OOD`) on prover side.
-  - Verify path that relies on verifier-side OOD concatenation from parsed commitment.
-- `src/statement.rs`
-  - `PointEvalClaim.point` is now `MultilinearPoint<E::EF>`.
-- `src/error.rs`
-  - Adapter-specific errors for commit/open/verify/mismatch/shape issues.
+  - WHIR-backed `MlePcs`
+  - `verify_parse_commitment` / `verify_finalize` helpers
+- `src/r1cs.rs`
+  - Canonical padding and sparse-matrix evaluation helpers
+- `src/sumcheck.rs`
+  - Transcript-driven outer/inner sumcheck prove/verify
+- `src/protocol.rs`
+  - Real Spartan setup/prove/verify orchestration
+- `src/profiling.rs`
+  - No-op structural hooks (`ProtocolObserver`, `ProtocolStage`)
 
-## Still Stubbed in Phase 2
+## Still Out of Scope
 
-- Full Spartan protocol (`SpartanProtocol::setup/prove/verify`)
-- Spartan outer/inner sumcheck protocol internals
-- EVM codec/proof-size profiling implementation
 - Zero-knowledge mode
+- Full EVM verifier contract implementation
+- Proof-size/gas accounting implementation (hooks exist, accounting logic not implemented)
+- Non-Koala/non-WHIR backend generalization for Spartan execution path
 
 ## Run Tests
 
 ```bash
 cargo test
+cargo test --features keccak_no_prefix
 ```
 
-The suite includes Phase 1 contract tests and Phase 2 WHIR adapter tests:
+Test suite includes:
 
-- roundtrip point-eval proofs
-- constraint-ordering regression guard
-- tampered commitment rejection
-- wrong-evaluation rejection
-- polynomial shape/variable mismatch rejections
-- transcript checkpoint consistency
-- explicit domain-separator sequence alignment
+- WHIR PCS lifecycle and ordering regression tests
+- R1CS canonicalization and table-evaluation consistency tests
+- Sumcheck roundtrip and tamper/round-count checks
+- Direct quadratic/cubic round-polynomial interpolation spot checks
+- Spartan protocol end-to-end success/failure scenarios
+  - tampered commitment rejection
+  - tampered outer claims rejection
+  - tampered `witness_eval` rejection
+  - tampered PCS proof rejection
+  - wrong public-input rejection
+- Transcript checkpoint consistency tests
+- Non-invertible witness recovery denominator guard tests

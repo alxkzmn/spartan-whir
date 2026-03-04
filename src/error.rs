@@ -3,6 +3,7 @@ pub enum SpartanWhirError {
     Unimplemented(&'static str),
     InvalidR1csShape,
     InvalidWitnessLength,
+    InvalidPublicInputLength,
     PaddingError,
     SecurityBelowMinimum,
     MerkleSecurityBelowMinimum,
@@ -19,6 +20,9 @@ pub enum SpartanWhirError {
     CommitmentMismatch,
     InvalidPolynomialLength,
     InvalidNumVariables,
+    InvalidRoundCount,
+    InvalidRoundPolynomial,
+    NonInvertibleElement,
 }
 
 impl core::fmt::Display for SpartanWhirError {
@@ -27,6 +31,7 @@ impl core::fmt::Display for SpartanWhirError {
             Self::Unimplemented(where_) => write!(f, "unimplemented: {where_}"),
             Self::InvalidR1csShape => write!(f, "invalid R1CS shape"),
             Self::InvalidWitnessLength => write!(f, "invalid witness length"),
+            Self::InvalidPublicInputLength => write!(f, "invalid public input length"),
             Self::PaddingError => write!(f, "padding error"),
             Self::SecurityBelowMinimum => write!(f, "security level below minimum"),
             Self::MerkleSecurityBelowMinimum => write!(f, "merkle security below minimum"),
@@ -43,6 +48,9 @@ impl core::fmt::Display for SpartanWhirError {
             Self::CommitmentMismatch => write!(f, "commitment mismatch"),
             Self::InvalidPolynomialLength => write!(f, "invalid polynomial length"),
             Self::InvalidNumVariables => write!(f, "invalid number of variables"),
+            Self::InvalidRoundCount => write!(f, "invalid sumcheck round count"),
+            Self::InvalidRoundPolynomial => write!(f, "invalid sumcheck round polynomial"),
+            Self::NonInvertibleElement => write!(f, "non-invertible field element"),
         }
     }
 }

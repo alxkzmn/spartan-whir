@@ -1,5 +1,6 @@
 mod common;
 
+use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{SparseMatEntry, SparseMatrix, SpartanWhirError};
 
 #[test]
@@ -80,4 +81,69 @@ fn shape_validate_rejects_column_count_overflow() {
     };
 
     assert_eq!(shape.validate(), Err(SpartanWhirError::InvalidR1csShape));
+}
+
+#[test]
+fn pad_regular_renumbers_constant_and_io_columns() {
+    let shape = common::koala_shape_single_constraint(2);
+    let padded = shape.pad_regular().expect("padding succeeds");
+
+    assert_eq!(padded.num_vars, 2);
+    assert_eq!(padded.a.num_cols, 4);
+    assert_eq!(padded.b.entries[0].col, 2); // shifted const column
+    assert_eq!(padded.c.entries[0].col, 3); // shifted public input column
+}
+
+#[test]
+fn multiply_vec_matches_expected_constraint_values() {
+    let shape = common::koala_shape_single_constraint(2)
+        .pad_regular()
+        .expect("padding succeeds");
+    let z = vec![
+        spartan_whir::KoalaField::from_u32(4),
+        spartan_whir::KoalaField::ZERO,
+        spartan_whir::KoalaField::ONE,
+        spartan_whir::KoalaField::from_u32(4),
+    ];
+
+    let (az, bz, cz) = shape.multiply_vec(&z).expect("multiply succeeds");
+    assert_eq!(az.len(), 2);
+    assert_eq!(bz.len(), 2);
+    assert_eq!(cz.len(), 2);
+    assert_eq!(az[0], spartan_whir::KoalaField::from_u32(4));
+    assert_eq!(bz[0], spartan_whir::KoalaField::ONE);
+    assert_eq!(cz[0], spartan_whir::KoalaField::from_u32(4));
+}
+
+#[test]
+fn bind_row_vars_and_evaluate_with_tables_are_consistent() {
+    let shape = common::koala_shape_single_constraint(2)
+        .pad_regular()
+        .expect("padding succeeds");
+
+    let r_x = vec![spartan_whir::KoalaExtension::from(
+        spartan_whir::KoalaField::from_u32(3),
+    )];
+    let r_y = vec![
+        spartan_whir::KoalaExtension::from(spartan_whir::KoalaField::from_u32(2)),
+        spartan_whir::KoalaExtension::from(spartan_whir::KoalaField::from_u32(5)),
+    ];
+    let t_x = spartan_whir::EqPolynomial::evals_from_point(&r_x);
+    let t_y = spartan_whir::EqPolynomial::evals_from_point(&r_y);
+
+    let (bound_a, bound_b, bound_c) = shape.bind_row_vars(&t_x).expect("bind succeeds");
+    let (eval_a, eval_b, eval_c) = shape
+        .evaluate_with_tables(&t_x, &t_y)
+        .expect("table evaluation succeeds");
+
+    let dot = |v: &[spartan_whir::KoalaExtension]| {
+        v.iter()
+            .zip(t_y.iter())
+            .fold(spartan_whir::KoalaExtension::ZERO, |acc, (&x, &y)| {
+                acc + x * y
+            })
+    };
+    assert_eq!(eval_a, dot(&bound_a));
+    assert_eq!(eval_b, dot(&bound_b));
+    assert_eq!(eval_c, dot(&bound_c));
 }

@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
+use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
-    DomainSeparator, Evaluations, LinearConstraintClaim, MlePcs, MultilinearPoint, PcsStatement,
-    PcsStatementBuilder, PointEvalClaim, R1csInstance, R1csShape, R1csWitness, SecurityConfig,
-    SparseMatEntry, SparseMatrix, SpartanWhirEngine, SpartanWhirError, WhirParams,
+    DomainSeparator, Evaluations, KoalaField, LinearConstraintClaim, MlePcs, MultilinearPoint,
+    PcsStatement, PcsStatementBuilder, PointEvalClaim, R1csInstance, R1csShape, R1csWitness,
+    SecurityConfig, SoundnessAssumption, SparseMatEntry, SparseMatrix, SpartanWhirEngine,
+    SpartanWhirError, SumcheckStrategy, WhirParams, WhirPcsConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -126,4 +128,85 @@ pub fn sample_domain_separator() -> DomainSeparator {
         &SecurityConfig::default(),
         &WhirParams::default(),
     )
+}
+
+pub fn koala_shape_single_constraint(num_cons: usize) -> R1csShape<KoalaField> {
+    let a_entries = (0..num_cons)
+        .map(|row| SparseMatEntry {
+            row,
+            col: 0,
+            val: KoalaField::ONE,
+        })
+        .collect();
+    let b_entries = (0..num_cons)
+        .map(|row| SparseMatEntry {
+            row,
+            col: 1,
+            val: KoalaField::ONE,
+        })
+        .collect();
+    let c_entries = (0..num_cons)
+        .map(|row| SparseMatEntry {
+            row,
+            col: 2,
+            val: KoalaField::ONE,
+        })
+        .collect();
+
+    R1csShape {
+        num_cons,
+        num_vars: 1,
+        num_io: 1,
+        a: SparseMatrix {
+            num_rows: num_cons,
+            num_cols: 3,
+            entries: a_entries,
+        },
+        b: SparseMatrix {
+            num_rows: num_cons,
+            num_cols: 3,
+            entries: b_entries,
+        },
+        c: SparseMatrix {
+            num_rows: num_cons,
+            num_cols: 3,
+            entries: c_entries,
+        },
+    }
+}
+
+pub fn koala_witness(value: u32) -> R1csWitness<KoalaField> {
+    R1csWitness {
+        w: vec![KoalaField::from_u32(value)],
+    }
+}
+
+pub fn koala_public_inputs(value: u32) -> Vec<KoalaField> {
+    vec![KoalaField::from_u32(value)]
+}
+
+pub fn phase3_security() -> SecurityConfig {
+    SecurityConfig {
+        security_level_bits: 80,
+        merkle_security_bits: 80,
+        soundness_assumption: SoundnessAssumption::CapacityBound,
+    }
+}
+
+pub fn phase3_whir_params() -> WhirParams {
+    WhirParams {
+        pow_bits: 0,
+        folding_factor: 1,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 1,
+    }
+}
+
+pub fn phase3_pcs_config() -> WhirPcsConfig {
+    WhirPcsConfig {
+        num_variables: 0,
+        security: phase3_security(),
+        whir: phase3_whir_params(),
+        sumcheck_strategy: SumcheckStrategy::Svo,
+    }
 }

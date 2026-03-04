@@ -10,6 +10,7 @@ pub mod error;
 pub mod hashers;
 pub mod pcs;
 pub mod poly;
+pub mod profiling;
 pub mod protocol;
 pub mod r1cs;
 pub mod security;
@@ -33,7 +34,11 @@ pub use hashers::{
     KECCAK_DIGEST_ELEMS,
 };
 pub use pcs::MlePcs;
-pub use poly::{CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint, QuadraticRoundPoly};
+pub use poly::{
+    evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,
+    QuadraticRoundPoly,
+};
+pub use profiling::{NoopObserver, ProtocolObserver, ProtocolStage};
 pub use protocol::{ProvingKey, SpartanProof, SpartanProtocol, VerifyingKey};
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MIN_SECURITY_BITS};
@@ -43,5 +48,6 @@ pub use sumcheck::{
 };
 pub use whir_params::WhirParams;
 pub use whir_pcs::{
-    observe_whir_fs_domain_separator, SumcheckStrategy, WhirPcs, WhirPcsConfig, WhirProverData,
+    observe_whir_fs_domain_separator, verify_finalize, verify_parse_commitment,
+    ParsedWhirCommitment, SumcheckStrategy, WhirPcs, WhirPcsConfig, WhirProverData,
 };

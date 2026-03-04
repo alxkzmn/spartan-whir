@@ -4,6 +4,7 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::TwoAdicField;
 use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTree;
+use p3_symmetric::Hash;
 use whir_p3::{
     fiat_shamir::domain_separator::DomainSeparator as WhirFsDomainSeparator,
     parameters::{errors::SecurityAssumption as WhirSecurity, FoldingFactor, ProtocolParameters},
@@ -41,6 +42,8 @@ type KoalaWhirConfig = WhirConfig<
 type KoalaWhirPoint = WhirPoint<KoalaExtension>;
 type KoalaWhirProof = WhirProof<KoalaField, KoalaExtension, u64, 4>;
 type KoalaMerkleTree = MerkleTree<KoalaField, u64, DenseMatrix<KoalaField>, 4>;
+pub type ParsedWhirCommitment =
+    whir_p3::whir::committer::reader::ParsedCommitment<KoalaExtension, Hash<KoalaField, u64, 4>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhirPcsConfig {
@@ -106,6 +109,44 @@ pub fn observe_whir_fs_domain_separator(
     let (_, whir_config) = build_whir_config(config)?;
     observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
     Ok(())
+}
+
+pub fn verify_parse_commitment(
+    config: &WhirPcsConfig,
+    commitment: &[u64; 4],
+    proof: &KoalaWhirProof,
+    challenger: &mut KoalaKeccakChallenger,
+) -> Result<ParsedWhirCommitment, SpartanWhirError> {
+    config.validate()?;
+    let (_, whir_config) = build_whir_config(config)?;
+    observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
+
+    let reader = CommitmentReader::new(&whir_config);
+    let parsed = reader.parse_commitment::<u64, 4>(proof, challenger);
+    if *parsed.root.as_ref() != *commitment {
+        return Err(SpartanWhirError::CommitmentMismatch);
+    }
+    Ok(parsed)
+}
+
+pub fn verify_finalize(
+    config: &WhirPcsConfig,
+    parsed: &ParsedWhirCommitment,
+    statement: &PcsStatement<KoalaKeccakEngine>,
+    proof: &KoalaWhirProof,
+    challenger: &mut KoalaKeccakChallenger,
+) -> Result<(), SpartanWhirError> {
+    config.validate()?;
+    // Note: this rebuilds config independently from `verify_parse_commitment`.
+    // We keep the split API for transcript ordering clarity; may be optimized later.
+    let (_, whir_config) = build_whir_config(config)?;
+    let user_statement = build_user_statement(statement, config.num_variables)?;
+
+    let verifier = Verifier::new(&whir_config);
+    verifier
+        .verify::<KoalaField, u64, u64, 4>(proof, challenger, parsed, user_statement)
+        .map(|_| ())
+        .map_err(|_| SpartanWhirError::WhirVerifyFailed)
 }
 
 impl MlePcs<KoalaKeccakEngine> for WhirPcs {
@@ -204,29 +245,8 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
         proof: &Self::Proof,
         challenger: &mut KoalaKeccakChallenger,
     ) -> Result<(), SpartanWhirError> {
-        config.validate()?;
-
-        let (_, whir_config) = build_whir_config(config)?;
-        observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
-
-        let commitment_reader = CommitmentReader::new(&whir_config);
-        let parsed_commitment = commitment_reader.parse_commitment::<u64, 4>(proof, challenger);
-        if *parsed_commitment.root.as_ref() != *commitment {
-            return Err(SpartanWhirError::CommitmentMismatch);
-        }
-
-        let user_statement = build_user_statement(statement, config.num_variables)?;
-        let verifier = Verifier::new(&whir_config);
-        verifier
-            .verify::<KoalaField, u64, u64, 4>(
-                proof,
-                challenger,
-                &parsed_commitment,
-                user_statement,
-            )
-            .map_err(|_| SpartanWhirError::WhirVerifyFailed)?;
-
-        Ok(())
+        let parsed = verify_parse_commitment(config, commitment, proof, challenger)?;
+        verify_finalize(config, &parsed, statement, proof, challenger)
     }
 }
 

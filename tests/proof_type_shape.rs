@@ -1,32 +1,36 @@
-mod common;
+use spartan_whir::{
+    KoalaField, KoalaKeccakChallenger, KoalaKeccakEngine, ProvingKey, R1csInstance, R1csWitness,
+    SpartanProof, SpartanProtocol, SpartanWhirError, VerifyingKey, WhirPcs,
+};
 
-use common::{sample_instance, DummyChallenger, DummyPcs};
-use spartan_whir::{SpartanProof, SpartanProtocol, SpartanWhirError};
+fn assert_prove_signature(
+    _f: fn(
+        &ProvingKey<KoalaKeccakEngine, WhirPcs>,
+        &[KoalaField],
+        &R1csWitness<KoalaField>,
+        &mut KoalaKeccakChallenger,
+    ) -> Result<
+        (
+            R1csInstance<KoalaField, [u64; 4]>,
+            SpartanProof<KoalaKeccakEngine, WhirPcs>,
+        ),
+        SpartanWhirError,
+    >,
+) {
+}
+
+fn assert_verify_signature(
+    _f: fn(
+        &VerifyingKey<KoalaKeccakEngine, WhirPcs>,
+        &R1csInstance<KoalaField, [u64; 4]>,
+        &SpartanProof<KoalaKeccakEngine, WhirPcs>,
+        &mut KoalaKeccakChallenger,
+    ) -> Result<(), SpartanWhirError>,
+) {
+}
 
 #[test]
-fn verify_signature_accepts_external_instance_and_proof() {
-    let vk = spartan_whir::VerifyingKey::<common::DummyEngine, DummyPcs>::new(
-        common::sample_domain_separator(),
-    );
-
-    let proof = SpartanProof::<common::DummyEngine, DummyPcs> {
-        outer_sumcheck: spartan_whir::OuterSumcheckProof { rounds: vec![] },
-        outer_claims: (0, 0, 0),
-        inner_sumcheck: spartan_whir::InnerSumcheckProof { rounds: vec![] },
-        witness_eval: 0,
-        pcs_proof: common::DummyPcsProof,
-    };
-
-    let mut challenger = DummyChallenger;
-    let result = SpartanProtocol::<common::DummyEngine, DummyPcs>::verify(
-        &vk,
-        &sample_instance(),
-        &proof,
-        &mut challenger,
-    );
-
-    assert_eq!(
-        result,
-        Err(SpartanWhirError::Unimplemented("protocol::verify"))
-    );
+fn protocol_signatures_expose_external_instance() {
+    assert_prove_signature(SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove);
+    assert_verify_signature(SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify);
 }

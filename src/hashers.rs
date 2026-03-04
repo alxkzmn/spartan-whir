@@ -10,6 +10,9 @@ const KECCAK_DIGEST_BYTES: usize = 32;
 
 #[inline]
 fn maybe_push_leaf_prefix(buf: &mut Vec<u8>) {
+    #[cfg(feature = "keccak_no_prefix")]
+    let _ = buf;
+
     #[cfg(not(feature = "keccak_no_prefix"))]
     {
         buf.push(0x00);
