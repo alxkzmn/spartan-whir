@@ -242,7 +242,7 @@ fn bind_half<F: Field, EF: ExtensionField<F>>(
     table: &mut Vec<EF>,
     r: EF,
 ) -> Result<(), SpartanWhirError> {
-    if table.len() < 2 || table.len() % 2 != 0 {
+    if table.len() < 2 || !table.len().is_multiple_of(2) {
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
 

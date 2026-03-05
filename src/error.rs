@@ -23,6 +23,14 @@ pub enum SpartanWhirError {
     InvalidRoundCount,
     InvalidRoundPolynomial,
     NonInvertibleElement,
+    ProofEncodeFailed,
+    UnsupportedBlobVersion,
+    InvalidBlobHeader,
+    InvalidBlobLayout,
+    InvalidBlobFlags,
+    TrailingBytes,
+    DigestBytesMismatch,
+    NonCanonicalEncoding,
 }
 
 impl core::fmt::Display for SpartanWhirError {
@@ -51,6 +59,14 @@ impl core::fmt::Display for SpartanWhirError {
             Self::InvalidRoundCount => write!(f, "invalid sumcheck round count"),
             Self::InvalidRoundPolynomial => write!(f, "invalid sumcheck round polynomial"),
             Self::NonInvertibleElement => write!(f, "non-invertible field element"),
+            Self::ProofEncodeFailed => write!(f, "proof encode failed"),
+            Self::UnsupportedBlobVersion => write!(f, "unsupported blob version"),
+            Self::InvalidBlobHeader => write!(f, "invalid blob header"),
+            Self::InvalidBlobLayout => write!(f, "invalid blob layout"),
+            Self::InvalidBlobFlags => write!(f, "invalid blob flags"),
+            Self::TrailingBytes => write!(f, "trailing bytes"),
+            Self::DigestBytesMismatch => write!(f, "digest bytes mismatch"),
+            Self::NonCanonicalEncoding => write!(f, "non-canonical encoding"),
         }
     }
 }

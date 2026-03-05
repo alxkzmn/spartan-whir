@@ -2,6 +2,7 @@ use alloc::{vec, vec::Vec};
 
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::TwoAdicField;
+
 use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTree;
 use p3_symmetric::Hash;
@@ -21,29 +22,20 @@ use whir_p3::{
 
 use crate::{
     effective_digest_bytes_for_security_bits,
-    engine::{
-        KoalaExtension, KoalaField, KoalaKeccakChallenger, KoalaKeccakCompress, KoalaKeccakEngine,
-        KoalaKeccakFieldHash,
-    },
+    engine::{KeccakChallenger, KeccakEngine, KeccakFieldHash, KeccakNodeCompress, EF, F},
     Evaluations, LinearConstraintClaim, MlePcs, PcsStatement, SecurityConfig, SoundnessAssumption,
     SpartanWhirError, WhirParams,
 };
 
 pub use whir_p3::whir::parameters::SumcheckStrategy;
 
-type KoalaProtocolParameters = ProtocolParameters<KoalaKeccakFieldHash, KoalaKeccakCompress>;
-type KoalaWhirConfig = WhirConfig<
-    KoalaExtension,
-    KoalaField,
-    KoalaKeccakFieldHash,
-    KoalaKeccakCompress,
-    KoalaKeccakChallenger,
->;
-type KoalaWhirPoint = WhirPoint<KoalaExtension>;
-type KoalaWhirProof = WhirProof<KoalaField, KoalaExtension, u64, 4>;
-type KoalaMerkleTree = MerkleTree<KoalaField, u64, DenseMatrix<KoalaField>, 4>;
+type WhirProtocolParams = ProtocolParameters<KeccakFieldHash, KeccakNodeCompress>;
+type PcsConfig = WhirConfig<EF, F, KeccakFieldHash, KeccakNodeCompress, KeccakChallenger>;
+type WhirPcsPoint = WhirPoint<EF>;
+type WhirPcsProof = WhirProof<F, EF, u64, 4>;
+type WhirMerkleTree = MerkleTree<F, u64, DenseMatrix<F>, 4>;
 pub type ParsedWhirCommitment =
-    whir_p3::whir::committer::reader::ParsedCommitment<KoalaExtension, Hash<KoalaField, u64, 4>>;
+    whir_p3::whir::committer::reader::ParsedCommitment<EF, Hash<F, u64, 4>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhirPcsConfig {
@@ -82,7 +74,7 @@ impl WhirPcsConfig {
             .and_then(|v| v.checked_sub(self.whir.folding_factor))
             .ok_or(SpartanWhirError::InvalidConfig)?;
 
-        if log_folded_domain_size > KoalaField::TWO_ADICITY {
+        if log_folded_domain_size > F::TWO_ADICITY {
             return Err(SpartanWhirError::InvalidConfig);
         }
 
@@ -92,19 +84,54 @@ impl WhirPcsConfig {
 
 #[derive(Debug)]
 pub struct WhirProverData {
-    pub merkle_tree: KoalaMerkleTree,
-    pub proof: KoalaWhirProof,
-    pub polynomial: Vec<KoalaField>,
-    pub ood_pairs: Vec<(KoalaWhirPoint, KoalaExtension)>,
+    pub merkle_tree: WhirMerkleTree,
+    pub proof: WhirPcsProof,
+    pub polynomial: Vec<F>,
+    pub ood_pairs: Vec<(WhirPcsPoint, EF)>,
     pub num_variables: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WhirProofExpectations {
+    pub n_rounds: usize,
+    pub round_num_queries: Vec<usize>,
+    pub final_num_queries: usize,
+    pub requires_final_query_batch: bool,
+    pub requires_final_sumcheck: bool,
+    pub final_poly_num_variables: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WhirPcs;
 
+pub(crate) fn derive_whir_proof_expectations(
+    config: &WhirPcsConfig,
+) -> Result<WhirProofExpectations, SpartanWhirError> {
+    let (_, whir_config) = build_whir_config(config)?;
+    let n_rounds = whir_config.n_rounds();
+    let round_num_queries = whir_config
+        .round_parameters
+        .iter()
+        .map(|round| round.num_queries)
+        .collect();
+    let final_num_queries = whir_config.final_queries;
+    let requires_final_query_batch = whir_config.final_queries > 0;
+    let requires_final_sumcheck = whir_config.final_sumcheck_rounds > 0;
+    let final_poly_num_variables = whir_config.final_round_config().num_variables;
+
+    Ok(WhirProofExpectations {
+        n_rounds,
+        round_num_queries,
+        final_num_queries,
+        requires_final_query_batch,
+        requires_final_sumcheck,
+        final_poly_num_variables,
+    })
+}
+
 pub fn observe_whir_fs_domain_separator(
     config: &WhirPcsConfig,
-    challenger: &mut KoalaKeccakChallenger,
+    challenger: &mut KeccakChallenger,
 ) -> Result<(), SpartanWhirError> {
     let (_, whir_config) = build_whir_config(config)?;
     observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
@@ -114,8 +141,8 @@ pub fn observe_whir_fs_domain_separator(
 pub fn verify_parse_commitment(
     config: &WhirPcsConfig,
     commitment: &[u64; 4],
-    proof: &KoalaWhirProof,
-    challenger: &mut KoalaKeccakChallenger,
+    proof: &WhirPcsProof,
+    challenger: &mut KeccakChallenger,
 ) -> Result<ParsedWhirCommitment, SpartanWhirError> {
     config.validate()?;
     let (_, whir_config) = build_whir_config(config)?;
@@ -132,9 +159,9 @@ pub fn verify_parse_commitment(
 pub fn verify_finalize(
     config: &WhirPcsConfig,
     parsed: &ParsedWhirCommitment,
-    statement: &PcsStatement<KoalaKeccakEngine>,
-    proof: &KoalaWhirProof,
-    challenger: &mut KoalaKeccakChallenger,
+    statement: &PcsStatement<KeccakEngine>,
+    proof: &WhirPcsProof,
+    challenger: &mut KeccakChallenger,
 ) -> Result<(), SpartanWhirError> {
     config.validate()?;
     // Note: this rebuilds config independently from `verify_parse_commitment`.
@@ -144,21 +171,21 @@ pub fn verify_finalize(
 
     let verifier = Verifier::new(&whir_config);
     verifier
-        .verify::<KoalaField, u64, u64, 4>(proof, challenger, parsed, user_statement)
+        .verify::<F, u64, u64, 4>(proof, challenger, parsed, user_statement)
         .map(|_| ())
         .map_err(|_| SpartanWhirError::WhirVerifyFailed)
 }
 
-impl MlePcs<KoalaKeccakEngine> for WhirPcs {
+impl MlePcs<KeccakEngine> for WhirPcs {
     type Commitment = [u64; 4];
     type ProverData = WhirProverData;
-    type Proof = KoalaWhirProof;
+    type Proof = WhirPcsProof;
     type Config = WhirPcsConfig;
 
     fn commit(
         config: &Self::Config,
-        poly: &Evaluations<KoalaField>,
-        challenger: &mut KoalaKeccakChallenger,
+        poly: &Evaluations<F>,
+        challenger: &mut KeccakChallenger,
     ) -> Result<(Self::Commitment, Self::ProverData), SpartanWhirError> {
         config.validate()?;
         validate_polynomial_shape(poly, config.num_variables)?;
@@ -173,11 +200,11 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
         );
 
         let mut proof =
-            KoalaWhirProof::from_protocol_parameters(&protocol_params, config.num_variables);
-        let dft = Radix2DFTSmallBatch::<KoalaField>::default();
+            WhirPcsProof::from_protocol_parameters(&protocol_params, config.num_variables);
+        let dft = Radix2DFTSmallBatch::<F>::default();
         let committer = CommitmentWriter::new(&whir_config);
         let merkle_tree = committer
-            .commit::<_, KoalaField, u64, u64, 4>(&dft, &mut proof, challenger, &mut statement)
+            .commit::<_, F, u64, u64, 4>(&dft, &mut proof, challenger, &mut statement)
             .map_err(|_| SpartanWhirError::WhirCommitFailed)?;
 
         let ood_pairs = statement
@@ -201,8 +228,8 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
     fn open(
         config: &Self::Config,
         prover_data: Self::ProverData,
-        statement: &PcsStatement<KoalaKeccakEngine>,
-        challenger: &mut KoalaKeccakChallenger,
+        statement: &PcsStatement<KeccakEngine>,
+        challenger: &mut KeccakChallenger,
     ) -> Result<Self::Proof, SpartanWhirError> {
         config.validate()?;
         if prover_data.num_variables != config.num_variables {
@@ -223,10 +250,10 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
             user_statement,
         );
 
-        let dft = Radix2DFTSmallBatch::<KoalaField>::default();
+        let dft = Radix2DFTSmallBatch::<F>::default();
         let prover = Prover(&whir_config);
         prover
-            .prove::<_, KoalaField, u64, u64, 4>(
+            .prove::<_, F, u64, u64, 4>(
                 &dft,
                 &mut proof,
                 challenger,
@@ -241,9 +268,9 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
     fn verify(
         config: &Self::Config,
         commitment: &Self::Commitment,
-        statement: &PcsStatement<KoalaKeccakEngine>,
+        statement: &PcsStatement<KeccakEngine>,
         proof: &Self::Proof,
-        challenger: &mut KoalaKeccakChallenger,
+        challenger: &mut KeccakChallenger,
     ) -> Result<(), SpartanWhirError> {
         let parsed = verify_parse_commitment(config, commitment, proof, challenger)?;
         verify_finalize(config, &parsed, statement, proof, challenger)
@@ -252,7 +279,7 @@ impl MlePcs<KoalaKeccakEngine> for WhirPcs {
 
 fn build_whir_config(
     config: &WhirPcsConfig,
-) -> Result<(KoalaProtocolParameters, KoalaWhirConfig), SpartanWhirError> {
+) -> Result<(WhirProtocolParams, PcsConfig), SpartanWhirError> {
     config.validate()?;
     let effective_digest_bytes =
         effective_digest_bytes_for_security_bits(config.security.merkle_security_bits as usize);
@@ -265,28 +292,27 @@ fn build_whir_config(
         pow_bits: config.whir.pow_bits as usize,
         // WHIR treats Merkle digests as opaque words and does not truncate them internally.
         // All digest-length reduction is enforced once, at the hasher/compressor layer.
-        merkle_hash: KoalaKeccakFieldHash::new(effective_digest_bytes),
-        merkle_compress: KoalaKeccakCompress::new(effective_digest_bytes),
+        merkle_hash: KeccakFieldHash::new(effective_digest_bytes),
+        merkle_compress: KeccakNodeCompress::new(effective_digest_bytes),
     };
-    let whir_config = KoalaWhirConfig::new(config.num_variables, protocol_params.clone());
+    let whir_config = PcsConfig::new(config.num_variables, protocol_params.clone());
     Ok((protocol_params, whir_config))
 }
 
 fn observe_whir_fs_domain_separator_for_config(
-    whir_config: &KoalaWhirConfig,
-    challenger: &mut KoalaKeccakChallenger,
+    whir_config: &PcsConfig,
+    challenger: &mut KeccakChallenger,
 ) {
-    let mut domain_separator: WhirFsDomainSeparator<KoalaExtension, KoalaField> =
-        WhirFsDomainSeparator::new(vec![]);
+    let mut domain_separator: WhirFsDomainSeparator<EF, F> = WhirFsDomainSeparator::new(vec![]);
     domain_separator.commit_statement::<_, _, _, 4>(whir_config);
     domain_separator.add_whir_proof::<_, _, _, 4>(whir_config);
     domain_separator.observe_domain_separator(challenger);
 }
 
 fn build_user_statement(
-    statement: &PcsStatement<KoalaKeccakEngine>,
+    statement: &PcsStatement<KeccakEngine>,
     num_variables: usize,
-) -> Result<EqStatement<KoalaExtension>, SpartanWhirError> {
+) -> Result<EqStatement<EF>, SpartanWhirError> {
     reject_linear_constraints(statement.linear_constraints())?;
 
     let mut whir_statement = EqStatement::initialize(num_variables);
@@ -300,7 +326,7 @@ fn build_user_statement(
 }
 
 fn reject_linear_constraints(
-    linear_constraints: &[LinearConstraintClaim<KoalaKeccakEngine>],
+    linear_constraints: &[LinearConstraintClaim<KeccakEngine>],
 ) -> Result<(), SpartanWhirError> {
     if !linear_constraints.is_empty() {
         return Err(SpartanWhirError::UnsupportedStatementType);
@@ -309,7 +335,7 @@ fn reject_linear_constraints(
 }
 
 fn validate_polynomial_shape(
-    poly: &Evaluations<KoalaField>,
+    poly: &Evaluations<F>,
     num_variables: usize,
 ) -> Result<(), SpartanWhirError> {
     if poly.is_empty() || !poly.len().is_power_of_two() {
@@ -322,8 +348,8 @@ fn validate_polynomial_shape(
 }
 
 fn validate_user_point_claims(
-    statement: &PcsStatement<KoalaKeccakEngine>,
-    polynomial: &[KoalaField],
+    statement: &PcsStatement<KeccakEngine>,
+    polynomial: &[F],
     num_variables: usize,
 ) -> Result<(), SpartanWhirError> {
     reject_linear_constraints(statement.linear_constraints())?;
@@ -340,8 +366,8 @@ fn validate_user_point_claims(
     Ok(())
 }
 
-fn to_whir_point(point: &[KoalaExtension]) -> KoalaWhirPoint {
-    KoalaWhirPoint::new(point.to_vec())
+fn to_whir_point(point: &[EF]) -> WhirPcsPoint {
+    WhirPcsPoint::new(point.to_vec())
 }
 
 const fn map_soundness_assumption(soundness: SoundnessAssumption) -> WhirSecurity {

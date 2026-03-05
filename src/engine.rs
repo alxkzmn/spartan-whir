@@ -8,36 +8,35 @@ use p3_koala_bear::KoalaBear;
 use crate::hashers::{Keccak256NodeCompress, KeccakFieldLeafHasher};
 use crate::SpartanWhirEngine;
 
-pub type KoalaField = KoalaBear;
-pub type KoalaExtension = BinomialExtensionField<KoalaField, 4>;
-pub type KoalaKeccakFieldHash = KeccakFieldLeafHasher;
-pub type KoalaKeccakCompress = Keccak256NodeCompress;
-pub type KoalaKeccakChallenger =
-    SerializingChallenger32<KoalaField, HashChallenger<u8, Keccak256Hash, 32>>;
+pub type F = KoalaBear;
+pub type EF = BinomialExtensionField<F, 4>;
+pub type KeccakFieldHash = KeccakFieldLeafHasher;
+pub type KeccakNodeCompress = Keccak256NodeCompress;
+pub type KeccakChallenger = SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct KoalaKeccakEngine;
+pub struct KeccakEngine;
 
-impl SpartanWhirEngine for KoalaKeccakEngine {
-    type F = KoalaField;
-    type EF = KoalaExtension;
-    type Challenger = KoalaKeccakChallenger;
-    type Hash = KoalaKeccakFieldHash;
-    type Compress = KoalaKeccakCompress;
+impl SpartanWhirEngine for KeccakEngine {
+    type F = F;
+    type EF = EF;
+    type Challenger = KeccakChallenger;
+    type Hash = KeccakFieldHash;
+    type Compress = KeccakNodeCompress;
     type W = u64;
 
     const DIGEST_ELEMS: usize = 4;
 }
 
-pub fn new_koala_keccak_merkle_hash() -> KoalaKeccakFieldHash {
-    KoalaKeccakFieldHash::default()
+pub fn new_keccak_merkle_hash() -> KeccakFieldHash {
+    KeccakFieldHash::default()
 }
 
-pub fn new_koala_keccak_merkle_compress() -> KoalaKeccakCompress {
-    KoalaKeccakCompress::default()
+pub fn new_keccak_merkle_compress() -> KeccakNodeCompress {
+    KeccakNodeCompress::default()
 }
 
-pub fn new_koala_keccak_challenger() -> KoalaKeccakChallenger {
+pub fn new_keccak_challenger() -> KeccakChallenger {
     let inner = HashChallenger::<u8, Keccak256Hash, 32>::new(vec![], Keccak256Hash {});
-    KoalaKeccakChallenger::new(inner)
+    KeccakChallenger::new(inner)
 }

@@ -1,13 +1,13 @@
 mod common;
 
 use p3_field::PrimeCharacteristicRing;
+
 use spartan_whir::{
-    KoalaExtension, KoalaField, KoalaKeccakEngine, R1csShape, SpartanProtocol, SpartanWhirError,
-    WhirPcs,
+    engine::F, KeccakEngine, R1csShape, SpartanProtocol, SpartanWhirError, WhirPcs, EF,
 };
 
-fn regular_shape_two_constraints() -> R1csShape<KoalaField> {
-    let one = KoalaField::ONE;
+fn regular_shape_two_constraints() -> R1csShape<F> {
+    let one = F::ONE;
     R1csShape {
         num_cons: 2,
         num_vars: 2,
@@ -64,12 +64,12 @@ fn regular_shape_two_constraints() -> R1csShape<KoalaField> {
 }
 
 fn setup_keys(
-    shape: &R1csShape<KoalaField>,
+    shape: &R1csShape<F>,
 ) -> (
-    spartan_whir::ProvingKey<KoalaKeccakEngine, WhirPcs>,
-    spartan_whir::VerifyingKey<KoalaKeccakEngine, WhirPcs>,
+    spartan_whir::ProvingKey<KeccakEngine, WhirPcs>,
+    spartan_whir::VerifyingKey<KeccakEngine, WhirPcs>,
 ) {
-    SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::setup(
+    SpartanProtocol::<KeccakEngine, WhirPcs>::setup(
         shape,
         &common::phase3_security(),
         &common::phase3_whir_params(),
@@ -82,15 +82,15 @@ fn setup_keys(
 fn protocol_roundtrip_regular_shape() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
-        w: vec![KoalaField::from_u32(7), KoalaField::ZERO],
+        w: vec![F::from_u32(7), F::ZERO],
     };
     let public_inputs = common::koala_public_inputs(7);
 
-    let (instance, proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &public_inputs,
         &witness,
@@ -98,7 +98,7 @@ fn protocol_roundtrip_regular_shape() {
     )
     .expect("prove succeeds");
 
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,
@@ -111,12 +111,12 @@ fn protocol_roundtrip_regular_shape() {
 fn protocol_roundtrip_irregular_shape_autopad() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
     let witness = common::koala_witness(9);
     let public_inputs = common::koala_public_inputs(9);
-    let (instance, proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &public_inputs,
         &witness,
@@ -124,7 +124,7 @@ fn protocol_roundtrip_irregular_shape_autopad() {
     )
     .expect("prove succeeds");
 
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,
@@ -137,10 +137,10 @@ fn protocol_roundtrip_irregular_shape_autopad() {
 fn protocol_wrong_public_input_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
-    let (instance, proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(5),
         &common::koala_witness(5),
@@ -149,8 +149,8 @@ fn protocol_wrong_public_input_fails() {
     .expect("prove succeeds");
 
     let mut wrong_instance = instance;
-    wrong_instance.public_inputs[0] = KoalaField::from_u32(6);
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    wrong_instance.public_inputs[0] = F::from_u32(6);
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &wrong_instance,
         &proof,
@@ -163,10 +163,10 @@ fn protocol_wrong_public_input_fails() {
 fn protocol_tampered_commitment_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
-    let (instance, proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(5),
         &common::koala_witness(5),
@@ -176,7 +176,7 @@ fn protocol_tampered_commitment_fails() {
 
     let mut bad_instance = instance;
     bad_instance.witness_commitment[0] ^= 1;
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &bad_instance,
         &proof,
@@ -189,10 +189,10 @@ fn protocol_tampered_commitment_fails() {
 fn protocol_tampered_outer_claims_fail() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
-    let (instance, mut proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(11),
         &common::koala_witness(11),
@@ -200,8 +200,8 @@ fn protocol_tampered_outer_claims_fail() {
     )
     .expect("prove succeeds");
 
-    proof.outer_claims.0 += KoalaExtension::ONE;
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    proof.outer_claims.0 += EF::ONE;
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,
@@ -214,10 +214,10 @@ fn protocol_tampered_outer_claims_fail() {
 fn protocol_tampered_witness_eval_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
-    let (instance, mut proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(11),
         &common::koala_witness(11),
@@ -225,8 +225,8 @@ fn protocol_tampered_witness_eval_fails() {
     )
     .expect("prove succeeds");
 
-    proof.witness_eval += KoalaExtension::ONE;
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    proof.witness_eval += EF::ONE;
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,
@@ -242,10 +242,10 @@ fn protocol_tampered_witness_eval_fails() {
 fn protocol_tampered_pcs_proof_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_koala_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_koala_keccak_challenger();
+    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
 
-    let (instance, mut proof) = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::prove(
+    let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(15),
         &common::koala_witness(15),
@@ -254,12 +254,12 @@ fn protocol_tampered_pcs_proof_fails() {
     .expect("prove succeeds");
 
     if let Some(first) = proof.pcs_proof.initial_ood_answers.first_mut() {
-        *first += KoalaExtension::ONE;
+        *first += EF::ONE;
     } else {
         proof.pcs_proof.initial_commitment[0] ^= 1;
     }
 
-    let verified = SpartanProtocol::<KoalaKeccakEngine, WhirPcs>::verify(
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,

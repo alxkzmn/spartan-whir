@@ -22,7 +22,7 @@ fn maybe_push_leaf_prefix(buf: &mut Vec<u8>) {
 #[must_use]
 pub const fn effective_digest_bytes_for_security_bits(security_bits: usize) -> usize {
     let bits = security_bits.saturating_mul(2);
-    let bytes = (bits + 7) / 8;
+    let bytes = bits.div_ceil(8);
     if bytes == 0 {
         1
     } else if bytes > KECCAK_DIGEST_BYTES {

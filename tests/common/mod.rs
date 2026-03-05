@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use p3_field::PrimeCharacteristicRing;
+
 use spartan_whir::{
-    DomainSeparator, Evaluations, KoalaField, LinearConstraintClaim, MlePcs, MultilinearPoint,
+    engine::F, DomainSeparator, Evaluations, LinearConstraintClaim, MlePcs, MultilinearPoint,
     PcsStatement, PcsStatementBuilder, PointEvalClaim, R1csInstance, R1csShape, R1csWitness,
     SecurityConfig, SoundnessAssumption, SparseMatEntry, SparseMatrix, SpartanWhirEngine,
     SpartanWhirError, SumcheckStrategy, WhirParams, WhirPcsConfig,
@@ -130,26 +131,26 @@ pub fn sample_domain_separator() -> DomainSeparator {
     )
 }
 
-pub fn koala_shape_single_constraint(num_cons: usize) -> R1csShape<KoalaField> {
+pub fn koala_shape_single_constraint(num_cons: usize) -> R1csShape<F> {
     let a_entries = (0..num_cons)
         .map(|row| SparseMatEntry {
             row,
             col: 0,
-            val: KoalaField::ONE,
+            val: F::ONE,
         })
         .collect();
     let b_entries = (0..num_cons)
         .map(|row| SparseMatEntry {
             row,
             col: 1,
-            val: KoalaField::ONE,
+            val: F::ONE,
         })
         .collect();
     let c_entries = (0..num_cons)
         .map(|row| SparseMatEntry {
             row,
             col: 2,
-            val: KoalaField::ONE,
+            val: F::ONE,
         })
         .collect();
 
@@ -175,14 +176,14 @@ pub fn koala_shape_single_constraint(num_cons: usize) -> R1csShape<KoalaField> {
     }
 }
 
-pub fn koala_witness(value: u32) -> R1csWitness<KoalaField> {
+pub fn koala_witness(value: u32) -> R1csWitness<F> {
     R1csWitness {
-        w: vec![KoalaField::from_u32(value)],
+        w: vec![F::from_u32(value)],
     }
 }
 
-pub fn koala_public_inputs(value: u32) -> Vec<KoalaField> {
-    vec![KoalaField::from_u32(value)]
+pub fn koala_public_inputs(value: u32) -> Vec<F> {
+    vec![F::from_u32(value)]
 }
 
 pub fn phase3_security() -> SecurityConfig {

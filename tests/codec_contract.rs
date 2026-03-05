@@ -3,7 +3,7 @@ use spartan_whir::{effective_digest_bytes, ProofCodecConfig};
 #[test]
 fn codec_defaults_match_phase_one_contract() {
     let cfg = ProofCodecConfig::default();
-    assert_eq!(cfg.proof_blob_version, 0);
+    assert_eq!(cfg.proof_blob_version, 1);
     assert!(cfg.compact_query_encoding);
     assert_eq!(cfg.digest_bytes_override, None);
 }
