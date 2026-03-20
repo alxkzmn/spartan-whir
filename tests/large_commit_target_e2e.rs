@@ -1,6 +1,9 @@
 mod common;
 
-use spartan_whir::{generate_satisfiable_fixture_for_pow2, KeccakEngine, SpartanProtocol, WhirPcs};
+use spartan_whir::{
+    generate_satisfiable_fixture_for_pow2, KeccakQuarticEngine as KeccakEngine, SpartanProtocol,
+    WhirPcs,
+};
 
 fn run_target_e2e(k: usize) {
     let fixture =

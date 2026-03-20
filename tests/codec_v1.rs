@@ -4,9 +4,9 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
 use spartan_whir::{
     decode_spartan_blob, decode_spartan_blob_v1, encode_spartan_blob, encode_spartan_blob_v1,
-    encode_spartan_blob_v1_with_report, engine::F, profile_spartan_blob_v1, KeccakEngine,
-    ProofCodecConfig, R1csShape, SpartanBlobDecodeContext, SpartanProtocol, SpartanWhirError,
-    WhirPcs,
+    encode_spartan_blob_v1_with_report, engine::F, profile_spartan_blob_v1,
+    KeccakQuarticEngine as KeccakEngine, ProofCodecConfig, R1csShape, SpartanBlobDecodeContext,
+    SpartanProtocol, SpartanWhirError, WhirPcs,
 };
 use whir_p3::whir::proof::SumcheckData;
 
@@ -255,7 +255,7 @@ fn codec_v1_reject_bad_magic_version_flags_section_count_and_trailing_bytes() {
     ));
 
     let mut bad_sections = blob.clone();
-    bad_sections[9] = 7;
+    bad_sections[10] = 7;
     assert!(matches!(
         decode_spartan_blob_v1(&codec, &ctx, &bad_sections),
         Err(SpartanWhirError::InvalidBlobHeader)
@@ -308,8 +308,8 @@ fn codec_v1_reject_noncanonical_field_word() {
     let ctx = SpartanBlobDecodeContext::from_vk(&vk).unwrap();
     let mut blob = encode_spartan_blob_v1(&codec, &pcs_config, &instance, &proof).unwrap();
 
-    // Header is 34 bytes, instance section starts with len u32, first public input follows.
-    let start = 34 + 4;
+    // Header is 35 bytes after adding the extension-degree byte.
+    let start = 35 + 4;
     blob[start..start + 4].copy_from_slice(&F::ORDER_U32.to_be_bytes());
 
     assert!(matches!(

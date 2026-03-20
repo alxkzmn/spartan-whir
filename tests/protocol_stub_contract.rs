@@ -3,7 +3,8 @@ mod common;
 use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
-    engine::F, KeccakEngine, R1csShape, SpartanProtocol, SpartanWhirError, WhirPcs, EF,
+    engine::F, KeccakQuarticEngine as KeccakEngine, QuarticBinExtension as EF, R1csShape,
+    SpartanProtocol, SpartanWhirError, WhirPcs,
 };
 
 fn regular_shape_two_constraints() -> R1csShape<F> {

@@ -22,7 +22,7 @@ use whir_p3::{
 
 use crate::{
     effective_digest_bytes_for_security_bits,
-    engine::{KeccakChallenger, KeccakEngine, KeccakFieldHash, KeccakNodeCompress, EF, F},
+    engine::{ExtField, KeccakChallenger, KeccakEngine, KeccakFieldHash, KeccakNodeCompress, F},
     Evaluations, LinearConstraintClaim, MlePcs, PcsStatement, SecurityConfig, SoundnessAssumption,
     SpartanWhirError, WhirParams,
 };
@@ -30,12 +30,12 @@ use crate::{
 pub use whir_p3::whir::parameters::SumcheckStrategy;
 
 type WhirProtocolParams = ProtocolParameters<KeccakFieldHash, KeccakNodeCompress>;
-type PcsConfig = WhirConfig<EF, F, KeccakFieldHash, KeccakNodeCompress, KeccakChallenger>;
-type WhirPcsPoint = WhirPoint<EF>;
-type WhirPcsProof = WhirProof<F, EF, u64, 4>;
+type PcsConfig<EF> = WhirConfig<EF, F, KeccakFieldHash, KeccakNodeCompress, KeccakChallenger>;
+type WhirPcsPoint<Ext> = WhirPoint<Ext>;
+type WhirPcsProof<Ext> = WhirProof<F, Ext, u64, 4>;
 type WhirMerkleTree = MerkleTree<F, u64, DenseMatrix<F>, 4>;
-pub type ParsedWhirCommitment =
-    whir_p3::whir::committer::reader::ParsedCommitment<EF, Hash<F, u64, 4>>;
+pub type ParsedWhirCommitment<Ext> =
+    whir_p3::whir::committer::reader::ParsedCommitment<Ext, Hash<F, u64, 4>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhirPcsConfig {
@@ -83,11 +83,11 @@ impl WhirPcsConfig {
 }
 
 #[derive(Debug)]
-pub struct WhirProverData {
+pub struct WhirProverData<Ext> {
     pub merkle_tree: WhirMerkleTree,
-    pub proof: WhirPcsProof,
+    pub proof: WhirPcsProof<Ext>,
     pub polynomial: Vec<F>,
-    pub ood_pairs: Vec<(WhirPcsPoint, EF)>,
+    pub ood_pairs: Vec<(WhirPcsPoint<Ext>, Ext)>,
     pub num_variables: usize,
 }
 
@@ -104,10 +104,13 @@ pub(crate) struct WhirProofExpectations {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WhirPcs;
 
-pub(crate) fn derive_whir_proof_expectations(
+pub(crate) fn derive_whir_proof_expectations<Ext>(
     config: &WhirPcsConfig,
-) -> Result<WhirProofExpectations, SpartanWhirError> {
-    let (_, whir_config) = build_whir_config(config)?;
+) -> Result<WhirProofExpectations, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
     let n_rounds = whir_config.n_rounds();
     let round_num_queries = whir_config
         .round_parameters
@@ -129,24 +132,30 @@ pub(crate) fn derive_whir_proof_expectations(
     })
 }
 
-pub fn observe_whir_fs_domain_separator(
+pub fn observe_whir_fs_domain_separator<Ext>(
     config: &WhirPcsConfig,
     challenger: &mut KeccakChallenger,
-) -> Result<(), SpartanWhirError> {
-    let (_, whir_config) = build_whir_config(config)?;
-    observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
+    observe_whir_fs_domain_separator_for_config::<Ext>(&whir_config, challenger);
     Ok(())
 }
 
-pub fn verify_parse_commitment(
+pub fn verify_parse_commitment<Ext>(
     config: &WhirPcsConfig,
     commitment: &[u64; 4],
-    proof: &WhirPcsProof,
+    proof: &WhirPcsProof<Ext>,
     challenger: &mut KeccakChallenger,
-) -> Result<ParsedWhirCommitment, SpartanWhirError> {
+) -> Result<ParsedWhirCommitment<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     config.validate()?;
-    let (_, whir_config) = build_whir_config(config)?;
-    observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
+    observe_whir_fs_domain_separator_for_config::<Ext>(&whir_config, challenger);
 
     let reader = CommitmentReader::new(&whir_config);
     let parsed = reader.parse_commitment::<u64, 4>(proof, challenger);
@@ -156,18 +165,21 @@ pub fn verify_parse_commitment(
     Ok(parsed)
 }
 
-pub fn verify_finalize(
+pub fn verify_finalize<Ext>(
     config: &WhirPcsConfig,
-    parsed: &ParsedWhirCommitment,
-    statement: &PcsStatement<KeccakEngine>,
-    proof: &WhirPcsProof,
+    parsed: &ParsedWhirCommitment<Ext>,
+    statement: &PcsStatement<KeccakEngine<Ext>>,
+    proof: &WhirPcsProof<Ext>,
     challenger: &mut KeccakChallenger,
-) -> Result<(), SpartanWhirError> {
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     config.validate()?;
     // Note: this rebuilds config independently from `verify_parse_commitment`.
     // We keep the split API for transcript ordering clarity; may be optimized later.
-    let (_, whir_config) = build_whir_config(config)?;
-    let user_statement = build_user_statement(statement, config.num_variables)?;
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
+    let user_statement = build_user_statement::<Ext>(statement, config.num_variables)?;
 
     let verifier = Verifier::new(&whir_config);
     verifier
@@ -176,10 +188,13 @@ pub fn verify_finalize(
         .map_err(|_| SpartanWhirError::WhirVerifyFailed)
 }
 
-impl MlePcs<KeccakEngine> for WhirPcs {
+impl<Ext> MlePcs<KeccakEngine<Ext>> for WhirPcs
+where
+    Ext: ExtField,
+{
     type Commitment = [u64; 4];
-    type ProverData = WhirProverData;
-    type Proof = WhirPcsProof;
+    type ProverData = WhirProverData<Ext>;
+    type Proof = WhirPcsProof<Ext>;
     type Config = WhirPcsConfig;
 
     fn commit(
@@ -190,8 +205,8 @@ impl MlePcs<KeccakEngine> for WhirPcs {
         config.validate()?;
         validate_polynomial_shape(poly, config.num_variables)?;
 
-        let (protocol_params, whir_config) = build_whir_config(config)?;
-        observe_whir_fs_domain_separator_for_config(&whir_config, challenger);
+        let (protocol_params, whir_config) = build_whir_config::<Ext>(config)?;
+        observe_whir_fs_domain_separator_for_config::<Ext>(&whir_config, challenger);
 
         let polynomial = poly.clone();
         let mut statement = whir_config.initial_statement(
@@ -200,7 +215,7 @@ impl MlePcs<KeccakEngine> for WhirPcs {
         );
 
         let mut proof =
-            WhirPcsProof::from_protocol_parameters(&protocol_params, config.num_variables);
+            WhirPcsProof::<Ext>::from_protocol_parameters(&protocol_params, config.num_variables);
         let dft = Radix2DFTSmallBatch::<F>::default();
         let committer = CommitmentWriter::new(&whir_config);
         let merkle_tree = committer
@@ -214,7 +229,7 @@ impl MlePcs<KeccakEngine> for WhirPcs {
             .collect();
 
         let commitment = proof.initial_commitment;
-        let prover_data = WhirProverData {
+        let prover_data = WhirProverData::<Ext> {
             merkle_tree,
             proof,
             polynomial,
@@ -228,17 +243,21 @@ impl MlePcs<KeccakEngine> for WhirPcs {
     fn open(
         config: &Self::Config,
         prover_data: Self::ProverData,
-        statement: &PcsStatement<KeccakEngine>,
+        statement: &PcsStatement<KeccakEngine<Ext>>,
         challenger: &mut KeccakChallenger,
     ) -> Result<Self::Proof, SpartanWhirError> {
         config.validate()?;
         if prover_data.num_variables != config.num_variables {
             return Err(SpartanWhirError::InvalidNumVariables);
         }
-        validate_user_point_claims(statement, &prover_data.polynomial, config.num_variables)?;
+        validate_user_point_claims::<Ext>(
+            statement,
+            &prover_data.polynomial,
+            config.num_variables,
+        )?;
 
-        let (_, whir_config) = build_whir_config(config)?;
-        let mut user_statement = build_user_statement(statement, config.num_variables)?;
+        let (_, whir_config) = build_whir_config::<Ext>(config)?;
+        let mut user_statement = build_user_statement::<Ext>(statement, config.num_variables)?;
 
         for (point, eval) in &prover_data.ood_pairs {
             user_statement.add_evaluated_constraint(point.clone(), *eval);
@@ -268,18 +287,21 @@ impl MlePcs<KeccakEngine> for WhirPcs {
     fn verify(
         config: &Self::Config,
         commitment: &Self::Commitment,
-        statement: &PcsStatement<KeccakEngine>,
+        statement: &PcsStatement<KeccakEngine<Ext>>,
         proof: &Self::Proof,
         challenger: &mut KeccakChallenger,
     ) -> Result<(), SpartanWhirError> {
-        let parsed = verify_parse_commitment(config, commitment, proof, challenger)?;
-        verify_finalize(config, &parsed, statement, proof, challenger)
+        let parsed = verify_parse_commitment::<Ext>(config, commitment, proof, challenger)?;
+        verify_finalize::<Ext>(config, &parsed, statement, proof, challenger)
     }
 }
 
-fn build_whir_config(
+fn build_whir_config<Ext>(
     config: &WhirPcsConfig,
-) -> Result<(WhirProtocolParams, PcsConfig), SpartanWhirError> {
+) -> Result<(WhirProtocolParams, PcsConfig<Ext>), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     config.validate()?;
     let effective_digest_bytes =
         effective_digest_bytes_for_security_bits(config.security.merkle_security_bits as usize);
@@ -295,39 +317,49 @@ fn build_whir_config(
         merkle_hash: KeccakFieldHash::new(effective_digest_bytes),
         merkle_compress: KeccakNodeCompress::new(effective_digest_bytes),
     };
-    let whir_config = PcsConfig::new(config.num_variables, protocol_params.clone());
+    // Current spartan-whir does not enable WHIR's univariate-skip path. If that changes,
+    // skip width must remain <= Ext::TWO_ADICITY (24 for KoalaBear quintic).
+    let whir_config = PcsConfig::<Ext>::new(config.num_variables, protocol_params.clone());
     Ok((protocol_params, whir_config))
 }
 
-fn observe_whir_fs_domain_separator_for_config(
-    whir_config: &PcsConfig,
+fn observe_whir_fs_domain_separator_for_config<Ext>(
+    whir_config: &PcsConfig<Ext>,
     challenger: &mut KeccakChallenger,
-) {
-    let mut domain_separator: WhirFsDomainSeparator<EF, F> = WhirFsDomainSeparator::new(vec![]);
+) where
+    Ext: ExtField,
+{
+    let mut domain_separator: WhirFsDomainSeparator<Ext, F> = WhirFsDomainSeparator::new(vec![]);
     domain_separator.commit_statement::<_, _, _, 4>(whir_config);
     domain_separator.add_whir_proof::<_, _, _, 4>(whir_config);
     domain_separator.observe_domain_separator(challenger);
 }
 
-fn build_user_statement(
-    statement: &PcsStatement<KeccakEngine>,
+fn build_user_statement<Ext>(
+    statement: &PcsStatement<KeccakEngine<Ext>>,
     num_variables: usize,
-) -> Result<EqStatement<EF>, SpartanWhirError> {
-    reject_linear_constraints(statement.linear_constraints())?;
+) -> Result<EqStatement<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    reject_linear_constraints::<Ext>(statement.linear_constraints())?;
 
     let mut whir_statement = EqStatement::initialize(num_variables);
     for claim in statement.point_evals() {
         if claim.point.0.len() != num_variables {
             return Err(SpartanWhirError::InvalidNumVariables);
         }
-        whir_statement.add_evaluated_constraint(to_whir_point(&claim.point.0), claim.value);
+        whir_statement.add_evaluated_constraint(to_whir_point::<Ext>(&claim.point.0), claim.value);
     }
     Ok(whir_statement)
 }
 
-fn reject_linear_constraints(
-    linear_constraints: &[LinearConstraintClaim<KeccakEngine>],
-) -> Result<(), SpartanWhirError> {
+fn reject_linear_constraints<Ext>(
+    linear_constraints: &[LinearConstraintClaim<KeccakEngine<Ext>>],
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     if !linear_constraints.is_empty() {
         return Err(SpartanWhirError::UnsupportedStatementType);
     }
@@ -347,18 +379,21 @@ fn validate_polynomial_shape(
     Ok(())
 }
 
-fn validate_user_point_claims(
-    statement: &PcsStatement<KeccakEngine>,
+fn validate_user_point_claims<Ext>(
+    statement: &PcsStatement<KeccakEngine<Ext>>,
     polynomial: &[F],
     num_variables: usize,
-) -> Result<(), SpartanWhirError> {
-    reject_linear_constraints(statement.linear_constraints())?;
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    reject_linear_constraints::<Ext>(statement.linear_constraints())?;
     let poly = WhirEvaluations::new(polynomial.to_vec());
     for claim in statement.point_evals() {
         if claim.point.0.len() != num_variables {
             return Err(SpartanWhirError::InvalidNumVariables);
         }
-        let expected = poly.evaluate_hypercube_base(&to_whir_point(&claim.point.0));
+        let expected = poly.evaluate_hypercube_base(&to_whir_point::<Ext>(&claim.point.0));
         if expected != claim.value {
             return Err(SpartanWhirError::WhirOpenFailed);
         }
@@ -366,7 +401,10 @@ fn validate_user_point_claims(
     Ok(())
 }
 
-fn to_whir_point(point: &[EF]) -> WhirPcsPoint {
+fn to_whir_point<Ext>(point: &[Ext]) -> WhirPcsPoint<Ext>
+where
+    Ext: ExtField,
+{
     WhirPcsPoint::new(point.to_vec())
 }
 

@@ -6,8 +6,7 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, Hash};
 
-use crate::engine::F;
-use crate::{engine::KeccakEngine, EF};
+use crate::engine::{ExtField, KeccakEngine, F};
 use crate::{
     evaluate_mle_table, prove_inner, prove_outer, verify_finalize, verify_inner, verify_outer,
     verify_parse_commitment, DomainSeparator, EqPolynomial, InnerSumcheckProof, MlePcs,
@@ -54,7 +53,10 @@ pub struct SpartanProtocol<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
-impl SpartanProtocol<KeccakEngine, WhirPcs> {
+impl<EF> SpartanProtocol<KeccakEngine<EF>, WhirPcs>
+where
+    EF: ExtField,
+{
     pub fn setup(
         shape: &R1csShape<F>,
         security: &SecurityConfig,
@@ -62,8 +64,8 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
         pcs_config: &WhirPcsConfig,
     ) -> Result<
         (
-            ProvingKey<KeccakEngine, WhirPcs>,
-            VerifyingKey<KeccakEngine, WhirPcs>,
+            ProvingKey<KeccakEngine<EF>, WhirPcs>,
+            VerifyingKey<KeccakEngine<EF>, WhirPcs>,
         ),
         SpartanWhirError,
     > {
@@ -115,14 +117,14 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
     }
 
     pub fn prove(
-        pk: &ProvingKey<KeccakEngine, WhirPcs>,
+        pk: &ProvingKey<KeccakEngine<EF>, WhirPcs>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
-        challenger: &mut <KeccakEngine as SpartanWhirEngine>::Challenger,
+        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
     ) -> Result<
         (
-            R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine>>::Commitment>,
-            SpartanProof<KeccakEngine, WhirPcs>,
+            R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
+            SpartanProof<KeccakEngine<EF>, WhirPcs>,
         ),
         SpartanWhirError,
     > {
@@ -136,7 +138,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context(challenger, &pk.domain_separator, public_inputs)?;
+        observe_spartan_context::<EF>(challenger, &pk.domain_separator, public_inputs)?;
 
         let mut witness_padded = witness.w.clone();
         witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
@@ -161,7 +163,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
         let cz: Vec<EF> = cz_f.iter().map(|&v| EF::from(v)).collect();
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec(challenger, num_rounds_x);
+        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
         let tau_point = MultilinearPoint(tau.clone());
 
         let (outer_sumcheck, r_x, outer_claims) =
@@ -193,7 +195,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
         let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
         let witness_eval = recover_witness_eval(r_y.0[0], eval_z, eval_x)?;
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine>::new()
+        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: witness_eval,
@@ -217,10 +219,10 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
     }
 
     pub fn verify(
-        vk: &VerifyingKey<KeccakEngine, WhirPcs>,
-        instance: &R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine>>::Commitment>,
-        proof: &SpartanProof<KeccakEngine, WhirPcs>,
-        challenger: &mut <KeccakEngine as SpartanWhirEngine>::Challenger,
+        vk: &VerifyingKey<KeccakEngine<EF>, WhirPcs>,
+        instance: &R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
+        proof: &SpartanProof<KeccakEngine<EF>, WhirPcs>,
+        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
     ) -> Result<(), SpartanWhirError> {
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
@@ -229,7 +231,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
             return Err(SpartanWhirError::InvalidPublicInputLength);
         }
 
-        observe_spartan_context(challenger, &vk.domain_separator, &instance.public_inputs)?;
+        observe_spartan_context::<EF>(challenger, &vk.domain_separator, &instance.public_inputs)?;
 
         observer.on_stage(ProtocolStage::PcsVerify);
         let parsed_commitment = verify_parse_commitment(
@@ -240,7 +242,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
         )?;
 
         let num_rounds_x = vk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec(challenger, num_rounds_x);
+        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
         let (r_x, final_outer_claim) =
             verify_outer::<F, EF, _>(&proof.outer_sumcheck, EF::ZERO, num_rounds_x, challenger)?;
 
@@ -280,7 +282,7 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
             return Err(SpartanWhirError::SumcheckFailed);
         }
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine>::new()
+        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: proof.witness_eval,
@@ -300,11 +302,14 @@ impl SpartanProtocol<KeccakEngine, WhirPcs> {
     }
 }
 
-fn observe_spartan_context(
-    challenger: &mut <KeccakEngine as SpartanWhirEngine>::Challenger,
+fn observe_spartan_context<Ext>(
+    challenger: &mut <KeccakEngine<Ext> as SpartanWhirEngine>::Challenger,
     domain_separator: &DomainSeparator,
     public_inputs: &[F],
-) -> Result<(), SpartanWhirError> {
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let digest_bytes = Keccak256Hash {}.hash_iter(domain_separator.to_bytes());
     let digest_hash: Hash<F, u8, 32> = digest_bytes.into();
     challenger.observe(digest_hash);
@@ -314,12 +319,15 @@ fn observe_spartan_context(
     Ok(())
 }
 
-fn sample_algebra_vec(
-    challenger: &mut <KeccakEngine as SpartanWhirEngine>::Challenger,
+fn sample_algebra_vec<Ext>(
+    challenger: &mut <KeccakEngine<Ext> as SpartanWhirEngine>::Challenger,
     len: usize,
-) -> Vec<EF> {
+) -> Vec<Ext>
+where
+    Ext: ExtField,
+{
     (0..len)
-        .map(|_| challenger.sample_algebra_element::<EF>())
+        .map(|_| challenger.sample_algebra_element::<Ext>())
         .collect()
 }
 
@@ -332,10 +340,13 @@ fn build_public_half(num_vars: usize, public_inputs: &[F]) -> Vec<F> {
     out
 }
 
-fn public_half_as_extension(num_vars: usize, public_inputs: &[F]) -> Vec<EF> {
+fn public_half_as_extension<Ext>(num_vars: usize, public_inputs: &[F]) -> Vec<Ext>
+where
+    Ext: ExtField,
+{
     build_public_half(num_vars, public_inputs)
         .into_iter()
-        .map(EF::from)
+        .map(Ext::from)
         .collect()
 }
 
@@ -347,9 +358,12 @@ fn build_matrix_z(witness: &[F], public_inputs: &[F]) -> Vec<F> {
     z
 }
 
-fn eq_point_eval(a: &[EF], b: &[EF]) -> EF {
-    a.iter().zip(b.iter()).fold(EF::ONE, |acc, (&x, &y)| {
-        acc * ((EF::ONE - x) * (EF::ONE - y) + x * y)
+fn eq_point_eval<Ext>(a: &[Ext], b: &[Ext]) -> Ext
+where
+    Ext: Field,
+{
+    a.iter().zip(b.iter()).fold(Ext::ONE, |acc, (&x, &y)| {
+        acc * ((Ext::ONE - x) * (Ext::ONE - y) + x * y)
     })
 }
 
@@ -364,23 +378,27 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 #[cfg(test)]
 mod tests {
     use super::recover_witness_eval;
-    use crate::{engine::F, EF};
+    use crate::{engine::F, QuarticBinExtension};
     use p3_field::PrimeCharacteristicRing;
 
     #[test]
     fn recover_witness_eval_rejects_non_invertible_denominator() {
-        let result = recover_witness_eval(EF::ONE, EF::ONE, EF::ONE);
+        let result = recover_witness_eval(
+            QuarticBinExtension::ONE,
+            QuarticBinExtension::ONE,
+            QuarticBinExtension::ONE,
+        );
         assert_eq!(result, Err(crate::SpartanWhirError::NonInvertibleElement));
     }
 
     #[test]
     fn recover_witness_eval_matches_formula() {
-        let r0 = EF::from(F::from_u32(5));
-        let eval_z = EF::from(F::from_u32(17));
-        let eval_x = EF::from(F::from_u32(3));
+        let r0 = QuarticBinExtension::from(F::from_u32(5));
+        let eval_z = QuarticBinExtension::from(F::from_u32(17));
+        let eval_x = QuarticBinExtension::from(F::from_u32(3));
         let got = recover_witness_eval(r0, eval_z, eval_x).unwrap();
 
-        let recomposed = (EF::ONE - r0) * got + r0 * eval_x;
+        let recomposed = (QuarticBinExtension::ONE - r0) * got + r0 * eval_x;
         assert_eq!(recomposed, eval_z);
     }
 }

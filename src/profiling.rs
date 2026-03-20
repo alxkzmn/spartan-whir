@@ -1,3 +1,4 @@
+use crate::engine::ExtField;
 use crate::engine::F;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,13 +62,16 @@ pub struct ProofSizeReport {
     pub counters: ProofSizeCounters,
 }
 
-pub fn profile_spartan_blob_v1(
+pub fn profile_spartan_blob_v1<EF>(
     codec: &crate::ProofCodecConfig,
     pcs_config: &crate::WhirPcsConfig,
     instance: &crate::R1csInstance<F, [u64; 4]>,
-    proof: &crate::SpartanProof<crate::KeccakEngine, crate::WhirPcs>,
-) -> Result<ProofSizeReport, crate::SpartanWhirError> {
+    proof: &crate::SpartanProof<crate::KeccakEngine<EF>, crate::WhirPcs>,
+) -> Result<ProofSizeReport, crate::SpartanWhirError>
+where
+    EF: ExtField,
+{
     let (_, report) =
-        crate::codec::encode_spartan_blob_v1_with_report(codec, pcs_config, instance, proof)?;
+        crate::codec::encode_spartan_blob_v1_with_report::<EF>(codec, pcs_config, instance, proof)?;
     Ok(report)
 }

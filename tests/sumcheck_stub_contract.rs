@@ -4,7 +4,8 @@ use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
     engine::F, evaluate_mle_table, prove_inner, prove_outer, verify_inner, verify_outer,
-    CubicRoundPoly, EqPolynomial, MultilinearPoint, QuadraticRoundPoly, SpartanWhirError, EF,
+    CubicRoundPoly, EqPolynomial, MultilinearPoint, QuadraticRoundPoly, QuarticBinExtension as EF,
+    SpartanWhirError,
 };
 
 fn eq_eval(a: &[EF], b: &[EF]) -> EF {

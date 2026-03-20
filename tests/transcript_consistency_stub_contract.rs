@@ -1,7 +1,9 @@
 mod common;
 
 use p3_challenger::FieldChallenger;
-use spartan_whir::{KeccakEngine, SpartanProtocol, WhirPcs, EF};
+use spartan_whir::{
+    KeccakQuarticEngine as KeccakEngine, QuarticBinExtension as EF, SpartanProtocol, WhirPcs,
+};
 
 #[test]
 fn protocol_transcript_checkpoint_matches_between_prover_and_verifier() {

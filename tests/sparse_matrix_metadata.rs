@@ -117,10 +117,10 @@ fn bind_row_vars_and_evaluate_with_tables_are_consistent() {
         .pad_regular()
         .expect("padding succeeds");
 
-    let r_x = vec![spartan_whir::EF::from(F::from_u32(3))];
+    let r_x = vec![spartan_whir::QuarticBinExtension::from(F::from_u32(3))];
     let r_y = vec![
-        spartan_whir::EF::from(F::from_u32(2)),
-        spartan_whir::EF::from(F::from_u32(5)),
+        spartan_whir::QuarticBinExtension::from(F::from_u32(2)),
+        spartan_whir::QuarticBinExtension::from(F::from_u32(5)),
     ];
     let t_x = spartan_whir::EqPolynomial::evals_from_point(&r_x);
     let t_y = spartan_whir::EqPolynomial::evals_from_point(&r_y);
@@ -130,10 +130,12 @@ fn bind_row_vars_and_evaluate_with_tables_are_consistent() {
         .evaluate_with_tables(&t_x, &t_y)
         .expect("table evaluation succeeds");
 
-    let dot = |v: &[spartan_whir::EF]| {
+    let dot = |v: &[spartan_whir::QuarticBinExtension]| {
         v.iter()
             .zip(t_y.iter())
-            .fold(spartan_whir::EF::ZERO, |acc, (&x, &y)| acc + x * y)
+            .fold(spartan_whir::QuarticBinExtension::ZERO, |acc, (&x, &y)| {
+                acc + x * y
+            })
     };
     assert_eq!(eval_a, dot(&bound_a));
     assert_eq!(eval_b, dot(&bound_b));

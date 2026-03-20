@@ -3,8 +3,9 @@ mod common;
 use std::time::Instant;
 
 use spartan_whir::{
-    encode_spartan_blob_v1_with_report, generate_satisfiable_fixture, KeccakEngine,
-    ProofCodecConfig, SpartanProtocol, SyntheticR1csConfig, WhirPcs,
+    encode_spartan_blob_v1_with_report, generate_satisfiable_fixture,
+    KeccakQuarticEngine as KeccakEngine, ProofCodecConfig, SpartanProtocol, SyntheticR1csConfig,
+    WhirPcs,
 };
 
 #[test]

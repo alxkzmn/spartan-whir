@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField32};
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
 use whir_p3::whir::{
     merkle_multiproof::MerkleMultiProof,
@@ -10,19 +10,19 @@ use whir_p3::whir::{
 use crate::{
     codec::{effective_digest_bytes, ProofCodecConfig, SpartanBlobDecodeContext},
     digest_from_bytes, digest_to_bytes,
-    engine::F,
+    engine::{ExtField, F},
     CubicRoundPoly, InnerSumcheckProof, KeccakEngine, MlePcs, OuterSumcheckProof,
     ProofSizeCounters, ProofSizeReport, ProofSizeSection, QuadraticRoundPoly, R1csInstance,
-    SectionSize, SpartanProof, SpartanWhirError, WhirPcs, EF,
+    SectionSize, SpartanProof, SpartanWhirError, WhirPcs,
 };
 use crate::{whir_pcs::derive_whir_proof_expectations, WhirPcsConfig};
 
 const MAGIC: [u8; 4] = *b"SPWB";
 const VERSION_V1: u16 = 1;
 const SECTION_COUNT: usize = 6;
-const HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 1 + (SECTION_COUNT * 4);
+const HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 1 + 1 + (SECTION_COUNT * 4);
 
-type WhirPcsProof = <WhirPcs as MlePcs<KeccakEngine>>::Proof;
+type WhirPcsProof<EF> = <WhirPcs as MlePcs<KeccakEngine<EF>>>::Proof;
 
 pub(crate) struct V1EncodeOutput {
     pub blob: Vec<u8>,
@@ -37,12 +37,15 @@ struct WhirSectionEncoding {
     digest_data_bytes: usize,
 }
 
-pub(crate) fn encode_spartan_blob_v1(
+pub(crate) fn encode_spartan_blob_v1<Ext>(
     codec: &ProofCodecConfig,
     pcs_config: &WhirPcsConfig,
     instance: &R1csInstance<F, [u64; 4]>,
-    proof: &SpartanProof<KeccakEngine, WhirPcs>,
-) -> Result<V1EncodeOutput, SpartanWhirError> {
+    proof: &SpartanProof<KeccakEngine<Ext>, WhirPcs>,
+) -> Result<V1EncodeOutput, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     if codec.proof_blob_version != VERSION_V1 {
         return Err(SpartanWhirError::UnsupportedBlobVersion);
     }
@@ -54,9 +57,9 @@ pub(crate) fn encode_spartan_blob_v1(
         pcs_config.security.merkle_security_bits,
         codec.digest_bytes_override,
     ) as usize;
-    let whir_expectations = derive_whir_proof_expectations(pcs_config)?;
+    let whir_expectations = derive_whir_proof_expectations::<Ext>(pcs_config)?;
 
-    validate_encoder_whir_shape(instance, proof, &whir_expectations)?;
+    validate_encoder_whir_shape::<Ext>(instance, proof, &whir_expectations)?;
 
     let mut counters = ProofSizeCounters {
         num_outer_rounds: proof.outer_sumcheck.rounds.len(),
@@ -68,15 +71,15 @@ pub(crate) fn encode_spartan_blob_v1(
     let mut digest_data_bytes = 0usize;
 
     let section_instance = encode_instance_section(instance, digest_width, &mut digest_data_bytes)?;
-    let section_outer_sumcheck = encode_outer_sumcheck_section(&proof.outer_sumcheck)?;
-    let section_outer_claims = encode_outer_claims_section(proof.outer_claims);
-    let section_inner_sumcheck = encode_inner_sumcheck_section(&proof.inner_sumcheck)?;
+    let section_outer_sumcheck = encode_outer_sumcheck_section::<Ext>(&proof.outer_sumcheck)?;
+    let section_outer_claims = encode_outer_claims_section::<Ext>(proof.outer_claims);
+    let section_inner_sumcheck = encode_inner_sumcheck_section::<Ext>(&proof.inner_sumcheck)?;
     let section_witness_eval = {
-        let mut bytes = Vec::with_capacity(16);
-        put_extension(&mut bytes, &proof.witness_eval);
+        let mut bytes = Vec::with_capacity(Ext::DIMENSION * 4);
+        put_extension::<Ext>(&mut bytes, &proof.witness_eval);
         bytes
     };
-    let section_whir = encode_whir_proof_section(
+    let section_whir = encode_whir_proof_section::<Ext>(
         &proof.pcs_proof,
         digest_width,
         &whir_expectations,
@@ -115,6 +118,10 @@ pub(crate) fn encode_spartan_blob_v1(
     put_u8(
         &mut blob,
         u8::try_from(digest_width).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
+    );
+    put_u8(
+        &mut blob,
+        u8::try_from(Ext::DIMENSION).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     put_u8(
         &mut blob,
@@ -191,17 +198,20 @@ pub(crate) fn encode_spartan_blob_v1(
     })
 }
 
-pub(crate) fn decode_spartan_blob_v1(
+pub(crate) fn decode_spartan_blob_v1<Ext>(
     codec: &ProofCodecConfig,
-    ctx: &SpartanBlobDecodeContext,
+    ctx: &SpartanBlobDecodeContext<Ext>,
     blob: &[u8],
 ) -> Result<
     (
         R1csInstance<F, [u64; 4]>,
-        SpartanProof<KeccakEngine, WhirPcs>,
+        SpartanProof<KeccakEngine<Ext>, WhirPcs>,
     ),
     SpartanWhirError,
-> {
+>
+where
+    Ext: ExtField,
+{
     if !codec.compact_query_encoding {
         return Err(SpartanWhirError::InvalidBlobFlags);
     }
@@ -229,6 +239,13 @@ pub(crate) fn decode_spartan_blob_v1(
         effective_digest_bytes(ctx.merkle_security_bits, codec.digest_bytes_override) as usize;
     if digest_width != expected_digest_width {
         return Err(SpartanWhirError::DigestBytesMismatch);
+    }
+
+    let extension_degree = reader.read_u8()? as usize;
+    // Validate both the self-described blob header and the typed decode context so
+    // mixed-engine decodes fail early even if context construction changes later.
+    if extension_degree != ctx.expected_extension_degree || extension_degree != Ext::DIMENSION {
+        return Err(SpartanWhirError::InvalidBlobHeader);
     }
 
     let section_count = reader.read_u8()? as usize;
@@ -269,21 +286,21 @@ pub(crate) fn decode_spartan_blob_v1(
         return Err(SpartanWhirError::InvalidPublicInputLength);
     }
 
-    let outer_sumcheck = decode_outer_sumcheck_section(section_outer_sumcheck)?;
+    let outer_sumcheck = decode_outer_sumcheck_section::<Ext>(section_outer_sumcheck)?;
     if outer_sumcheck.rounds.len() != ctx.expected_outer_rounds {
         return Err(SpartanWhirError::InvalidRoundCount);
     }
 
-    let outer_claims = decode_outer_claims_section(section_outer_claims)?;
+    let outer_claims = decode_outer_claims_section::<Ext>(section_outer_claims)?;
 
-    let inner_sumcheck = decode_inner_sumcheck_section(section_inner_sumcheck)?;
+    let inner_sumcheck = decode_inner_sumcheck_section::<Ext>(section_inner_sumcheck)?;
     if inner_sumcheck.rounds.len() != ctx.expected_inner_rounds {
         return Err(SpartanWhirError::InvalidRoundCount);
     }
 
-    let witness_eval = decode_single_extension(section_witness_eval)?;
+    let witness_eval = decode_single_extension::<Ext>(section_witness_eval)?;
 
-    let pcs_proof = decode_whir_proof_section(
+    let pcs_proof = decode_whir_proof_section::<Ext>(
         section_whir,
         digest_width,
         &instance.witness_commitment,
@@ -302,11 +319,14 @@ pub(crate) fn decode_spartan_blob_v1(
     ))
 }
 
-fn validate_encoder_whir_shape(
+fn validate_encoder_whir_shape<Ext>(
     instance: &R1csInstance<F, [u64; 4]>,
-    proof: &SpartanProof<KeccakEngine, WhirPcs>,
+    proof: &SpartanProof<KeccakEngine<Ext>, WhirPcs>,
     expectations: &crate::whir_pcs::WhirProofExpectations,
-) -> Result<(), SpartanWhirError> {
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let whir = &proof.pcs_proof;
 
     if instance.witness_commitment != whir.initial_commitment {
@@ -410,98 +430,126 @@ fn decode_instance_section(
     })
 }
 
-fn encode_outer_sumcheck_section(
-    proof: &OuterSumcheckProof<EF>,
-) -> Result<Vec<u8>, SpartanWhirError> {
+fn encode_outer_sumcheck_section<Ext>(
+    proof: &OuterSumcheckProof<Ext>,
+) -> Result<Vec<u8>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut out = Vec::new();
     put_u32(
         &mut out,
         u32::try_from(proof.rounds.len()).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     for round in &proof.rounds {
-        put_extension(&mut out, &round.0[0]);
-        put_extension(&mut out, &round.0[1]);
-        put_extension(&mut out, &round.0[2]);
+        put_extension::<Ext>(&mut out, &round.0[0]);
+        put_extension::<Ext>(&mut out, &round.0[1]);
+        put_extension::<Ext>(&mut out, &round.0[2]);
     }
     Ok(out)
 }
 
-fn decode_outer_sumcheck_section(bytes: &[u8]) -> Result<OuterSumcheckProof<EF>, SpartanWhirError> {
+fn decode_outer_sumcheck_section<Ext>(
+    bytes: &[u8],
+) -> Result<OuterSumcheckProof<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut reader = Reader::new(bytes);
     let rounds_len = reader.read_u32()? as usize;
     let mut rounds = Vec::with_capacity(rounds_len);
     for _ in 0..rounds_len {
         rounds.push(CubicRoundPoly([
-            reader.read_extension()?,
-            reader.read_extension()?,
-            reader.read_extension()?,
+            reader.read_extension::<Ext>()?,
+            reader.read_extension::<Ext>()?,
+            reader.read_extension::<Ext>()?,
         ]));
     }
     reader.ensure_finished()?;
     Ok(OuterSumcheckProof { rounds })
 }
 
-fn encode_outer_claims_section(claims: (EF, EF, EF)) -> Vec<u8> {
+fn encode_outer_claims_section<Ext>(claims: (Ext, Ext, Ext)) -> Vec<u8>
+where
+    Ext: ExtField,
+{
     let mut out = Vec::new();
-    put_extension(&mut out, &claims.0);
-    put_extension(&mut out, &claims.1);
-    put_extension(&mut out, &claims.2);
+    put_extension::<Ext>(&mut out, &claims.0);
+    put_extension::<Ext>(&mut out, &claims.1);
+    put_extension::<Ext>(&mut out, &claims.2);
     out
 }
 
-fn decode_outer_claims_section(bytes: &[u8]) -> Result<(EF, EF, EF), SpartanWhirError> {
+fn decode_outer_claims_section<Ext>(bytes: &[u8]) -> Result<(Ext, Ext, Ext), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut reader = Reader::new(bytes);
     let claims = (
-        reader.read_extension()?,
-        reader.read_extension()?,
-        reader.read_extension()?,
+        reader.read_extension::<Ext>()?,
+        reader.read_extension::<Ext>()?,
+        reader.read_extension::<Ext>()?,
     );
     reader.ensure_finished()?;
     Ok(claims)
 }
 
-fn encode_inner_sumcheck_section(
-    proof: &InnerSumcheckProof<EF>,
-) -> Result<Vec<u8>, SpartanWhirError> {
+fn encode_inner_sumcheck_section<Ext>(
+    proof: &InnerSumcheckProof<Ext>,
+) -> Result<Vec<u8>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut out = Vec::new();
     put_u32(
         &mut out,
         u32::try_from(proof.rounds.len()).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     for round in &proof.rounds {
-        put_extension(&mut out, &round.0[0]);
-        put_extension(&mut out, &round.0[1]);
+        put_extension::<Ext>(&mut out, &round.0[0]);
+        put_extension::<Ext>(&mut out, &round.0[1]);
     }
     Ok(out)
 }
 
-fn decode_inner_sumcheck_section(bytes: &[u8]) -> Result<InnerSumcheckProof<EF>, SpartanWhirError> {
+fn decode_inner_sumcheck_section<Ext>(
+    bytes: &[u8],
+) -> Result<InnerSumcheckProof<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut reader = Reader::new(bytes);
     let rounds_len = reader.read_u32()? as usize;
     let mut rounds = Vec::with_capacity(rounds_len);
     for _ in 0..rounds_len {
         rounds.push(QuadraticRoundPoly([
-            reader.read_extension()?,
-            reader.read_extension()?,
+            reader.read_extension::<Ext>()?,
+            reader.read_extension::<Ext>()?,
         ]));
     }
     reader.ensure_finished()?;
     Ok(InnerSumcheckProof { rounds })
 }
 
-fn decode_single_extension(bytes: &[u8]) -> Result<EF, SpartanWhirError> {
+fn decode_single_extension<Ext>(bytes: &[u8]) -> Result<Ext, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut reader = Reader::new(bytes);
-    let value = reader.read_extension()?;
+    let value = reader.read_extension::<Ext>()?;
     reader.ensure_finished()?;
     Ok(value)
 }
 
-fn encode_whir_proof_section(
-    proof: &WhirPcsProof,
+fn encode_whir_proof_section<Ext>(
+    proof: &WhirPcsProof<Ext>,
     digest_width: usize,
     expectations: &crate::whir_pcs::WhirProofExpectations,
     counters: &mut ProofSizeCounters,
-) -> Result<WhirSectionEncoding, SpartanWhirError> {
+) -> Result<WhirSectionEncoding, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut out = Vec::new();
     let mut digest_data_bytes = 0usize;
 
@@ -511,9 +559,9 @@ fn encode_whir_proof_section(
             .map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     for v in &proof.initial_ood_answers {
-        put_extension(&mut out, v);
+        put_extension::<Ext>(&mut out, v);
     }
-    encode_sumcheck_data(&mut out, &proof.initial_sumcheck)?;
+    encode_sumcheck_data::<Ext>(&mut out, &proof.initial_sumcheck)?;
 
     put_u32(
         &mut out,
@@ -525,8 +573,13 @@ fn encode_whir_proof_section(
 
     for (idx, round) in proof.rounds.iter().enumerate() {
         let expected_queries = expectations.round_num_queries[idx];
-        let round_digest_bytes =
-            encode_whir_round_payload(&mut out, round, digest_width, expected_queries, counters)?;
+        let round_digest_bytes = encode_whir_round_payload::<Ext>(
+            &mut out,
+            round,
+            digest_width,
+            expected_queries,
+            counters,
+        )?;
         digest_data_bytes = digest_data_bytes
             .checked_add(round_digest_bytes)
             .ok_or(SpartanWhirError::ProofEncodeFailed)?;
@@ -547,7 +600,7 @@ fn encode_whir_proof_section(
                 u32::try_from(poly.num_evals()).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
             );
             for v in poly.as_slice() {
-                put_extension(&mut out, v);
+                put_extension::<Ext>(&mut out, v);
             }
         }
     }
@@ -558,7 +611,7 @@ fn encode_whir_proof_section(
         None => put_u8(&mut out, 0),
         Some(q) => {
             put_u8(&mut out, 1);
-            let query_digest_bytes = encode_query_batch_payload(
+            let query_digest_bytes = encode_query_batch_payload::<Ext>(
                 &mut out,
                 q,
                 digest_width,
@@ -575,7 +628,7 @@ fn encode_whir_proof_section(
         None => put_u8(&mut out, 0),
         Some(sumcheck) => {
             put_u8(&mut out, 1);
-            encode_sumcheck_data(&mut out, sumcheck)?;
+            encode_sumcheck_data::<Ext>(&mut out, sumcheck)?;
         }
     }
 
@@ -593,21 +646,24 @@ fn encode_whir_proof_section(
     })
 }
 
-fn decode_whir_proof_section(
+fn decode_whir_proof_section<Ext>(
     bytes: &[u8],
     digest_width: usize,
     commitment: &[u64; 4],
     expectations: &crate::whir_pcs::WhirProofExpectations,
-) -> Result<WhirPcsProof, SpartanWhirError> {
+) -> Result<WhirPcsProof<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut reader = Reader::new(bytes);
 
     let initial_ood_len = reader.read_u32()? as usize;
     let mut initial_ood_answers = Vec::with_capacity(initial_ood_len);
     for _ in 0..initial_ood_len {
-        initial_ood_answers.push(reader.read_extension()?);
+        initial_ood_answers.push(reader.read_extension::<Ext>()?);
     }
 
-    let initial_sumcheck = decode_sumcheck_data(&mut reader)?;
+    let initial_sumcheck = decode_sumcheck_data::<Ext>(&mut reader)?;
 
     let rounds_len = reader.read_u32()? as usize;
     if rounds_len != expectations.n_rounds {
@@ -616,7 +672,7 @@ fn decode_whir_proof_section(
 
     let mut rounds = Vec::with_capacity(rounds_len);
     for expected_queries in &expectations.round_num_queries {
-        rounds.push(decode_whir_round_payload(
+        rounds.push(decode_whir_round_payload::<Ext>(
             &mut reader,
             digest_width,
             *expected_queries,
@@ -648,7 +704,7 @@ fn decode_whir_proof_section(
     let final_query_tag = reader.read_u8()?;
     let final_query_batch = match final_query_tag {
         0 => None,
-        1 => Some(decode_query_batch_payload(
+        1 => Some(decode_query_batch_payload::<Ext>(
             &mut reader,
             digest_width,
             expectations.final_num_queries,
@@ -663,7 +719,7 @@ fn decode_whir_proof_section(
     let final_sumcheck_tag = reader.read_u8()?;
     let final_sumcheck = match final_sumcheck_tag {
         0 => None,
-        1 => Some(decode_sumcheck_data(&mut reader)?),
+        1 => Some(decode_sumcheck_data::<Ext>(&mut reader)?),
         _ => return Err(SpartanWhirError::InvalidBlobLayout),
     };
 
@@ -685,13 +741,16 @@ fn decode_whir_proof_section(
     })
 }
 
-fn encode_whir_round_payload(
+fn encode_whir_round_payload<Ext>(
     out: &mut Vec<u8>,
-    round: &WhirRoundProof<F, EF, u64, 4>,
+    round: &WhirRoundProof<F, Ext, u64, 4>,
     digest_width: usize,
     expected_queries: usize,
     counters: &mut ProofSizeCounters,
-) -> Result<usize, SpartanWhirError> {
+) -> Result<usize, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut digest_data_bytes = 0usize;
 
     put_digest(out, &round.commitment, digest_width)?;
@@ -704,7 +763,7 @@ fn encode_whir_round_payload(
         u32::try_from(round.ood_answers.len()).map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     for v in &round.ood_answers {
-        put_extension(out, v);
+        put_extension::<Ext>(out, v);
     }
 
     put_field(out, &round.pow_witness);
@@ -713,8 +772,13 @@ fn encode_whir_round_payload(
         None => put_u8(out, 0),
         Some(q) => {
             put_u8(out, 1);
-            let query_digest_bytes =
-                encode_query_batch_payload(out, q, digest_width, expected_queries, counters)?;
+            let query_digest_bytes = encode_query_batch_payload::<Ext>(
+                out,
+                q,
+                digest_width,
+                expected_queries,
+                counters,
+            )?;
             digest_data_bytes = digest_data_bytes
                 .checked_add(query_digest_bytes)
                 .ok_or(SpartanWhirError::ProofEncodeFailed)?;
@@ -725,21 +789,24 @@ fn encode_whir_round_payload(
         return Err(SpartanWhirError::ProofEncodeFailed);
     }
 
-    encode_sumcheck_data(out, &round.sumcheck)?;
+    encode_sumcheck_data::<Ext>(out, &round.sumcheck)?;
     Ok(digest_data_bytes)
 }
 
-fn decode_whir_round_payload(
+fn decode_whir_round_payload<Ext>(
     reader: &mut Reader<'_>,
     digest_width: usize,
     expected_queries: usize,
-) -> Result<WhirRoundProof<F, EF, u64, 4>, SpartanWhirError> {
+) -> Result<WhirRoundProof<F, Ext, u64, 4>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let commitment = reader.read_digest(digest_width)?;
 
     let ood_len = reader.read_u32()? as usize;
     let mut ood_answers = Vec::with_capacity(ood_len);
     for _ in 0..ood_len {
-        ood_answers.push(reader.read_extension()?);
+        ood_answers.push(reader.read_extension::<Ext>()?);
     }
 
     let pow_witness = reader.read_field()?;
@@ -747,7 +814,7 @@ fn decode_whir_round_payload(
     let query_tag = reader.read_u8()?;
     let query_batch = match query_tag {
         0 => None,
-        1 => Some(decode_query_batch_payload(
+        1 => Some(decode_query_batch_payload::<Ext>(
             reader,
             digest_width,
             expected_queries,
@@ -759,7 +826,7 @@ fn decode_whir_round_payload(
         return Err(SpartanWhirError::InvalidBlobLayout);
     }
 
-    let sumcheck = decode_sumcheck_data(reader)?;
+    let sumcheck = decode_sumcheck_data::<Ext>(reader)?;
 
     Ok(WhirRoundProof {
         commitment,
@@ -770,18 +837,21 @@ fn decode_whir_round_payload(
     })
 }
 
-fn encode_sumcheck_data(
+fn encode_sumcheck_data<Ext>(
     out: &mut Vec<u8>,
-    data: &SumcheckData<F, EF>,
-) -> Result<(), SpartanWhirError> {
+    data: &SumcheckData<F, Ext>,
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
     put_u32(
         out,
         u32::try_from(data.polynomial_evaluations.len())
             .map_err(|_| SpartanWhirError::ProofEncodeFailed)?,
     );
     for [c0, c2] in &data.polynomial_evaluations {
-        put_extension(out, c0);
-        put_extension(out, c2);
+        put_extension::<Ext>(out, c0);
+        put_extension::<Ext>(out, c2);
     }
 
     put_u32(
@@ -795,11 +865,19 @@ fn encode_sumcheck_data(
     Ok(())
 }
 
-fn decode_sumcheck_data(reader: &mut Reader<'_>) -> Result<SumcheckData<F, EF>, SpartanWhirError> {
+fn decode_sumcheck_data<Ext>(
+    reader: &mut Reader<'_>,
+) -> Result<SumcheckData<F, Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let eval_len = reader.read_u32()? as usize;
     let mut polynomial_evaluations = Vec::with_capacity(eval_len);
     for _ in 0..eval_len {
-        polynomial_evaluations.push([reader.read_extension()?, reader.read_extension()?]);
+        polynomial_evaluations.push([
+            reader.read_extension::<Ext>()?,
+            reader.read_extension::<Ext>()?,
+        ]);
     }
 
     let witness_len = reader.read_u32()? as usize;
@@ -814,13 +892,16 @@ fn decode_sumcheck_data(reader: &mut Reader<'_>) -> Result<SumcheckData<F, EF>, 
     })
 }
 
-fn encode_query_batch_payload(
+fn encode_query_batch_payload<Ext>(
     out: &mut Vec<u8>,
-    query: &QueryBatchOpening<F, EF, u64, 4>,
+    query: &QueryBatchOpening<F, Ext, u64, 4>,
     digest_width: usize,
     expected_queries: usize,
     counters: &mut ProofSizeCounters,
-) -> Result<usize, SpartanWhirError> {
+) -> Result<usize, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let mut digest_data_bytes = 0usize;
     counters.num_query_batches = counters
         .num_query_batches
@@ -900,7 +981,7 @@ fn encode_query_batch_payload(
 
             for row in values {
                 for value in row {
-                    put_extension(out, value);
+                    put_extension::<Ext>(out, value);
                 }
             }
 
@@ -941,11 +1022,14 @@ fn encode_query_batch_payload(
     Ok(digest_data_bytes)
 }
 
-fn decode_query_batch_payload(
+fn decode_query_batch_payload<Ext>(
     reader: &mut Reader<'_>,
     digest_width: usize,
     expected_queries: usize,
-) -> Result<QueryBatchOpening<F, EF, u64, 4>, SpartanWhirError> {
+) -> Result<QueryBatchOpening<F, Ext, u64, 4>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
     let variant = reader.read_u8()?;
     let num_queries = reader.read_u32()? as usize;
     if num_queries > expected_queries {
@@ -979,7 +1063,7 @@ fn decode_query_batch_payload(
         1 => {
             let mut flat = Vec::with_capacity(n_values);
             for _ in 0..n_values {
-                flat.push(reader.read_extension()?);
+                flat.push(reader.read_extension::<Ext>()?);
             }
             let values = reshape_vec(flat, num_queries, row_len)?;
 
@@ -1010,7 +1094,7 @@ fn uniform_row_len_base(values: &[Vec<F>]) -> Result<usize, SpartanWhirError> {
     Ok(row_len)
 }
 
-fn uniform_row_len_ext(values: &[Vec<EF>]) -> Result<usize, SpartanWhirError> {
+fn uniform_row_len_ext<Ext>(values: &[Vec<Ext>]) -> Result<usize, SpartanWhirError> {
     let row_len = values.first().map_or(0usize, Vec::len);
     for row in values {
         if row.len() != row_len {
@@ -1061,12 +1145,13 @@ fn put_field(out: &mut Vec<u8>, value: &F) {
     out.extend_from_slice(&value.as_canonical_u32().to_be_bytes());
 }
 
-fn put_extension(out: &mut Vec<u8>, value: &EF) {
-    let coeffs = value.as_basis_coefficients_slice();
-    put_field(out, &coeffs[0]);
-    put_field(out, &coeffs[1]);
-    put_field(out, &coeffs[2]);
-    put_field(out, &coeffs[3]);
+fn put_extension<Ext>(out: &mut Vec<u8>, value: &Ext)
+where
+    Ext: ExtField,
+{
+    for coeff in value.as_basis_coefficients_slice() {
+        put_field(out, coeff);
+    }
 }
 
 fn put_u8(out: &mut Vec<u8>, value: u8) {
@@ -1128,12 +1213,16 @@ impl<'a> Reader<'a> {
         Ok(F::from_u32(raw))
     }
 
-    fn read_extension(&mut self) -> Result<EF, SpartanWhirError> {
-        let c0 = self.read_field()?;
-        let c1 = self.read_field()?;
-        let c2 = self.read_field()?;
-        let c3 = self.read_field()?;
-        Ok(EF::from([c0, c1, c2, c3]))
+    fn read_extension<Ext>(&mut self) -> Result<Ext, SpartanWhirError>
+    where
+        Ext: ExtField,
+    {
+        let mut coeffs = Vec::with_capacity(Ext::DIMENSION);
+        for _ in 0..Ext::DIMENSION {
+            coeffs.push(self.read_field()?);
+        }
+        Ext::from_basis_coefficients_iter(coeffs.into_iter())
+            .ok_or(SpartanWhirError::InvalidBlobLayout)
     }
 
     fn read_digest(&mut self, digest_width: usize) -> Result<[u64; 4], SpartanWhirError> {

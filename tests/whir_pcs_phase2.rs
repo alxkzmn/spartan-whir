@@ -2,9 +2,10 @@ use p3_challenger::{CanSample, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
-    engine::F, observe_whir_fs_domain_separator, KeccakChallenger, KeccakEngine, KeccakFieldHash,
-    KeccakNodeCompress, MlePcs, MultilinearPoint, PcsStatementBuilder, PointEvalClaim,
-    SecurityConfig, SoundnessAssumption, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig, EF,
+    engine::F, observe_whir_fs_domain_separator, KeccakChallenger, KeccakFieldHash,
+    KeccakNodeCompress, KeccakQuarticEngine as KeccakEngine, MlePcs, MultilinearPoint,
+    PcsStatementBuilder, PointEvalClaim, QuarticBinExtension as EF, SecurityConfig,
+    SoundnessAssumption, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
 };
 use whir_p3::{
     fiat_shamir::domain_separator::DomainSeparator as WhirFsDomainSeparator,
@@ -53,6 +54,39 @@ fn statement_with_seeds(
         .expect("point-eval statement must finalize")
 }
 
+fn whir_commit(
+    config: &WhirPcsConfig,
+    poly: &spartan_whir::Evaluations<F>,
+    challenger: &mut KeccakChallenger,
+) -> Result<
+    (
+        <WhirPcs as MlePcs<KeccakEngine>>::Commitment,
+        <WhirPcs as MlePcs<KeccakEngine>>::ProverData,
+    ),
+    SpartanWhirError,
+> {
+    <WhirPcs as MlePcs<KeccakEngine>>::commit(config, poly, challenger)
+}
+
+fn whir_open(
+    config: &WhirPcsConfig,
+    prover_data: <WhirPcs as MlePcs<KeccakEngine>>::ProverData,
+    statement: &spartan_whir::PcsStatement<KeccakEngine>,
+    challenger: &mut KeccakChallenger,
+) -> Result<<WhirPcs as MlePcs<KeccakEngine>>::Proof, SpartanWhirError> {
+    <WhirPcs as MlePcs<KeccakEngine>>::open(config, prover_data, statement, challenger)
+}
+
+fn whir_verify(
+    config: &WhirPcsConfig,
+    commitment: &<WhirPcs as MlePcs<KeccakEngine>>::Commitment,
+    statement: &spartan_whir::PcsStatement<KeccakEngine>,
+    proof: &<WhirPcs as MlePcs<KeccakEngine>>::Proof,
+    challenger: &mut KeccakChallenger,
+) -> Result<(), SpartanWhirError> {
+    <WhirPcs as MlePcs<KeccakEngine>>::verify(config, commitment, statement, proof, challenger)
+}
+
 fn map_soundness_assumption(soundness: SoundnessAssumption) -> WhirSecurity {
     match soundness {
         SoundnessAssumption::UniqueDecoding => WhirSecurity::UniqueDecoding,
@@ -68,12 +102,11 @@ fn whir_pcs_roundtrip_point_eval() {
     let statement = statement_with_seeds(&poly, config.num_variables, &[3]);
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let proof = WhirPcs::open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
+    let (commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let proof = whir_open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
 
     let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    let verify_result = WhirPcs::verify(
+    let verify_result = whir_verify(
         &config,
         &commitment,
         &statement,
@@ -90,12 +123,11 @@ fn whir_pcs_constraint_order_regression() {
     let statement = statement_with_seeds(&poly, config.num_variables, &[2, 7]);
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let proof = WhirPcs::open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
+    let (commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let proof = whir_open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
 
     let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    let verify_result = WhirPcs::verify(
+    let verify_result = whir_verify(
         &config,
         &commitment,
         &statement,
@@ -112,15 +144,14 @@ fn whir_pcs_tampered_commitment_fails() {
     let statement = statement_with_seeds(&poly, config.num_variables, &[5]);
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let proof = WhirPcs::open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
+    let (commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let proof = whir_open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
 
     let mut tampered_commitment = commitment;
     tampered_commitment[0] ^= 1;
 
     let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    let verify_result = WhirPcs::verify(
+    let verify_result = whir_verify(
         &config,
         &tampered_commitment,
         &statement,
@@ -144,9 +175,8 @@ fn whir_pcs_wrong_eval_fails() {
         .unwrap();
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (_commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let open_result = WhirPcs::open(
+    let (_commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let open_result = whir_open(
         &config,
         prover_data,
         &wrong_statement,
@@ -161,7 +191,7 @@ fn whir_pcs_rejects_non_power_of_two_poly() {
     let bad_poly = vec![F::from_u32(1), F::from_u32(2), F::from_u32(3)];
     let mut challenger = spartan_whir::new_keccak_challenger();
 
-    let result = WhirPcs::commit(&config, &bad_poly, &mut challenger);
+    let result = whir_commit(&config, &bad_poly, &mut challenger);
     assert!(matches!(
         result,
         Err(SpartanWhirError::InvalidPolynomialLength)
@@ -174,7 +204,7 @@ fn whir_pcs_rejects_num_variables_mismatch() {
     let poly = sample_poly(6);
     let mut challenger = spartan_whir::new_keccak_challenger();
 
-    let result = WhirPcs::commit(&config, &poly, &mut challenger);
+    let result = whir_commit(&config, &poly, &mut challenger);
     assert!(matches!(result, Err(SpartanWhirError::InvalidNumVariables)));
 }
 
@@ -191,9 +221,8 @@ fn whir_pcs_rejects_linear_constraints_phase2() {
         .unwrap();
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (_commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let open_result = WhirPcs::open(
+    let (_commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let open_result = whir_open(
         &config,
         prover_data,
         &linear_statement,
@@ -212,13 +241,12 @@ fn whir_pcs_transcript_checkpoint_match() {
     let statement = statement_with_seeds(&poly, config.num_variables, &[4, 11]);
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (commitment, prover_data) =
-        WhirPcs::commit(&config, &poly, &mut prover_challenger).unwrap();
-    let proof = WhirPcs::open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
+    let (commitment, prover_data) = whir_commit(&config, &poly, &mut prover_challenger).unwrap();
+    let proof = whir_open(&config, prover_data, &statement, &mut prover_challenger).unwrap();
     let checkpoint_prover: EF = prover_challenger.sample_algebra_element();
 
     let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    let verify_result = WhirPcs::verify(
+    let verify_result = whir_verify(
         &config,
         &commitment,
         &statement,
@@ -245,7 +273,7 @@ fn whir_pcs_domain_separator_roundtrip_alignment() {
     let config = test_config(6);
 
     let mut adapter_challenger = spartan_whir::new_keccak_challenger();
-    observe_whir_fs_domain_separator(&config, &mut adapter_challenger).unwrap();
+    observe_whir_fs_domain_separator::<EF>(&config, &mut adapter_challenger).unwrap();
     let adapter_sample: F = adapter_challenger.sample();
 
     let protocol_params = ProtocolParameters {

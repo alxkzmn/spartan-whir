@@ -30,7 +30,8 @@ pub use config::SpartanWhirEngine;
 pub use domain_separator::DomainSeparator;
 pub use engine::{
     new_keccak_challenger, new_keccak_merkle_compress, new_keccak_merkle_hash, KeccakChallenger,
-    KeccakEngine, KeccakFieldHash, KeccakNodeCompress, EF,
+    KeccakEngine, KeccakFieldHash, KeccakNodeCompress, KeccakQuarticEngine, KeccakQuinticEngine,
+    QuarticBinExtension, QuinticExtension,
 };
 pub use error::SpartanWhirError;
 pub use fixtures::{

@@ -4,12 +4,12 @@
 
 ## Phase 4 Status
 
-Phases 3 and 4 are implemented for the concrete backend:
+Phases 3 and 4 are implemented for the KoalaBear + Keccak backend:
 
-- Engine: `KoalaKeccakEngine`
-  - `F = KoalaBear`
-  - `EF = BinomialExtensionField<F, 4>`
-  - `W = u64`, `DIGEST_ELEMS = 4`
+- Engine: `KeccakEngine<Ext>`
+  - Alias: `KeccakQuarticEngine` with `QuarticExtension = BinomialExtensionField<F, 4>`
+  - Alias: `KeccakQuinticEngine` with `QuinticExtension = QuinticTrinomialExtensionField<F>`
+  - Fixed parameters: `F = KoalaBear`, `W = u64`, `DIGEST_ELEMS = 4`
 - PCS: `WhirPcs` (`commit -> open -> verify`)
 - Spartan core:
   - Real `SpartanProtocol::setup/prove/verify`
@@ -22,13 +22,14 @@ Phases 3 and 4 are implemented for the concrete backend:
   - WHIR verify is split into commitment-parse and finalize phases to preserve transcript continuity
 - Codec and profiling:
   - Canonical Spartan blob codec v1 (`Proof + Instance`) with strict decode checks
-  - Decoder context derived from VK (`SpartanBlobDecodeContext::from_vk`)
+  - Decoder context is engine-typed and derived from VK (`SpartanBlobDecodeContext::from_vk`)
+  - Blob header includes explicit extension degree; quartic and quintic blobs are self-describing
   - Deterministic size reporting (`profile_spartan_blob_v1`, `encode_spartan_blob_v1_with_report`)
 
 ## Implemented Modules
 
 - `src/engine.rs`
-  - Concrete Koala+Keccak engine/challenger constructors
+  - Generic `KeccakEngine<Ext>` plus quartic/quintic engine aliases and challenger constructors
 - `src/hashers.rs`
   - EVM-compatible Keccak leaf/node hashing with digest masking controls
 - `src/whir_pcs.rs`
@@ -68,7 +69,6 @@ Phases 3 and 4 are implemented for the concrete backend:
 - Zero-knowledge mode
 - Full EVM verifier contract implementation
 - Gas-cost modeling and on-chain calldata benchmarking
-- Non-Koala/non-WHIR backend generalization for Spartan execution path
 
 ## Run Tests
 
