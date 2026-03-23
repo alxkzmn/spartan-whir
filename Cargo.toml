@@ -17,7 +17,16 @@ p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05
 p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
 p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+tracing = { version = "0.1.44", default-features = false }
 
 [features]
 default = []
 keccak_no_prefix = []
+
+[dev-dependencies]
+criterion = "0.8"
+tracing = { version = "0.1.44", features = ["std"] }
+
+[[bench]]
+name = "proof_size_roundtrip"
+harness = false

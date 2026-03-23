@@ -49,8 +49,8 @@ pub use poly::{
     QuadraticRoundPoly,
 };
 pub use profiling::{
-    profile_spartan_blob_v1, NoopObserver, ProofSizeCounters, ProofSizeReport, ProofSizeSection,
-    ProtocolObserver, ProtocolStage, SectionSize,
+    profile_spartan_blob_v1, trace_proof_size_report, NoopObserver, ProofSizeCounters,
+    ProofSizeReport, ProofSizeSection, ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{ProvingKey, SpartanProof, SpartanProtocol, VerifyingKey};
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};

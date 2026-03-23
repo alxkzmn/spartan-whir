@@ -14,6 +14,7 @@ use crate::SpartanWhirEngine;
 
 pub type F = KoalaBear;
 pub type QuarticBinExtension = BinomialExtensionField<F, 4>;
+pub type OcticBinExtension = BinomialExtensionField<F, 8>;
 pub type QuinticExtension = QuinticTrinomialExtensionField<F>;
 pub type KeccakFieldHash = KeccakFieldLeafHasher;
 pub type KeccakNodeCompress = Keccak256NodeCompress;
