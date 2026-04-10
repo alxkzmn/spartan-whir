@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+mod canonical_challenger;
 pub mod codec;
 mod codec_v1;
 pub mod config;
@@ -21,6 +22,7 @@ pub mod sumcheck;
 pub mod whir_params;
 pub mod whir_pcs;
 
+pub use canonical_challenger::CanonicalSerializingChallenger32;
 pub use codec::{
     decode_spartan_blob, decode_spartan_blob_v1, effective_digest_bytes, encode_spartan_blob,
     encode_spartan_blob_v1, encode_spartan_blob_v1_with_report, ProofCodecConfig,

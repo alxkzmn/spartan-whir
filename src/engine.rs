@@ -1,7 +1,7 @@
 use alloc::vec;
 use core::marker::PhantomData;
 
-use p3_challenger::{HashChallenger, SerializingChallenger32};
+use p3_challenger::HashChallenger;
 use p3_field::{
     extension::{BinomialExtensionField, QuinticTrinomialExtensionField},
     BasedVectorSpace, ExtensionField, TwoAdicField,
@@ -10,6 +10,7 @@ use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
 
 use crate::hashers::{Keccak256NodeCompress, KeccakFieldLeafHasher};
+use crate::CanonicalSerializingChallenger32;
 use crate::SpartanWhirEngine;
 
 pub type F = KoalaBear;
@@ -18,7 +19,8 @@ pub type OcticBinExtension = BinomialExtensionField<F, 8>;
 pub type QuinticExtension = QuinticTrinomialExtensionField<F>;
 pub type KeccakFieldHash = KeccakFieldLeafHasher;
 pub type KeccakNodeCompress = Keccak256NodeCompress;
-pub type KeccakChallenger = SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
+pub type KeccakChallenger =
+    CanonicalSerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 pub trait ExtField:
     ExtensionField<F> + BasedVectorSpace<F> + TwoAdicField + Copy + Send + Sync
