@@ -36,6 +36,7 @@ impl<Ext> ExtField for Ext where
 pub struct KeccakEngine<EF>(PhantomData<EF>);
 
 pub type KeccakQuarticEngine = KeccakEngine<QuarticBinExtension>;
+pub type KeccakOcticEngine = KeccakEngine<OcticBinExtension>;
 /// Quartic and quintic engines are intentionally distinct types at the API boundary.
 ///
 /// ```compile_fail

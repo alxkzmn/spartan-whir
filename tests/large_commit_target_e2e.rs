@@ -1,18 +1,21 @@
 mod common;
 
 use spartan_whir::{
-    generate_satisfiable_fixture_for_pow2, KeccakQuarticEngine as KeccakEngine, SpartanProtocol,
-    WhirPcs,
+    engine::ExtField, generate_satisfiable_fixture_for_pow2, KeccakEngine, SpartanProtocol, WhirPcs,
 };
 
-fn run_target_e2e(k: usize) {
+fn run_target_e2e<EF: ExtField>(
+    k: usize,
+    security: &spartan_whir::SecurityConfig,
+    whir_params: &spartan_whir::WhirParams,
+) {
     let fixture =
         generate_satisfiable_fixture_for_pow2(k).expect("synthetic fixture generation succeeds");
 
-    let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup(
+    let (pk, vk) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::setup(
         &fixture.shape,
-        &common::phase3_security(),
-        &common::phase3_whir_params(),
+        security,
+        whir_params,
         &common::phase3_pcs_config(),
     )
     .expect("setup succeeds");
@@ -23,7 +26,7 @@ fn run_target_e2e(k: usize) {
     assert_eq!(vk.pcs_config.num_variables, k);
 
     let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
+    let (instance, proof) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::prove(
         &pk,
         &fixture.public_inputs,
         &fixture.witness,
@@ -32,7 +35,7 @@ fn run_target_e2e(k: usize) {
     .expect("prove succeeds");
 
     let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
+    let verified = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::verify(
         &vk,
         &instance,
         &proof,
@@ -43,11 +46,29 @@ fn run_target_e2e(k: usize) {
 
 #[test]
 fn protocol_e2e_target_2_pow_18() {
-    run_target_e2e(18);
+    run_target_e2e::<spartan_whir::QuarticBinExtension>(
+        18,
+        &common::phase3_security(),
+        &common::phase3_whir_params(),
+    );
 }
 
 #[test]
 #[ignore = "Heavy size target for manual runs"]
 fn protocol_e2e_target_2_pow_22() {
-    run_target_e2e(22);
+    run_target_e2e::<spartan_whir::QuarticBinExtension>(
+        22,
+        &common::phase3_security(),
+        &common::phase3_whir_params(),
+    );
+}
+
+#[test]
+#[ignore = "Heavy size target for manual runs"]
+fn protocol_e2e_target_2_pow_22_octic_johnson_bound() {
+    run_target_e2e::<spartan_whir::OcticBinExtension>(
+        22,
+        &common::k22_jb100_security(),
+        &common::k22_jb100_whir_params(),
+    );
 }

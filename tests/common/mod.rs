@@ -211,3 +211,29 @@ pub fn phase3_pcs_config() -> WhirPcsConfig {
         sumcheck_strategy: SumcheckStrategy::Svo,
     }
 }
+
+pub fn k22_jb100_security() -> SecurityConfig {
+    SecurityConfig {
+        security_level_bits: 100,
+        merkle_security_bits: 80,
+        soundness_assumption: SoundnessAssumption::JohnsonBound,
+    }
+}
+
+pub fn k22_jb100_whir_params() -> WhirParams {
+    WhirParams {
+        pow_bits: 30,
+        folding_factor: 4,
+        starting_log_inv_rate: 6,
+        rs_domain_initial_reduction_factor: 1,
+    }
+}
+
+pub fn k22_jb100_pcs_config() -> WhirPcsConfig {
+    WhirPcsConfig {
+        num_variables: 22,
+        security: k22_jb100_security(),
+        whir: k22_jb100_whir_params(),
+        sumcheck_strategy: SumcheckStrategy::Svo,
+    }
+}
