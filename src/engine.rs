@@ -1,17 +1,14 @@
-use alloc::vec;
 use core::marker::PhantomData;
 
-use p3_challenger::HashChallenger;
 use p3_field::{
     extension::{BinomialExtensionField, QuinticTrinomialExtensionField},
     BasedVectorSpace, ExtensionField, TwoAdicField,
 };
-use p3_keccak::Keccak256Hash;
 use p3_koala_bear::KoalaBear;
 
 use crate::hashers::{Keccak256NodeCompress, KeccakFieldLeafHasher};
-use crate::CanonicalSerializingChallenger32;
 use crate::SpartanWhirEngine;
+use crate::{CanonicalKeccakChallenger32, KeccakByteChallenger};
 
 pub type F = KoalaBear;
 pub type QuarticBinExtension = BinomialExtensionField<F, 4>;
@@ -19,8 +16,7 @@ pub type OcticBinExtension = BinomialExtensionField<F, 8>;
 pub type QuinticExtension = QuinticTrinomialExtensionField<F>;
 pub type KeccakFieldHash = KeccakFieldLeafHasher;
 pub type KeccakNodeCompress = Keccak256NodeCompress;
-pub type KeccakChallenger =
-    CanonicalSerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
+pub type KeccakChallenger = CanonicalKeccakChallenger32<F>;
 
 pub trait ExtField:
     ExtensionField<F> + BasedVectorSpace<F> + TwoAdicField + Copy + Send + Sync
@@ -68,6 +64,5 @@ pub fn new_keccak_merkle_compress() -> KeccakNodeCompress {
 }
 
 pub fn new_keccak_challenger() -> KeccakChallenger {
-    let inner = HashChallenger::<u8, Keccak256Hash, 32>::new(vec![], Keccak256Hash {});
-    KeccakChallenger::new(inner)
+    KeccakChallenger::new(KeccakByteChallenger::default())
 }

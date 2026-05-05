@@ -11,6 +11,7 @@ pub mod engine;
 pub mod error;
 pub mod fixtures;
 pub mod hashers;
+mod keccak_challenger;
 pub mod pcs;
 pub mod poly;
 pub mod profiling;
@@ -45,6 +46,7 @@ pub use hashers::{
     merkle_security_bits_or_default, Keccak256NodeCompress, KeccakFieldLeafHasher,
     KECCAK_DIGEST_ELEMS,
 };
+pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
 pub use pcs::MlePcs;
 pub use poly::{
     evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,

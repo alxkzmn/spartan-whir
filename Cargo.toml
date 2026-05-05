@@ -24,6 +24,11 @@ tracing = { version = "0.1.44", default-features = false }
 [features]
 default = []
 keccak_no_prefix = []
+# Enables data-parallelism in hot paths via rayon (currently affects the
+# grinding loop in `CanonicalSerializingChallenger32::grind`, plus any
+# `into_par_iter` calls reachable from this crate). Without this feature,
+# `p3-maybe-rayon` falls back to a serial shim and grinding runs on one core.
+parallel = ["p3-maybe-rayon/parallel", "whir-p3/parallel"]
 
 [dev-dependencies]
 criterion = "0.8"
