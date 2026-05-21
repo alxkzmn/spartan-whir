@@ -5,10 +5,10 @@ use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use spartan_whir::{
     decode_spartan_blob_v1, encode_spartan_blob_v1, encode_spartan_blob_v1_with_report,
     engine::{ExtField, F},
-    observe_whir_fs_domain_separator, profile_spartan_blob_v1, KeccakEngine, MlePcs,
-    MultilinearPoint, PcsStatementBuilder, PointEvalClaim, ProofCodecConfig, QuarticBinExtension,
-    QuinticExtension, SpartanBlobDecodeContext, SpartanProtocol, SpartanWhirError, WhirParams,
-    WhirPcs, WhirPcsConfig,
+    observe_whir_fs_domain_separator, profile_spartan_blob_v1, KeccakEngine, MatrixClosingMode,
+    MlePcs, MultilinearPoint, PcsStatementBuilder, PointEvalClaim, ProofCodecConfig,
+    QuarticBinExtension, QuinticExtension, SpartanBlobDecodeContext, SpartanProtocol,
+    SpartanSnarkConfig, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
 };
 use whir_p3::poly::{
     evals::EvaluationsList as WhirEvaluations, multilinear::MultilinearPoint as WhirPoint,
@@ -64,11 +64,14 @@ where
     Ext: ExtField,
 {
     let shape = common::koala_shape_single_constraint(2);
-    let (pk, vk) = SpartanProtocol::<KeccakEngine<Ext>, WhirPcs>::setup(
+    let (pk, vk) = SpartanProtocol::<KeccakEngine<Ext>, WhirPcs>::setup_with_config(
         &shape,
-        &common::phase3_security(),
-        &common::phase3_whir_params(),
-        &common::phase3_pcs_config(),
+        &SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
+            security: common::phase3_security(),
+            whir_params: common::phase3_whir_params(),
+            pcs_config: common::phase3_pcs_config(),
+        },
     )
     .expect("setup succeeds");
 

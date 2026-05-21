@@ -5,8 +5,8 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use spartan_whir::{
     decode_spartan_blob, decode_spartan_blob_v1, encode_spartan_blob, encode_spartan_blob_v1,
     encode_spartan_blob_v1_with_report, engine::F, profile_spartan_blob_v1,
-    KeccakQuarticEngine as KeccakEngine, ProofCodecConfig, R1csShape, SpartanBlobDecodeContext,
-    SpartanProtocol, SpartanWhirError, WhirPcs,
+    KeccakQuarticEngine as KeccakEngine, MatrixClosingMode, ProofCodecConfig, R1csShape,
+    SpartanBlobDecodeContext, SpartanProtocol, SpartanSnarkConfig, SpartanWhirError, WhirPcs,
 };
 use whir_p3::whir::proof::SumcheckData;
 
@@ -109,11 +109,14 @@ type Instance = spartan_whir::R1csInstance<F, [u64; 4]>;
 type Proof = spartan_whir::SpartanProof<KeccakEngine, WhirPcs>;
 
 fn setup_keys(shape: &R1csShape<F>) -> (Pk, Vk) {
-    SpartanProtocol::<KeccakEngine, WhirPcs>::setup(
+    SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(
         shape,
-        &common::phase3_security(),
-        &common::phase3_whir_params(),
-        &common::phase3_pcs_config(),
+        &SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
+            security: common::phase3_security(),
+            whir_params: common::phase3_whir_params(),
+            pcs_config: common::phase3_pcs_config(),
+        },
     )
     .expect("setup succeeds")
 }

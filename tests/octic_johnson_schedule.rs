@@ -104,6 +104,6 @@ fn johnson_bound_domain_separator_uses_soundness_byte_one() {
     let domain_separator = DomainSeparator::new(&common::sample_shape(), &security, &whir_params);
     let encoded = domain_separator.to_bytes();
 
-    assert_eq!(encoded.len(), 76);
-    assert_eq!(encoded[47], 1);
+    assert_eq!(encoded.len(), 77);
+    assert_eq!(encoded[48], 1);
 }

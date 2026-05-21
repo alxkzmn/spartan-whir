@@ -1,6 +1,6 @@
 mod common;
 
-use spartan_whir::{DomainSeparator, SecurityConfig, WhirParams};
+use spartan_whir::{DomainSeparator, MatrixClosingMode, SecurityConfig, WhirParams};
 
 #[test]
 fn domain_separator_encoding_is_deterministic() {
@@ -15,13 +15,14 @@ fn domain_separator_encoding_is_deterministic() {
     assert_eq!(a.to_bytes(), b.to_bytes());
     // Byte budget for the current stable encoding:
     // protocol_id (15)
+    // + matrix closing mode tag (1)
     // + shape dims: num_cons/num_vars/num_io as u64 (3 * 8)
     // + security bits: security_level_bits/merkle_security_bits as u32 (2 * 4)
     // + soundness enum tag (1)
     // + WHIR params: pow_bits as u32 (4)
     // + folding_factor/starting_log_inv_rate/rs_domain_initial_reduction_factor as u64 (3 * 8)
-    // = 76 bytes total.
-    assert_eq!(a.to_bytes().len(), 76);
+    // = 77 bytes total.
+    assert_eq!(a.to_bytes().len(), 77);
 }
 
 #[test]
@@ -35,4 +36,28 @@ fn domain_separator_changes_when_shape_changes() {
     let b = DomainSeparator::new(&shape, &security, &whir);
 
     assert_ne!(a.to_bytes(), b.to_bytes());
+}
+
+#[test]
+fn domain_separator_changes_when_matrix_closing_changes() {
+    let shape = common::sample_shape();
+    let security = SecurityConfig::default();
+    let whir = WhirParams::default();
+
+    let direct = DomainSeparator::new_with_matrix_closing(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::DirectSparse,
+    );
+    let spark = DomainSeparator::new_with_matrix_closing(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::Spark,
+    );
+
+    assert_ne!(direct.to_bytes(), spark.to_bytes());
+    assert_eq!(direct.to_bytes()[15], 0);
+    assert_eq!(spark.to_bytes()[15], 1);
 }

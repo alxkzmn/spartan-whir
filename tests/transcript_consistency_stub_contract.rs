@@ -2,17 +2,21 @@ mod common;
 
 use p3_challenger::FieldChallenger;
 use spartan_whir::{
-    KeccakQuarticEngine as KeccakEngine, QuarticBinExtension as EF, SpartanProtocol, WhirPcs,
+    KeccakQuarticEngine as KeccakEngine, MatrixClosingMode, QuarticBinExtension as EF,
+    SpartanProtocol, SpartanSnarkConfig, WhirPcs,
 };
 
 #[test]
 fn protocol_transcript_checkpoint_matches_between_prover_and_verifier() {
     let shape = common::koala_shape_single_constraint(2);
-    let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup(
+    let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(
         &shape,
-        &common::phase3_security(),
-        &common::phase3_whir_params(),
-        &common::phase3_pcs_config(),
+        &SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
+            security: common::phase3_security(),
+            whir_params: common::phase3_whir_params(),
+            pcs_config: common::phase3_pcs_config(),
+        },
     )
     .expect("setup succeeds");
 

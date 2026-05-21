@@ -1,206 +1,317 @@
-# Spartan-LC Upgrade Plan: Dense/Tensor Now (Limited) + Sparse-Linear Extension (Real Path)
+# SPARK-Powered Spartan-WHIR Verifier Plan
 
 ## Summary
 
-1. Add a new Spartan linearized proving path that uses WHIR linear constraints to remove Spartan's inner sumcheck from the proof.
-2. Deliver this in two tracks:
-3. Track A (now): use existing `whir-p3` dense/tensor linear constraints; implement a working `Spartan-LC` path with clear limits.
-4. Track B (real path): extend `whir-p3` with sparse linear constraints and switch `Spartan-LC` to sparse weights for scalability.
-5. Keep current classic Spartan path untouched and default; ship `Spartan-LC` as additive APIs until metrics confirm migration.
+1. The scalable full-Spartan verifier path is SPARK-powered sparse-matrix closing over WHIR.
+2. Direct sparse R1CS evaluation remains only a small-fixture oracle and negative-control benchmark.
+3. Spartan-LC is deferred until classic Spartan-with-SPARK has Rust measurements and Solidity gas numbers.
+4. This plan is quintic-only.
 
-## Why This Improves Spartan
+## Current State
 
-1. Current classic proof includes inner sumcheck + `witness_eval`.
-2. `Spartan-LC` replaces inner sumcheck with a single PCS linear opening claim over committed witness `W`.
-3. Expected blob-size reduction per proof (vs classic) is deterministic:
-4. Saved bytes = `20 + 32 * (log2(num_vars_padded) + 1)` in current sectioned encoding model.
-5. Example at `num_vars_padded = 2^16`: save `564` bytes before any WHIR-level tuning.
+#### Rust Paths
 
----
+`spartan-whir` now supports both matrix-closing modes through
+`MatrixClosingMode` / `SpartanSnarkConfig`:
 
-## Track A: Dense/Tensor Now (Limited, Implementable in `spartan-whir` Today)
+1. `DirectSparse` runs the original direct sparse matrix evaluation. It is useful
+   for tests and small correctness oracles only.
+2. `Spark` runs the SPARK sparse-matrix closing path in
+   `spartan-whir/src/spark.rs` and
+   `SpartanProtocol::{prove_spark, verify_spark}`.
 
-## A1. Public API Changes (additive, no breaking removals)
+The selected mode is bound into the Spartan domain separator and into the
+proving/verifying keys. Proof-kind or key-mode mismatches reject with
+`ProofKindMismatch`.
 
-1. Keep existing classic APIs/types unchanged.
-2. Add new proof type in `src/protocol.rs`:
-3. `pub struct SpartanLcProof<E, Pcs> { outer_sumcheck, outer_claims, pcs_proof }`.
-4. Add new protocol methods:
-5. `SpartanProtocol::prove_lc_dense(...) -> Result<(R1csInstance<...>, SpartanLcProof<...>), SpartanWhirError>`.
-6. `SpartanProtocol::verify_lc_dense(...) -> Result<(), SpartanWhirError>`.
-7. Extend statement surface in `src/statement.rs`:
-8. Replace current linear claim payload with an explicit kind enum:
-9. `Dense { coefficients: Evaluations<E::EF> }`.
-10. `TensorProduct { range_start, log_range_len, row_weights: Evaluations<E::EF>, col_weights: Evaluations<E::EF> }`.
-11. Keep `expected: E::EF`.
-12. Add builder helpers:
-13. `add_dense_linear_constraint(...)`.
-14. `add_tensor_linear_constraint(...)`.
-15. Keep `add_linear_constraint(claim)` as compatibility wrapper.
-16. Add/rename error variants in `src/error.rs`:
-17. `InvalidLinearConstraint`.
-18. Keep `UnsupportedStatementType` only for modes still intentionally excluded (none after A2 except future sparse-only guards).
+#### Direct Sparse Closing
 
-## A2. WHIR Adapter Changes (`whir_pcs.rs`)
+The direct verifier closes the R1CS relation by scanning sparse matrix entries:
 
-1. Remove hard rejection of linear constraints in `src/whir_pcs.rs`.
-2. In `build_user_statement`, map each finalized claim to WHIR `EqStatement<KoalaExtension>`:
-3. Point eval claims -> `add_evaluated_constraint`.
-4. Dense linear claims -> `add_linear_constraint`.
-5. Tensor claims -> `add_tensor_product_constraint`.
-6. Validation rules before WHIR call:
-7. Dense coefficients length must be exactly `1 << num_variables`.
-8. Tensor block must satisfy WHIR alignment and power-of-two conditions.
-9. All coefficient vectors must be extension-field vectors (`EF`), not base-field vectors.
-10. Keep existing commit/open/verify transcript ordering and OOD ordering rules unchanged.
+```text
+sum_{(row, col, val) in M} eq_rx[row] * eq_y[col] * val
+```
 
-## A3. Spartan-LC Dense Algorithm (new protocol path)
+The Rust code path is:
 
-1. In prover, keep setup/commit/outer-sumcheck transcript order identical to current classic path.
-2. After outer sumcheck:
-3. Sample `r`.
-4. Compute `claim_inner_joint = Az + r*Bz + r^2*Cz`.
-5. Compute `T_x = EqPolynomial::evals_from_point(r_x)`.
-6. Compute bound rows `(Abar, Bbar, Cbar)` via `bind_row_vars`.
-7. Compute `J = Abar + r*Bbar + r^2*Cbar` (length `2*num_vars_padded`).
-8. Split `J` into `J_w` (first half, witness part) and `J_pub` (second half, public/constant part).
-9. Compute known `public_contrib = <J_pub, [1, public_inputs..., 0...]>`.
-10. Compute linear witness claim `claim_w = claim_inner_joint - public_contrib`.
-11. Build finalized PCS statement with one dense linear constraint:
-12. `weights = J_w`, `expected = claim_w`.
-13. Run PCS `open`.
-14. Return `(instance, SpartanLcProof { outer_sumcheck, outer_claims, pcs_proof })`.
-15. In verifier, repeat deterministic reconstruction of `J_w` and `claim_w`, then call PCS `verify` with the same linear statement.
-16. No inner sumcheck and no `witness_eval` in `SpartanLcProof`.
+1. `spartan-whir/src/protocol.rs` calls `shape_canonical.evaluate_with_tables`.
+2. `spartan-whir/src/r1cs.rs` implements `evaluate_sparse_matrix_with_tables`.
 
-## A4. Codec + Profiling for LC Proofs
+This algorithm is not deployable on EVM for SHA-scale circuits. The Solidity
+negative-control model measured the direct sparse-scan kernel at `8,466,956`
+gas for only `192` synthetic A/B/C entries; scaling the same primitive to
+measured SHA shapes lands in tens to hundreds of billions of gas. That result
+only rules out direct scanning, not Spartan.
 
-1. Keep classic blob codec `v1` unchanged.
-2. Add LC codec `v2` in new module `codec_v2.rs` (or `codec_lc_v1.rs`, pick one and keep naming consistent):
-3. Header keeps same magic family, `version=2`.
-4. Sections for LC proof are fixed and minimal:
-5. `instance`.
-6. `outer_sumcheck`.
-7. `outer_claims`.
-8. `pcs_whir_proof`.
-9. Add API wrappers in `src/codec.rs`:
-10. `encode_spartan_lc_blob_v2`.
-11. `decode_spartan_lc_blob_v2`.
-12. `encode_spartan_lc_blob_v2_with_report`.
-13. Add deterministic profile support for LC sections in `src/profiling.rs`, reusing shared traversal.
-14. Keep decode context derived from VK and WHIR expectations as in v1 strict model.
+#### SPARK Closing
 
-## A5. Track A Tests
+The Rust SPARK path uses:
 
-1. Statement tests:
-2. Dense linear claim finalize/validation.
-3. Tensor linear claim finalize/validation.
-4. WHIR PCS tests:
-5. Dense linear roundtrip success.
-6. Tensor linear roundtrip success.
-7. Tampered expected value fails.
-8. Invalid dense length fails with `InvalidLinearConstraint`.
-9. Invalid tensor alignment/shape fails with `InvalidLinearConstraint`.
-10. Spartan-LC protocol tests:
-11. Roundtrip success (regular and auto-padded shapes).
-12. Tampered commitment fails.
-13. Tampered outer claims fail.
-14. Tampered PCS proof fails.
-15. Transcript checkpoint equivalence.
-16. Codec/profile tests:
-17. LC blob v2 roundtrip.
-18. Section strictness rejections.
-19. Profile total equals encoded length.
-20. All classic Phase 2/3/4 tests remain green.
+1. `2` rectangular setup commitments:
+   - value bundle: `row`, `col`, `val_A`, `val_B`, `val_C`, `read_ts_row`,
+     `read_ts_col`, and one zero padding column;
+   - audit bundle: `audit_ts_row`, `audit_ts_col`.
+2. `1` rectangular per-proof read commitment:
+   - `erow` and `ecol`, decomposed into quintic base-coordinate columns and
+     padded to `16` selector columns.
+3. A measurement-gated shared union skeleton when
+   `union_ratio <= 1.5`.
+4. A compatibility fallback branch for shapes above the threshold. That branch
+   is functional in Rust but is not the final Spartan-style independent-stream
+   product layer.
+5. `proof_ops`, which batches row read/write products, column read/write
+   products, and six split `val_A` / `val_B` / `val_C` dotproduct claims.
+6. `proof_mem`, which batches row init/audit and column init/audit products over
+   the padded memory domain.
 
-## A6. Track A Limits (explicit)
+Fixed/read WHIR openings are derived from `proof_ops.product_point`,
+`proof_ops.dotproduct_point`, and `proof_mem.product_point`.
 
-1. Dense weights are full-length `2^k` vectors and can be expensive in prover memory/time for large `k`.
-2. Tensor constraints are only useful when constraints naturally admit rank-1 contiguous block form.
-3. No automatic dense->tensor decomposition in Track A.
+## Reference Implementations
 
----
+The current SPARK design was cross-checked against the original Spartan
+implementation and the arkworks Spartan port:
 
-## Track B: Sparse-Linear Extension (Real Path, Requires `whir-p3` Changes)
+1. Microsoft Spartan: <https://github.com/microsoft/Spartan>.
+2. arkworks Spartan: <https://github.com/arkworks-rs/spartan>.
 
-## B1. `whir-p3` Core Extension
+Their sparse multilinear-polynomial modules provide the reference shape for
+sparse matrix preprocessing, memory timestamp checks, `proof_ops`, `proof_mem`,
+and split dotproduct claims. Their product-tree modules provide the reference
+shape for batched product proofs and `DotProductCircuit`.
 
-1. Extend `LinearConstraint` in WHIR statement layer with a sparse variant:
-2. `Sparse { indices: Vec<usize>, values: Vec<F> }` with strict invariants.
-3. Add constructor API:
-4. `EqStatement::add_sparse_linear_constraint(indices, values, eval)`.
-5. Extend WHIR constraint logic:
-6. Statement verification path supports sparse dot-product checks.
-7. Combined-weight construction handles sparse accumulation.
-8. Constraint evaluator path handles sparse MLE basis evaluation at random points.
-9. Add packed/unpacked parity tests and existing-roundtrip parity tests for sparse.
+`spartan-whir` deliberately differs in two places:
 
-## B2. `spartan-whir` Sparse Claim Surface
+1. It uses WHIR commitments and rectangular bundled openings instead of the
+   original PCS interface.
+2. It prefers a shared union skeleton when the measured union ratio is small.
+   If the union ratio is too large, the implementation falls back to the
+   compatibility branch rather than forcing the shared layout.
 
-1. Extend statement claim enum with `Sparse` variant:
-2. `Sparse { indices: Vec<u32>, values: Evaluations<E::EF>, domain_size_log2: u8 }`.
-3. Add builder helper:
-4. `add_sparse_linear_constraint(...)`.
-5. In adapter conversion, map to WHIR sparse constraint.
-6. Add strict validation:
-7. sorted unique indices.
-8. index bounds.
-9. values length matches indices length.
-10. domain log matches `num_variables`.
+## SPARK Target
 
-## B3. Spartan-LC Sparse Protocol Path
+#### Layout Decision
 
-1. Keep proof type and verifier equations from Track A unchanged.
-2. Replace dense `J_w` materialization with sparse derivation:
-3. Add `R1csShape::bind_row_vars_sparse` producing sparse column accumulators directly from matrix entries and `eq_rx`.
-4. Form sparse joint weights `J_w_sparse = A_sparse + r*B_sparse + r^2*C_sparse`.
-5. Compute `public_contrib` from sparse public-half terms.
-6. Build sparse linear PCS statement and open/verify.
-7. Dense path remains for fallback/comparison until sparse reaches parity.
+The gas-oriented layout decision is measurement-first:
 
-## B4. Track B Tests
+```text
+union_ratio = |nnz(A) union nnz(B) union nnz(C)| / max(nnz_A, nnz_B, nnz_C)
+```
 
-1. `whir-p3` tests:
-2. sparse constraint validity/rejections.
-3. sparse vs dense equivalence on random polynomials.
-4. packed vs unpacked sparse parity.
-5. `spartan-whir` tests:
-6. sparse linear statement roundtrip.
-7. sparse vs dense `prove_lc` verification equivalence.
-8. same acceptance/rejection behavior under tampering.
-9. Optional perf test targets:
-10. no full `2^k` witness-weight allocation in sparse path.
-11. prove-time and memory improved on large synthetic shapes.
+Use the shared union skeleton only when `union_ratio <= 1.5`. The shared union
+skeleton:
 
----
+1. aggregates duplicate `(row, col)` entries within each matrix;
+2. sorts union entries lexicographically by `(row, col)`;
+3. stores one row stream and one column stream;
+4. stores `val_A`, `val_B`, and `val_C`, using zero where a matrix is absent;
+5. pads with `(row=0, col=0, val_A=val_B=val_C=0)`.
 
-## Rollout and Decision Gates
+The `32N -> 8N` fixed-bundle and `64N -> 16N` read-bundle reductions apply only
+when the union ratio is close to `1`.
 
-1. Milestone 1: Track A A1+A2 (functional Spartan-LC dense + tensor pass-through).
-2. Milestone 2: Track A A4 (LC codec/profile) and publish comparative size report against classic.
-3. Milestone 3: Track B `whir-p3` sparse extension landed (local patch first, upstream later).
-4. Milestone 4: Track B `spartan-whir` sparse integration and dense-vs-sparse parity.
-5. Promotion rule:
-6. Keep classic default until LC sparse passes parity and profiling gates.
-7. After promotion, keep classic as compatibility mode for at least one codec version cycle.
+#### Verifier-Key Binding
+
+The verifier key / generated verifier must bind:
+
+1. the R1CS shape;
+2. the matrix-closing mode;
+3. the row/column bit widths and packed-index bounds;
+4. the chosen SPARK layout, union-ordering rule, and padded sparse-entry domain
+   sizes;
+5. the fixed sparse-table commitments;
+6. the WHIR schedule and Fiat-Shamir domain data for those commitments.
+
+The prover must not choose matrix data. If the verifier key embeds commitments
+rather than full tables, matrix correctness moves to fixture generation /
+verifier generation; the on-chain verifier checks openings against those
+commitments.
+
+#### Product-Layer Shape
+
+`SparkSpartanProof` carries the batched product-layer proof object:
+
+1. `proof_ops` runs over the value domain and batches:
+   - row read;
+   - row write;
+   - column read;
+   - column write;
+   - split dotproduct claims ordered as `A_low`, `A_high`, `B_low`, `B_high`,
+     `C_low`, `C_high`.
+2. `proof_mem` runs over `max(row_memory_size, col_memory_size)` and batches:
+   - row init;
+   - row audit;
+   - column init;
+   - column audit.
+
+The split dotproduct pairs reconstruct:
+
+```text
+eval_A = A_low + A_high
+eval_B = B_low + B_high
+eval_C = C_low + C_high
+```
+
+The Spartan closing then uses the existing inner-sumcheck matrix-combination
+challenge `r`:
+
+```text
+spark_matrix_eval = eval_A + r * eval_B + r^2 * eval_C
+inner_final_claim == spark_matrix_eval * eval_z
+```
+
+The top-level SPARK value sumcheck and independent grand-product helpers remain
+as reference/test APIs only. They are not the `prove_spark` / `verify_spark`
+proof path.
+
+## Quintic Gas Model
+
+#### Existing Anchors
+
+Measured on `2026-05-19`:
+
+| item                                               |   gas / bytes |
+| -------------------------------------------------- | ------------: |
+| current quintic native WHIR blob verifier test gas |     5,526,933 |
+| current profiled phase sum                         |     4,768,297 |
+| all current WHIR sumchecks                         |       146,153 |
+| current standalone-WHIR proof blob                 |  54,330 bytes |
+| Spartan inner-sumcheck transcript replay floor     |   134,577 gas |
+| direct sparse scan for 192 synthetic A/B/C entries | 8,466,956 gas |
+
+The direct sparse scan number is a negative-control result. It is not a
+production-verifier estimate.
+
+#### Shape Inputs
+
+The SPARK model should be parameterized by:
+
+```text
+num_rows, num_cols, nnz_A, nnz_B, nnz_C, union_nnz
+```
+
+For Spartan2 SHA-256:
+
+| input bytes | padded constraints | padded variables | total A/B/C nonzeros |
+| ----------: | -----------------: | ---------------: | -------------------: |
+|       1,024 |            524,288 |          524,288 |            2,440,431 |
+|       2,048 |          1,048,576 |        1,048,576 |            4,780,623 |
+|       4,096 |          2,097,152 |        2,097,152 |            9,461,007 |
+
+For ProveKit SHA-256:
+
+| input bytes | optimized constraints | committed witnesses | raw A/B/C entries before preprocessing |
+| ----------: | --------------------: | ------------------: | -------------------------------------: |
+|       1,024 |               196,940 |             339,764 |                              1,131,648 |
+|       2,048 |               345,399 |             612,724 |                              2,058,122 |
+|       4,096 |               605,463 |           1,059,124 |                              3,608,938 |
+
+Do not use SHA input bytes as the primary parameter. Use the R1CS shape and
+sparse matrix counts.
+
+#### Rust Operation Report
+
+`SparkVerifierOperationReport` reports the current batched product proof shape.
+It distinguishes product-tree layers from replayed cubic sumcheck rounds: a
+product proof over domain `2^k` has `k` layers and
+`0 + 1 + ... + (k - 1)` cubic sumcheck rounds.
+
+For the ProveKit SHA 2KiB optimized profile row used by the layout estimator:
+
+| item                                                              |                         value |
+| ----------------------------------------------------------------- | ----------------------------: |
+| rows / columns                                                    |           `345,399 / 612,724` |
+| modeled `nnz_A / nnz_B / nnz_C`                                   | `700,000 / 700,000 / 658,122` |
+| modeled union nonzeros                                            |                     `760,000` |
+| padded value domain                                               |                   `1,048,576` |
+| padded memory domain                                              |                   `1,048,576` |
+| setup commitments                                                 |                           `2` |
+| per-proof commitments                                             |                           `1` |
+| `proof_ops` layers / cubic rounds                                 |                    `20 / 190` |
+| `proof_mem` layers / cubic rounds                                 |                    `20 / 190` |
+| total product-layer cubic rounds                                  |                         `380` |
+| fixed value bundle slots                                          |                   `8,388,608` |
+| read bundle slots at quintic                                      |                  `16,777,216` |
+| product-layer extension elements                                  |                       `1,505` |
+| opening-evaluation extension elements                             |                          `42` |
+| raw product-layer bytes at quintic, excluding WHIR opening proofs |                      `30,100` |
+| raw opening-evaluation bytes at quintic                           |                         `840` |
+| duplicated commitment bytes in the current Rust proof object      |                          `96` |
+| raw SPARK payload bytes excluding WHIR opening proofs             |                      `31,036` |
+
+These bytes are Rust-side canonical-element estimates, not final Solidity
+calldata numbers. They intentionally exclude the three WHIR opening proofs for
+the fixed value bundle, fixed audit bundle, and read bundle.
+
+`SparkVerifierOperationReport::estimate_solidity_gas` maps the report to:
+
+1. product-layer cubic sumcheck replay gas;
+2. three sparse-table WHIR opening execution costs;
+3. raw SPARK payload calldata gas upper bound;
+4. sparse-table WHIR opening calldata gas upper bound.
+
+The estimator deliberately takes per-round and per-opening gas as inputs. Do
+not freeze guessed constants in the Rust model.
+
+## Spartan-LC After SPARK
+
+Spartan-LC is no longer the scaling mechanism. It is a later comparison between
+two SPARK-powered paths:
+
+1. classic Spartan-with-SPARK verifies the outer sumcheck, inner sumcheck, and
+   SPARK matrix closing;
+2. Spartan-LC-with-SPARK removes the inner sumcheck and `witness_eval`;
+3. both paths use the same SPARK sparse-matrix closing strategy.
+
+The expected Spartan-LC proof body saving remains:
+
+```text
+saved_body_bytes = 4 + (2 * (log2(num_vars_padded) + 1) + 1) * ext_bytes
+```
+
+For k22 quintic:
+
+```text
+saved_body_bytes = 944
+calldata_saving <= 944 * 16 = 15,104 gas
+inner_sumcheck_replay_floor ~= 134,577 gas
+```
+
+This is useful only after the SPARK path has Solidity gas measurements.
+
+## Next Work
+
+#### Rust Measurements
+
+1. Keep direct sparse and SPARK roundtrip tests in parallel.
+2. Refresh `SparkVerifierOperationReport` on the target quintic shape whenever
+   the SPARK proof object, WHIR opening strategy, or matrix layout changes.
+3. Track proof bytes, opening counts, product-layer rounds, and estimated
+   calldata bytes.
+
+#### Solidity Work
+
+Solidity implementation is on hold until the Rust report has stable counts. The
+next Solidity-facing work is measurement, not a full verifier:
+
+1. optimized replay kernel for SPARK cubic product-layer sumchecks;
+2. optimized verifier model for the three sparse-table WHIR openings;
+3. calldata accounting for the SPARK payload plus WHIR opening proofs.
+
+#### Spartan-LC Re-evaluation
+
+Reopen Spartan-LC only after classic Spartan-with-SPARK has both Rust proof-size
+measurements and Solidity gas profiling. Promote Spartan-LC only if total
+transaction gas and proof bytes both decrease on the same fixture.
 
 ## Acceptance Criteria
 
-1. Track A:
-2. `prove_lc_dense/verify_lc_dense` works end-to-end and remains transcript-consistent.
-3. WHIR adapter supports point + dense/tensor constraints correctly.
-4. LC blob codec version is strict and deterministic.
-5. Classic APIs and tests are unaffected.
-6. Track B:
-7. Sparse constraints are fully supported in WHIR and `spartan-whir`.
-8. Spartan-LC sparse verifies exactly where dense verifies.
-9. Sparse path removes full dense weight allocation from Spartan-LC proving.
-10. Codec and profile outputs remain deterministic and strict.
-
-## Assumptions and Defaults
-
-1. Default proving APIs remain classic (`SpartanProof`) until LC sparse is mature.
-2. `Spartan-LC` ships as additive APIs (`SpartanLcProof`, `prove_lc_dense`, `verify_lc_dense`).
-3. Track A uses dense witness linear constraint for Spartan-LC; tensor is pass-through/manual only.
-4. LC serialization uses a new codec version; classic codec v1 remains frozen.
-5. Non-ZK mode remains unchanged in both tracks.
+1. No production Solidity path scans sparse R1CS entries on-chain.
+2. No production Solidity path materializes dense `2^k` matrix-weight vectors.
+3. SPARK proof verification matches direct `evaluate_with_tables` on small Rust
+   fixtures.
+4. SPARK tamper tests fail for changed matrix values, row/column streams,
+   timestamps, commitments, product claims, and opening evaluations.
+5. The quintic SPARK verifier has measured Rust proof bytes and verifier
+   operation counts before Solidity work starts.
+6. Spartan-LC is evaluated only after classic Spartan-with-SPARK is measured.

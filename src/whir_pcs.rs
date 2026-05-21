@@ -1,5 +1,6 @@
-use alloc::{vec, vec::Vec};
+use alloc::{rc::Rc, vec, vec::Vec};
 
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::TwoAdicField;
 
@@ -82,9 +83,9 @@ impl WhirPcsConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WhirProverData<Ext> {
-    pub merkle_tree: WhirMerkleTree,
+    pub merkle_tree: Rc<WhirMerkleTree>,
     pub proof: WhirPcsProof<Ext>,
     pub polynomial: Vec<F>,
     pub ood_pairs: Vec<(WhirPcsPoint<Ext>, Ext)>,
@@ -188,6 +189,39 @@ where
         .map_err(|_| SpartanWhirError::WhirVerifyFailed)
 }
 
+pub fn prepare_committed_opening<Ext>(
+    config: &WhirPcsConfig,
+    mut prover_data: WhirProverData<Ext>,
+    challenger: &mut KeccakChallenger,
+) -> Result<WhirProverData<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    config.validate()?;
+    if prover_data.num_variables != config.num_variables {
+        return Err(SpartanWhirError::InvalidNumVariables);
+    }
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
+    observe_whir_fs_domain_separator_for_config::<Ext>(&whir_config, challenger);
+    let root: Hash<F, u64, 4> = prover_data.proof.initial_commitment.into();
+    challenger.observe(root);
+
+    let polynomial = WhirEvaluations::new(prover_data.polynomial.clone());
+    prover_data.proof.initial_ood_answers.clear();
+    prover_data.ood_pairs.clear();
+    for _ in 0..whir_config.commitment_ood_samples {
+        let point = WhirPoint::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            config.num_variables,
+        );
+        let eval = polynomial.evaluate_hypercube_base(&point);
+        challenger.observe_algebra_element(eval);
+        prover_data.proof.initial_ood_answers.push(eval);
+        prover_data.ood_pairs.push((point, eval));
+    }
+    Ok(prover_data)
+}
+
 impl<Ext> MlePcs<KeccakEngine<Ext>> for WhirPcs
 where
     Ext: ExtField,
@@ -230,7 +264,7 @@ where
 
         let commitment = proof.initial_commitment;
         let prover_data = WhirProverData::<Ext> {
-            merkle_tree,
+            merkle_tree: Rc::new(merkle_tree),
             proof,
             polynomial,
             ood_pairs,
@@ -246,42 +280,7 @@ where
         statement: &PcsStatement<KeccakEngine<Ext>>,
         challenger: &mut KeccakChallenger,
     ) -> Result<Self::Proof, SpartanWhirError> {
-        config.validate()?;
-        if prover_data.num_variables != config.num_variables {
-            return Err(SpartanWhirError::InvalidNumVariables);
-        }
-        validate_user_point_claims::<Ext>(
-            statement,
-            &prover_data.polynomial,
-            config.num_variables,
-        )?;
-
-        let (_, whir_config) = build_whir_config::<Ext>(config)?;
-        let mut user_statement = build_user_statement::<Ext>(statement, config.num_variables)?;
-
-        for (point, eval) in &prover_data.ood_pairs {
-            user_statement.add_evaluated_constraint(point.clone(), *eval);
-        }
-
-        let mut proof = prover_data.proof;
-        let initial_statement = InitialStatement::from_eq_statement(
-            WhirEvaluations::new(prover_data.polynomial),
-            user_statement,
-        );
-
-        let dft = Radix2DFTSmallBatch::<F>::default();
-        let prover = Prover(&whir_config);
-        prover
-            .prove::<_, F, u64, u64, 4>(
-                &dft,
-                &mut proof,
-                challenger,
-                &initial_statement,
-                prover_data.merkle_tree,
-            )
-            .map_err(|_| SpartanWhirError::WhirOpenFailed)?;
-
-        Ok(proof)
+        open_without_commit_observation(config, prover_data, statement, challenger)
     }
 
     fn verify(
@@ -294,6 +293,48 @@ where
         let parsed = verify_parse_commitment::<Ext>(config, commitment, proof, challenger)?;
         verify_finalize::<Ext>(config, &parsed, statement, proof, challenger)
     }
+}
+
+fn open_without_commit_observation<Ext>(
+    config: &WhirPcsConfig,
+    prover_data: WhirProverData<Ext>,
+    statement: &PcsStatement<KeccakEngine<Ext>>,
+    challenger: &mut KeccakChallenger,
+) -> Result<WhirPcsProof<Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    config.validate()?;
+    if prover_data.num_variables != config.num_variables {
+        return Err(SpartanWhirError::InvalidNumVariables);
+    }
+    validate_user_point_claims::<Ext>(statement, &prover_data.polynomial, config.num_variables)?;
+
+    let (_, whir_config) = build_whir_config::<Ext>(config)?;
+    let mut user_statement = build_user_statement::<Ext>(statement, config.num_variables)?;
+    for (point, eval) in &prover_data.ood_pairs {
+        user_statement.add_evaluated_constraint(point.clone(), *eval);
+    }
+
+    let mut proof = prover_data.proof;
+    let initial_statement = InitialStatement::from_eq_statement(
+        WhirEvaluations::new(prover_data.polynomial),
+        user_statement,
+    );
+
+    let dft = Radix2DFTSmallBatch::<F>::default();
+    let prover = Prover(&whir_config);
+    prover
+        .prove::<_, F, u64, u64, 4>(
+            &dft,
+            &mut proof,
+            challenger,
+            &initial_statement,
+            prover_data.merkle_tree,
+        )
+        .map_err(|_| SpartanWhirError::WhirOpenFailed)?;
+
+    Ok(proof)
 }
 
 fn build_whir_config<Ext>(

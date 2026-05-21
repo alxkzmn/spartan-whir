@@ -2,9 +2,16 @@ use alloc::vec::Vec;
 
 use crate::{R1csShape, SecurityConfig, SoundnessAssumption, WhirParams};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixClosingMode {
+    DirectSparse,
+    Spark,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DomainSeparator {
     pub protocol_id: &'static [u8],
+    pub matrix_closing: MatrixClosingMode,
     pub num_cons: usize,
     pub num_vars: usize,
     pub num_io: usize,
@@ -20,8 +27,23 @@ impl DomainSeparator {
         security: &SecurityConfig,
         whir_params: &WhirParams,
     ) -> Self {
+        Self::new_with_matrix_closing(
+            shape,
+            security,
+            whir_params,
+            MatrixClosingMode::DirectSparse,
+        )
+    }
+
+    pub fn new_with_matrix_closing<F>(
+        shape: &R1csShape<F>,
+        security: &SecurityConfig,
+        whir_params: &WhirParams,
+        matrix_closing: MatrixClosingMode,
+    ) -> Self {
         Self {
             protocol_id: b"spartan-whir-v0",
+            matrix_closing,
             num_cons: shape.num_cons,
             num_vars: shape.num_vars,
             num_io: shape.num_io,
@@ -35,6 +57,7 @@ impl DomainSeparator {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(self.protocol_id);
+        out.push(matrix_closing_to_byte(self.matrix_closing));
         out.extend_from_slice(&(self.num_cons as u64).to_le_bytes());
         out.extend_from_slice(&(self.num_vars as u64).to_le_bytes());
         out.extend_from_slice(&(self.num_io as u64).to_le_bytes());
@@ -48,6 +71,13 @@ impl DomainSeparator {
             &(self.whir_params.rs_domain_initial_reduction_factor as u64).to_le_bytes(),
         );
         out
+    }
+}
+
+fn matrix_closing_to_byte(matrix_closing: MatrixClosingMode) -> u8 {
+    match matrix_closing {
+        MatrixClosingMode::DirectSparse => 0,
+        MatrixClosingMode::Spark => 1,
     }
 }
 

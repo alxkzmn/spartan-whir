@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use spartan_whir::{
     encode_spartan_blob_v1_with_report, generate_satisfiable_fixture,
-    KeccakQuarticEngine as KeccakEngine, ProofCodecConfig, SpartanProtocol, SyntheticR1csConfig,
-    WhirPcs,
+    KeccakQuarticEngine as KeccakEngine, MatrixClosingMode, ProofCodecConfig, SpartanProtocol,
+    SpartanSnarkConfig, SyntheticR1csConfig, WhirPcs,
 };
 
 #[test]
@@ -34,11 +34,14 @@ fn sparsity_sweep_target_2_pow_18() {
             })
             .expect("fixture generation succeeds");
 
-            let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup(
+            let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(
                 &fixture.shape,
-                &common::phase3_security(),
-                &common::phase3_whir_params(),
-                &common::phase3_pcs_config(),
+                &SpartanSnarkConfig {
+                    matrix_closing: MatrixClosingMode::DirectSparse,
+                    security: common::phase3_security(),
+                    whir_params: common::phase3_whir_params(),
+                    pcs_config: common::phase3_pcs_config(),
+                },
             )
             .expect("setup succeeds");
 

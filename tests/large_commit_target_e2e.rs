@@ -1,7 +1,8 @@
 mod common;
 
 use spartan_whir::{
-    engine::ExtField, generate_satisfiable_fixture_for_pow2, KeccakEngine, SpartanProtocol, WhirPcs,
+    engine::ExtField, generate_satisfiable_fixture_for_pow2, KeccakEngine, MatrixClosingMode,
+    SpartanProtocol, SpartanSnarkConfig, WhirPcs,
 };
 
 fn run_target_e2e<EF: ExtField>(
@@ -12,11 +13,14 @@ fn run_target_e2e<EF: ExtField>(
     let fixture =
         generate_satisfiable_fixture_for_pow2(k).expect("synthetic fixture generation succeeds");
 
-    let (pk, vk) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::setup(
+    let (pk, vk) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::setup_with_config(
         &fixture.shape,
-        security,
-        whir_params,
-        &common::phase3_pcs_config(),
+        &SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
+            security: *security,
+            whir_params: *whir_params,
+            pcs_config: common::phase3_pcs_config(),
+        },
     )
     .expect("setup succeeds");
 
