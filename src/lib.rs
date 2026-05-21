@@ -1,11 +1,15 @@
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
+#[cfg(feature = "circom")]
+extern crate std;
 
 mod canonical_challenger;
 pub mod codec;
 mod codec_v1;
 pub mod config;
+#[cfg(feature = "circom")]
+pub mod circom;
 pub mod domain_separator;
 pub mod engine;
 pub mod error;
@@ -25,6 +29,8 @@ pub mod whir_params;
 pub mod whir_pcs;
 
 pub use canonical_challenger::CanonicalSerializingChallenger32;
+#[cfg(feature = "circom")]
+pub use circom::{import_bytes as import_circom_bytes, import_paths as import_circom_paths};
 pub use codec::{
     decode_spartan_blob, decode_spartan_blob_v1, effective_digest_bytes, encode_spartan_blob,
     encode_spartan_blob_v1, encode_spartan_blob_v1_with_report, ProofCodecConfig,
