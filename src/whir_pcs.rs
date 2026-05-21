@@ -330,7 +330,7 @@ where
             &mut proof,
             challenger,
             &initial_statement,
-            prover_data.merkle_tree,
+            prover_data.merkle_tree.as_ref(),
         )
         .map_err(|_| SpartanWhirError::WhirOpenFailed)?;
 
