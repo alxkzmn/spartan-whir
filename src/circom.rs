@@ -72,12 +72,11 @@ impl From<std::io::Error> for CircomAdapterError {
     }
 }
 
-impl From<SpartanWhirError> for CircomAdapterError {
-    fn from(_: SpartanWhirError) -> Self {
-        Self::InvalidShape
-    }
-}
-
+/// Import a KoalaBear Circom `.r1cs` and `.wtns` pair.
+///
+/// Import validates the file headers, remaps Circom wires into Spartan-WHIR's
+/// `[witness | constant_one | public_outputs || public_inputs]` layout, and
+/// runs a constraint-satisfaction check against the imported witness.
 pub fn import_paths(
     r1cs_path: impl AsRef<Path>,
     wtns_path: impl AsRef<Path>,
@@ -104,20 +103,32 @@ fn import_parsed(
         });
     }
 
-    let num_io = r1cs.header.public_outputs + r1cs.header.public_inputs;
-    if 1 + num_io + r1cs.header.private_inputs > r1cs.header.total_wires {
+    let num_io = r1cs
+        .header
+        .public_outputs
+        .checked_add(r1cs.header.public_inputs)
+        .ok_or(CircomAdapterError::InvalidShape)?;
+    let one_plus_io = num_io
+        .checked_add(1)
+        .ok_or(CircomAdapterError::InvalidShape)?;
+    let non_private_wires = one_plus_io
+        .checked_add(r1cs.header.private_inputs)
+        .ok_or(CircomAdapterError::InvalidShape)?;
+    if non_private_wires > r1cs.header.total_wires {
         return Err(CircomAdapterError::InvalidShape);
     }
     let num_vars = r1cs
         .header
         .total_wires
-        .checked_sub(num_io + 1)
+        .checked_sub(one_plus_io)
         .ok_or(CircomAdapterError::InvalidShape)?;
-    let num_cols = num_vars + 1 + num_io;
+    let num_cols = num_vars
+        .checked_add(one_plus_io)
+        .ok_or(CircomAdapterError::InvalidShape)?;
 
-    let public_inputs = witness_values[1..1 + num_io].to_vec();
+    let public_inputs = witness_values[1..one_plus_io].to_vec();
     let witness = R1csWitness {
-        w: witness_values[1 + num_io..].to_vec(),
+        w: witness_values[one_plus_io..].to_vec(),
     };
 
     let remap = |wire: usize| -> Result<usize, CircomAdapterError> {
@@ -169,10 +180,19 @@ fn validate_satisfaction(
     witness: &R1csWitness<F>,
     public_inputs: &[F],
 ) -> Result<(), CircomAdapterError> {
-    let mut z = shape.witness_to_mle(&witness.w)?;
+    let mut z = shape.witness_to_mle(&witness.w).map_err(|err| match err {
+        SpartanWhirError::InvalidWitnessLength => CircomAdapterError::InvalidWitnessLength {
+            expected: shape.num_vars,
+            actual: witness.w.len(),
+        },
+        _ => CircomAdapterError::InvalidShape,
+    })?;
     z.push(F::ONE);
     z.extend_from_slice(public_inputs);
-    let (az, bz, cz) = shape.multiply_vec(&z)?;
+    let (az, bz, cz) = shape.multiply_vec(&z).map_err(|err| match err {
+        SpartanWhirError::InvalidWitnessLength => CircomAdapterError::InvalidShape,
+        _ => CircomAdapterError::InvalidShape,
+    })?;
     for row in 0..shape.num_cons {
         if az[row] * bz[row] != cz[row] {
             return Err(CircomAdapterError::UnsatisfiedConstraint { row });
