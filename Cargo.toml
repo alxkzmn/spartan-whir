@@ -36,8 +36,14 @@ name = "circom-adapter-check"
 path = "src/bin/circom-adapter-check.rs"
 required-features = ["circom"]
 
+[[example]]
+name = "sha256_512b_circom"
+path = "examples/sha256_512b_circom.rs"
+required-features = ["circom"]
+
 [dev-dependencies]
 criterion = "0.8"
+sha2 = "0.10"
 tracing = { version = "0.1.44", features = ["std"] }
 
 [[bench]]
