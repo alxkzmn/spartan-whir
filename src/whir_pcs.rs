@@ -22,11 +22,12 @@ use whir_p3::{
     },
 };
 
+use crate::profiling::profile_scope;
 use crate::{
     effective_digest_bytes_for_security_bits,
     engine::{ExtField, KeccakEngine, PoseidonEngine, WhirHashEngine, F},
-    Evaluations, LinearConstraintClaim, MlePcs, PcsStatement, SecurityConfig, SoundnessAssumption,
-    SpartanWhirEngine, SpartanWhirError, WhirParams,
+    CommittedPolynomialView, Evaluations, LinearConstraintClaim, MlePcs, PcsStatement, ProtocolPcs,
+    SecurityConfig, SoundnessAssumption, SpartanWhirEngine, SpartanWhirError, WhirParams,
 };
 
 pub use whir_p3::whir::parameters::SumcheckStrategy;
@@ -42,7 +43,8 @@ type PcsConfig<E, EF> = WhirConfig<
 >;
 type WhirPcsPoint<Ext> = WhirPoint<Ext>;
 type WhirPcsProof<Ext, W, const DIGEST_ELEMS: usize> = WhirProof<F, Ext, W, DIGEST_ELEMS>;
-type WhirMerkleTree<W, const DIGEST_ELEMS: usize> = MerkleTree<F, W, DenseMatrix<F>, DIGEST_ELEMS>;
+type WhirMerkleTree<W, const DIGEST_ELEMS: usize> =
+    MerkleTree<F, W, DenseMatrix<F>, 2, DIGEST_ELEMS>;
 pub type ParsedWhirCommitment<Ext, W = u64, const DIGEST_ELEMS: usize = 4> =
     whir_p3::whir::committer::reader::ParsedCommitment<Ext, Hash<F, W, DIGEST_ELEMS>>;
 
@@ -213,6 +215,7 @@ where
         + CanObserve<Hash<F, E::W, DIGEST_ELEMS>>,
     [E::W; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    let _profile = profile_scope("verify_parse_commitment");
     config.validate()?;
     let (_, whir_config) = build_whir_config::<E, Ext, DIGEST_ELEMS>(config)?;
     observe_whir_fs_domain_separator_for_config::<E, Ext, DIGEST_ELEMS>(&whir_config, challenger);
@@ -245,6 +248,7 @@ where
         + CanObserve<Hash<F, E::W, DIGEST_ELEMS>>,
     [E::W; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    let _profile = profile_scope("verify_finalize");
     config.validate()?;
     // Note: this rebuilds config independently from `verify_parse_commitment`.
     // We keep the split API for transcript ordering clarity; may be optimized later.
@@ -281,6 +285,7 @@ where
         + CanObserve<Hash<F, E::W, DIGEST_ELEMS>>,
     [E::W; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    let _profile = profile_scope("prepare_committed_opening");
     config.validate()?;
     if prover_data.num_variables != config.num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
@@ -293,15 +298,18 @@ where
     let polynomial = WhirEvaluations::new(prover_data.polynomial.clone());
     prover_data.proof.initial_ood_answers.clear();
     prover_data.ood_pairs.clear();
-    for _ in 0..whir_config.commitment_ood_samples {
-        let point = WhirPoint::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            config.num_variables,
-        );
-        let eval = polynomial.evaluate_hypercube_base(&point);
-        challenger.observe_algebra_element(eval);
-        prover_data.proof.initial_ood_answers.push(eval);
-        prover_data.ood_pairs.push((point, eval));
+    {
+        let _ood_profile = profile_scope("initial_ood_sampling");
+        for _ in 0..whir_config.commitment_ood_samples {
+            let point = WhirPoint::expand_from_univariate(
+                challenger.sample_algebra_element(),
+                config.num_variables,
+            );
+            let eval = polynomial.evaluate_hypercube_base(&point);
+            challenger.observe_algebra_element(eval);
+            prover_data.proof.initial_ood_answers.push(eval);
+            prover_data.ood_pairs.push((point, eval));
+        }
     }
     Ok(prover_data)
 }
@@ -347,6 +355,7 @@ where
         poly: &Evaluations<F>,
         challenger: &mut <$engine<Ext> as SpartanWhirEngine>::Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), SpartanWhirError> {
+        let _profile = profile_scope("pcs_commit");
         config.validate()?;
         validate_polynomial_shape(poly, config.num_variables)?;
 
@@ -370,20 +379,23 @@ where
             );
         let dft = Radix2DFTSmallBatch::<F>::default();
         let committer = CommitmentWriter::new(&whir_config);
-        let merkle_tree = committer
-            .commit::<
-                _,
-                <$engine<Ext> as SpartanWhirEngine>::PackedF,
-                <$engine<Ext> as SpartanWhirEngine>::W,
-                <$engine<Ext> as SpartanWhirEngine>::PackedW,
-                $digest_elems,
-            >(
-                &dft,
-                &mut proof,
-                challenger,
-                &mut statement,
-            )
-            .map_err(|_| SpartanWhirError::WhirCommitFailed)?;
+        let merkle_tree = {
+            let _commit_profile = profile_scope("commit_writer_commit");
+            committer
+                .commit::<
+                    _,
+                    <$engine<Ext> as SpartanWhirEngine>::PackedF,
+                    <$engine<Ext> as SpartanWhirEngine>::W,
+                    <$engine<Ext> as SpartanWhirEngine>::PackedW,
+                    $digest_elems,
+                >(
+                    &dft,
+                    &mut proof,
+                    challenger,
+                    &mut statement,
+                )
+                .map_err(|_| SpartanWhirError::WhirCommitFailed)?
+        };
 
         let ood_pairs = statement
             .normalize()
@@ -542,6 +554,56 @@ where
     }
 }
 
+impl<Ext, W, const DIGEST_ELEMS: usize> CommittedPolynomialView<Ext>
+    for WhirProverData<Ext, W, DIGEST_ELEMS>
+where
+    Ext: ExtField,
+{
+    fn num_variables(&self) -> usize {
+        self.num_variables
+    }
+
+    fn polynomial(&self) -> &[F] {
+        &self.polynomial
+    }
+}
+
+impl<E> ProtocolPcs<E> for WhirPcs
+where
+    E: ProtocolWhirEngine,
+    E::EF: ExtField,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+{
+    type ParsedCommitment = E::ParsedCommitment;
+
+    fn prepare_committed_opening(
+        config: &Self::Config,
+        prover_data: Self::ProverData,
+        challenger: &mut E::Challenger,
+    ) -> Result<Self::ProverData, SpartanWhirError> {
+        E::prepare_committed_opening(config, prover_data, challenger)
+    }
+
+    fn verify_parse_commitment(
+        config: &Self::Config,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<Self::ParsedCommitment, SpartanWhirError> {
+        E::verify_parse_commitment(config, commitment, proof, challenger)
+    }
+
+    fn verify_finalize(
+        config: &Self::Config,
+        parsed: &Self::ParsedCommitment,
+        statement: &PcsStatement<E>,
+        proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<(), SpartanWhirError> {
+        E::verify_finalize(config, parsed, statement, proof, challenger)
+    }
+}
+
 fn open_without_commit_observation<E, Ext, const DIGEST_ELEMS: usize>(
     config: &WhirPcsConfig,
     prover_data: WhirProverData<Ext, E::W, DIGEST_ELEMS>,
@@ -561,14 +623,25 @@ where
         + CanObserve<Hash<F, E::W, DIGEST_ELEMS>>,
     [E::W; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    let _profile = profile_scope("pcs_open");
     config.validate()?;
     if prover_data.num_variables != config.num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    validate_user_point_claims::<E, Ext>(statement, &prover_data.polynomial, config.num_variables)?;
+    {
+        let _validate_profile = profile_scope("validate_user_point_claims");
+        validate_user_point_claims::<E, Ext>(
+            statement,
+            &prover_data.polynomial,
+            config.num_variables,
+        )?;
+    }
 
     let (_, whir_config) = build_whir_config::<E, Ext, DIGEST_ELEMS>(config)?;
-    let mut user_statement = build_user_statement::<E, Ext>(statement, config.num_variables)?;
+    let mut user_statement = {
+        let _statement_profile = profile_scope("build_user_statement");
+        build_user_statement::<E, Ext>(statement, config.num_variables)?
+    };
     for (point, eval) in &prover_data.ood_pairs {
         user_statement.add_evaluated_constraint(point.clone(), *eval);
     }
@@ -581,15 +654,18 @@ where
 
     let dft = Radix2DFTSmallBatch::<F>::default();
     let prover = Prover(&whir_config);
-    prover
-        .prove::<_, E::PackedF, E::W, E::PackedW, DIGEST_ELEMS>(
-            &dft,
-            &mut proof,
-            challenger,
-            &initial_statement,
-            prover_data.merkle_tree.as_ref(),
-        )
-        .map_err(|_| SpartanWhirError::WhirOpenFailed)?;
+    {
+        let _prove_profile = profile_scope("old_whir_prove");
+        prover
+            .prove::<_, E::PackedF, E::W, E::PackedW, DIGEST_ELEMS>(
+                &dft,
+                &mut proof,
+                challenger,
+                &initial_statement,
+                prover_data.merkle_tree.as_ref(),
+            )
+            .map_err(|_| SpartanWhirError::WhirOpenFailed)?;
+    }
 
     Ok(proof)
 }
@@ -610,6 +686,7 @@ where
         + CanObserve<Hash<F, E::W, DIGEST_ELEMS>>,
     [E::W; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
+    let _profile = profile_scope("build_whir_config");
     config.validate()?;
     let effective_digest_bytes =
         effective_digest_bytes_for_security_bits(config.security.merkle_security_bits as usize);

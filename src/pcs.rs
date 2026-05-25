@@ -27,3 +27,33 @@ pub trait MlePcs<E: SpartanWhirEngine> {
         challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError>;
 }
+
+pub trait ProtocolPcs<E: SpartanWhirEngine>: MlePcs<E> {
+    type ParsedCommitment;
+
+    fn prepare_committed_opening(
+        config: &Self::Config,
+        prover_data: Self::ProverData,
+        challenger: &mut E::Challenger,
+    ) -> Result<Self::ProverData, SpartanWhirError>;
+
+    fn verify_parse_commitment(
+        config: &Self::Config,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<Self::ParsedCommitment, SpartanWhirError>;
+
+    fn verify_finalize(
+        config: &Self::Config,
+        parsed: &Self::ParsedCommitment,
+        statement: &PcsStatement<E>,
+        proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<(), SpartanWhirError>;
+}
+
+pub trait CommittedPolynomialView<EF> {
+    fn num_variables(&self) -> usize;
+    fn polynomial(&self) -> &[crate::engine::F];
+}

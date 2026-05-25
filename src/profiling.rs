@@ -2,6 +2,15 @@ use crate::engine::ExtField;
 use crate::engine::F;
 use tracing::info_span;
 
+#[cfg(feature = "circom")]
+use alloc::string::{String, ToString};
+#[cfg(feature = "circom")]
+use core::cell::RefCell;
+#[cfg(feature = "circom")]
+use std::{env, thread_local, time::Instant};
+#[cfg(feature = "circom")]
+use tracing::info;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolStage {
     SetupStart,
@@ -23,6 +32,123 @@ pub trait ProtocolObserver {
 pub struct NoopObserver;
 
 impl ProtocolObserver for NoopObserver {}
+
+#[cfg(feature = "circom")]
+#[derive(Debug, Clone)]
+struct ProfileContext {
+    engine: String,
+    mode: String,
+}
+
+#[cfg(feature = "circom")]
+thread_local! {
+    static PROFILE_CONTEXT: RefCell<Option<ProfileContext>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "circom")]
+pub struct ProfileContextGuard {
+    previous: Option<ProfileContext>,
+}
+
+#[cfg(feature = "circom")]
+impl Drop for ProfileContextGuard {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        PROFILE_CONTEXT.with(|context| {
+            *context.borrow_mut() = previous;
+        });
+    }
+}
+
+#[cfg(feature = "circom")]
+pub struct ProfileScope {
+    phase: &'static str,
+    start: Instant,
+    enabled: bool,
+}
+
+#[cfg(feature = "circom")]
+impl Drop for ProfileScope {
+    fn drop(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        record_profile_phase(self.phase, self.start.elapsed());
+    }
+}
+
+#[cfg(feature = "circom")]
+pub fn profile_enabled() -> bool {
+    env::var_os("SHA256_BENCH_PROFILE")
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+        })
+}
+
+#[cfg(not(feature = "circom"))]
+pub const fn profile_enabled() -> bool {
+    false
+}
+
+#[cfg(feature = "circom")]
+pub fn set_profile_context(engine: &str, mode: &str) -> ProfileContextGuard {
+    let next = profile_enabled().then(|| ProfileContext {
+        engine: engine.to_string(),
+        mode: mode.to_string(),
+    });
+    let previous = PROFILE_CONTEXT.with(|context| context.replace(next));
+    ProfileContextGuard { previous }
+}
+
+#[cfg(not(feature = "circom"))]
+pub struct ProfileContextGuard;
+
+#[cfg(not(feature = "circom"))]
+pub const fn set_profile_context(_engine: &str, _mode: &str) -> ProfileContextGuard {
+    ProfileContextGuard
+}
+
+#[cfg(feature = "circom")]
+pub fn profile_scope(phase: &'static str) -> ProfileScope {
+    ProfileScope {
+        phase,
+        start: Instant::now(),
+        enabled: profile_enabled(),
+    }
+}
+
+#[cfg(not(feature = "circom"))]
+pub struct ProfileScope;
+
+#[cfg(not(feature = "circom"))]
+pub const fn profile_scope(_phase: &'static str) -> ProfileScope {
+    ProfileScope
+}
+
+#[cfg(feature = "circom")]
+pub fn record_profile_phase(phase: &'static str, elapsed: std::time::Duration) {
+    if !profile_enabled() {
+        return;
+    }
+    let (engine, mode) = PROFILE_CONTEXT.with(|context| {
+        context
+            .borrow()
+            .as_ref()
+            .map(|context| (context.engine.clone(), context.mode.clone()))
+            .unwrap_or_else(|| ("bench".to_string(), "global".to_string()))
+    });
+    info!(
+        target: "spartan_whir::profile",
+        "profile engine={engine} mode={mode} phase={phase} ms={} us={}",
+        elapsed.as_millis(),
+        elapsed.as_micros()
+    );
+}
+
+#[cfg(not(feature = "circom"))]
+pub fn record_profile_phase(_phase: &'static str, _elapsed: core::time::Duration) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofSizeSection {

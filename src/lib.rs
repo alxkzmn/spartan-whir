@@ -17,6 +17,7 @@ pub mod fixtures;
 pub mod hashers;
 mod keccak_challenger;
 pub mod pcs;
+pub mod plonky3_whir_pcs;
 pub mod poly;
 pub mod profiling;
 pub mod protocol;
@@ -57,7 +58,12 @@ pub use hashers::{
     KECCAK_DIGEST_ELEMS,
 };
 pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
-pub use pcs::MlePcs;
+pub use pcs::{CommittedPolynomialView, MlePcs, ProtocolPcs};
+pub use plonky3_whir_pcs::{
+    Plonky3WhirPcs, Plonky3WhirProverData, PoseidonProvingKey, PoseidonSparkSpartanProof,
+    PoseidonSpartanProof, PoseidonSpartanProtocol, PoseidonSpartanSnarkConfig,
+    PoseidonVerifyingKey,
+};
 pub use poly::{
     evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,
     QuadraticRoundPoly,

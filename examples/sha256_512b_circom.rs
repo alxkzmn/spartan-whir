@@ -164,6 +164,7 @@ fn generate_circom_artifacts(
     pass_make_override(&mut make, "CC");
     pass_make_override(&mut make, "CFLAGS");
     pass_make_override(&mut make, "CXXFLAGS");
+    apply_default_gmp_search_paths(&mut make);
     run(&mut make)?;
 
     let input_path = workdir.join("sha256_512b_input.json");
@@ -204,6 +205,45 @@ fn pass_make_override(make: &mut Command, name: &str) {
         arg.push("=");
         arg.push(value);
         make.arg(arg);
+    }
+}
+
+fn apply_default_gmp_search_paths(command: &mut Command) {
+    add_env_path_if_exists(
+        command,
+        "CPATH",
+        Path::new("/opt/homebrew/include"),
+        "gmp.h",
+    );
+    add_env_path_if_exists(command, "CPATH", Path::new("/usr/local/include"), "gmp.h");
+    add_env_path_if_exists(
+        command,
+        "LIBRARY_PATH",
+        Path::new("/opt/homebrew/lib"),
+        "libgmp.dylib",
+    );
+    add_env_path_if_exists(
+        command,
+        "LIBRARY_PATH",
+        Path::new("/usr/local/lib"),
+        "libgmp.dylib",
+    );
+}
+
+fn add_env_path_if_exists(command: &mut Command, var: &str, dir: &Path, marker: &str) {
+    if !dir.join(marker).exists() {
+        return;
+    }
+
+    let mut paths: Vec<PathBuf> = env::var_os(var)
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    if paths.iter().any(|path| path == dir) {
+        return;
+    }
+    paths.push(dir.to_path_buf());
+    if let Ok(joined) = env::join_paths(paths) {
+        command.env(var, joined);
     }
 }
 

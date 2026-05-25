@@ -9,16 +9,20 @@ path = "src/lib.rs"
 
 [dependencies]
 whir-p3 = { path = "../whir-p3", default-features = false }
-p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-maybe-rayon = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
-p3-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-maybe-rayon = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-multilinear-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-sumcheck = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-whir = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 serde = { version = "1", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 
@@ -51,6 +55,7 @@ required-features = ["circom"]
 criterion = "0.8"
 sha2 = "0.10"
 tracing = { version = "0.1.44", features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [[bench]]
 name = "proof_size_roundtrip"
