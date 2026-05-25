@@ -41,6 +41,11 @@ name = "sha256_512b_circom"
 path = "examples/sha256_512b_circom.rs"
 required-features = ["circom"]
 
+[[example]]
+name = "sha256_circom_bench"
+path = "examples/sha256_circom_bench.rs"
+required-features = ["circom"]
+
 [dev-dependencies]
 criterion = "0.8"
 sha2 = "0.10"

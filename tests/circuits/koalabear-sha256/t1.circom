@@ -19,15 +19,56 @@
 pragma circom 2.0.0;
 
 include "../binsum.circom";
+include "constants.circom";
 include "sigma.circom";
 include "ch.circom";
 
-template T1() {
+template BinSum32RoundConstant(round) {
+    signal input in[4][32];
+    signal output out[32];
+    signal carry[33];
+
+    component carry_bits[32];
+
+    var max_carry = 0;
+    var carry_width;
+    var bit_sum;
+    var kbit;
+
+    carry[0] <== 0;
+
+    for (var k = 0; k < 32; k++) {
+        kbit = Kbit(round, k);
+        bit_sum = kbit;
+        for (var j = 0; j < 4; j++) {
+            bit_sum += in[j][k];
+        }
+
+        max_carry = (max_carry + 4 + kbit) \ 2;
+        carry_width = 1;
+        if (max_carry > 1) {
+            carry_width = 2;
+        }
+        if (max_carry > 3) {
+            carry_width = 3;
+        }
+
+        out[k] <-- (carry[k] + bit_sum) & 1;
+        carry[k + 1] <-- (carry[k] + bit_sum) >> 1;
+
+        out[k] * (out[k] - 1) === 0;
+        carry[k] + bit_sum === out[k] + 2 * carry[k + 1];
+
+        carry_bits[k] = CarryBits(carry_width);
+        carry_bits[k].in <== carry[k + 1];
+    }
+}
+
+template T1(round) {
     signal input h[32];
     signal input e[32];
     signal input f[32];
     signal input g[32];
-    signal input k[32];
     signal input w[32];
     signal output out[32];
 
@@ -43,13 +84,12 @@ template T1() {
         ch.c[ki] <== g[ki];
     }
 
-    component sum = BinSum(32, 5);
+    component sum = BinSum32RoundConstant(round);
     for (ki=0; ki<32; ki++) {
         sum.in[0][ki] <== h[ki];
         sum.in[1][ki] <== bigsigma1.out[ki];
         sum.in[2][ki] <== ch.out[ki];
-        sum.in[3][ki] <== k[ki];
-        sum.in[4][ki] <== w[ki];
+        sum.in[3][ki] <== w[ki];
     }
 
     for (ki=0; ki<32; ki++) {

@@ -11,18 +11,23 @@
 */
 pragma circom 2.0.0;
 
-template Carry3Bits() {
+template CarryBits(n) {
     signal input in;
-    signal bit[3];
+    signal bit[n];
+    var acc = 0;
 
-    bit[0] <-- in & 1;
-    bit[1] <-- (in >> 1) & 1;
-    bit[2] <-- (in >> 2) & 1;
-
-    bit[0] * (bit[0] - 1) === 0;
-    bit[1] * (bit[1] - 1) === 0;
-    bit[2] * (bit[2] - 1) === 0;
-    in === bit[0] + 2 * bit[1] + 4 * bit[2];
+    if (n == 2) {
+        bit[0] <-- in & 1;
+        bit[0] * (bit[0] - 1) === 0;
+        (in - bit[0]) * (in - bit[0] - 2) === 0;
+    } else {
+        for (var i = 0; i < n; i++) {
+            bit[i] <-- (in >> i) & 1;
+            bit[i] * (bit[i] - 1) === 0;
+            acc += (1 << i) * bit[i];
+        }
+        in === acc;
+    }
 }
 
 template BinSum(n, ops) {
@@ -30,16 +35,21 @@ template BinSum(n, ops) {
     signal output out[n];
     signal carry[n + 1];
 
-    component carry_bits[n + 1];
+    component carry_bits[n];
 
     carry[0] <== 0;
-    carry_bits[0] = Carry3Bits();
-    carry_bits[0].in <== carry[0];
 
     for (var k = 0; k < n; k++) {
+        var carry_width = 1;
         var bit_sum = 0;
         for (var j = 0; j < ops; j++) {
             bit_sum += in[j][k];
+        }
+        if (ops > 2) {
+            carry_width = 2;
+        }
+        if ((ops > 4) && (k > 1)) {
+            carry_width = 3;
         }
 
         out[k] <-- (carry[k] + bit_sum) & 1;
@@ -48,7 +58,7 @@ template BinSum(n, ops) {
         out[k] * (out[k] - 1) === 0;
         carry[k] + bit_sum === out[k] + 2 * carry[k + 1];
 
-        carry_bits[k + 1] = Carry3Bits();
-        carry_bits[k + 1].in <== carry[k + 1];
+        carry_bits[k] = CarryBits(carry_width);
+        carry_bits[k].in <== carry[k + 1];
     }
 }

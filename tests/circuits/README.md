@@ -21,10 +21,11 @@ CC='g++ -L/path/to/gmp/lib' CFLAGS='-std=c++11 -O3 -I. -I/path/to/gmp/include' \
 is the 65,536-constraint witness-performance circuit used by
 `scripts/bench_sum_of_squares_witness.sh`.
 
-`sha256_512b.circom` is a real 512-byte SHA-256 frontend circuit. It uses the
-vendored Circomlib SHA-256 bit circuit plus KoalaBear-safe replacements for the
-parts that originally packed 32-bit words into one field element. Run the full
-compile, witness generation, import, prove, and verify flow with:
+`sha256_128b.circom`, `sha256_256b.circom`, `sha256_512b.circom`,
+`sha256_1024b.circom`, and `sha256_2048b.circom` are real fixed-size SHA-256
+frontend circuits. They use the `koalabear-sha256/Sha256Bytes(N_BYTES)` wrapper
+around the adapted SHA-256 bit circuit. Run the 512-byte compile, witness
+generation, import, prove, and verify flow with:
 
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
@@ -42,9 +43,24 @@ direct sparse matrix evaluation first, then Spark. Spark uses a folding factor
 of 2 because the 512-byte SHA circuit's packed Spark fixed/read tables need a
 larger WHIR polynomial than the witness commitment.
 
+Run the size-range benchmark with:
+
+```sh
+CIRCOM_BIN=../circom/target/debug/circom \
+  SHA256_BENCH_SIZES=128,256,512,1024,2048 \
+  cargo run --release -p spartan-whir --features circom --example sha256_circom_bench
+```
+
+The benchmark reports constraints, constraints per SHA block, wires, witness
+generation time, import time, direct prove/verify time, Spark prove/verify time,
+and Spark layout stats. It derives the Spark folding factor from the packed
+Spark table size, so larger circuits can cross WHIR domain cliffs without
+manual retuning.
+
 If GMP is installed outside the default compiler search path, pass the same
 `CC` and `CFLAGS` overrides shown above.
 
-The `circomlib-sha256/` subtree is GPL-3.0 circomlib-derived code and should be
-treated as a reference/benchmark fixture, not as owned permissively licensed
-frontend code.
+The `koalabear-sha256/` subtree is adapted from GPL-3.0 circomlib SHA-256 code
+and should be treated as a benchmark fixture, not as owned permissively licensed
+frontend code. Unreachable unsafe Circomlib entry points are intentionally not
+kept in the tree.

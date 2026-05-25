@@ -45,11 +45,8 @@ template Sha256compression() {
     component sigmaPlus[48];
     for (i=0; i<48; i++) sigmaPlus[i] = SigmaPlus();
 
-    component ct_k[64];
-    for (i=0; i<64; i++) ct_k[i] = K(i);
-
     component t1[64];
-    for (i=0; i<64; i++) t1[i] = T1();
+    for (i=0; i<64; i++) t1[i] = T1(i);
 
     component t2[64];
     for (i=0; i<64; i++) t2[i] = T2();
@@ -102,7 +99,6 @@ template Sha256compression() {
             t1[t].e[k] <== e[t][k];
             t1[t].f[k] <== f[t][k];
             t1[t].g[k] <== g[t][k];
-            t1[t].k[k] <== ct_k[t].out[k];
             t1[t].w[k] <== w[t][k];
 
             t2[t].a[k] <== a[t][k];
