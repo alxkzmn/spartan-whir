@@ -2,7 +2,7 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
 use spartan_whir::{
     check_spark_memory_product_equations, compare_spark_layout_profile, compare_spark_layouts,
-    compute_spark_read_tables, engine::F, evaluate_mle_table, new_keccak_challenger,
+    compute_spark_read_tables, engine::F, evaluate_mle_table, keccak_challenger,
     preprocess_joint_spark_tables, preprocess_shared_union_spark_tables, preprocess_spark_tables,
     prove_spark_batched_memory_products, prove_spark_batched_product, prove_spark_grand_product,
     prove_spark_memory_grand_products, prove_spark_memory_products, prove_spark_value_sumcheck,
@@ -401,7 +401,7 @@ fn value_sumcheck_matches_direct_matrix_evaluation() {
         .expect("direct evaluation succeeds");
     let expected = eval_a + r * eval_b + r * r * eval_c;
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, _, initial_claim) =
         prove_spark_value_sumcheck_with_reads(&tables, &read_tables, r, &mut prover_challenger)
             .expect("value sumcheck proves");
@@ -409,7 +409,7 @@ fn value_sumcheck_matches_direct_matrix_evaluation() {
 
     assert_eq!(initial_claim, expected);
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let (alpha, final_claim) = verify_spark_value_sumcheck_with_tables(
         &tables,
         &proof,
@@ -444,13 +444,13 @@ fn shared_union_value_sumcheck_uses_cubic_rounds() {
     let r = spartan_whir::QuinticExtension::from(fe(9));
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, _, initial_claim) =
         prove_spark_value_sumcheck_with_reads(&tables, &read_tables, r, &mut prover_challenger)
             .expect("value sumcheck proves");
     assert!(proof.rounds.iter().all(|round| round.0.len() == 3));
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let _ = verify_spark_value_sumcheck_with_tables(
         &tables,
         &proof,
@@ -477,7 +477,7 @@ fn value_sumcheck_verifies_against_opening_claims() {
     let r = spartan_whir::QuinticExtension::from(fe(9));
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, _, initial_claim) =
         prove_spark_value_sumcheck_with_reads(&tables, &read_tables, r, &mut prover_challenger)
             .expect("value sumcheck proves");
@@ -491,7 +491,7 @@ fn value_sumcheck_verifies_against_opening_claims() {
         erow: proof.final_evals.erow,
         ecol: proof.final_evals.ecol,
     };
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let (_point, _claim) = verify_spark_value_sumcheck_with_openings(
         tables.layout,
         tables.slot_mapping,
@@ -506,7 +506,7 @@ fn value_sumcheck_verifies_against_opening_claims() {
 
     let mut bad_openings = openings;
     bad_openings.val += spartan_whir::QuinticExtension::ONE;
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_value_sumcheck_with_openings(
             tables.layout,
@@ -533,13 +533,13 @@ fn value_sumcheck_rejects_tampered_round() {
     ]);
     let r = spartan_whir::QuinticExtension::from(fe(9));
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (mut proof, _, initial_claim) =
         prove_spark_value_sumcheck(&tables, &r_x, &r_y, r, &mut prover_challenger)
             .expect("value sumcheck proves");
     proof.rounds[0].0[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_value_sumcheck(
             &proof,
@@ -586,7 +586,7 @@ fn batched_product_proof_verifies_products_and_dotproducts() {
     };
     let claim = dotproduct_claim(&dotproduct);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, leaf_claims) = prove_spark_batched_product(
         &[product_a.clone(), product_b.clone()],
         core::slice::from_ref(&dotproduct),
@@ -595,7 +595,7 @@ fn batched_product_proof_verifies_products_and_dotproducts() {
     .expect("batched product proves");
 
     let expected_roots = proof.product_roots.clone();
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let verified_leaf_claims = verify_spark_batched_product(
         &proof,
         &expected_roots,
@@ -637,12 +637,12 @@ fn batched_product_proof_verifies_products_and_dotproducts() {
 fn batched_product_proof_accepts_empty_dotproducts_at_n2() {
     let product = vec![q(3), q(5)];
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, leaf_claims) =
         prove_spark_batched_product(std::slice::from_ref(&product), &[], &mut prover_challenger)
             .expect("batched product proves");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let verified_leaf_claims = verify_spark_batched_product(
         &proof,
         &proof.product_roots,
@@ -681,7 +681,7 @@ fn batched_product_proof_verifies_multiple_dotproducts() {
         dotproduct_claim(&dotproduct_b),
     ];
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, _) = prove_spark_batched_product(
         &[product_a.clone(), product_b],
         &[dotproduct_a, dotproduct_b],
@@ -689,7 +689,7 @@ fn batched_product_proof_verifies_multiple_dotproducts() {
     )
     .expect("batched product proves");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let leaf_claims = verify_spark_batched_product(
         &proof,
         &proof.product_roots,
@@ -709,14 +709,14 @@ fn batched_product_proof_rejects_tampered_layer_claim() {
     let product_a = vec![q(3), q(5), q(7), q(11)];
     let product_b = vec![q(13), q(17), q(19), q(23)];
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (mut proof, _) =
         prove_spark_batched_product(&[product_a.clone(), product_b], &[], &mut prover_challenger)
             .expect("batched product proves");
     let expected_roots = proof.product_roots.clone();
     proof.layers[0].product_left_evals[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_product(
             &proof,
@@ -740,7 +740,7 @@ fn batched_product_proof_rejects_dotproduct_claim_mismatch() {
     let mut expected_claim = dotproduct_claim(&dotproduct);
     expected_claim += spartan_whir::QuinticExtension::ONE;
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (proof, _) = prove_spark_batched_product(
         std::slice::from_ref(&product),
         &[dotproduct],
@@ -748,7 +748,7 @@ fn batched_product_proof_rejects_dotproduct_claim_mismatch() {
     )
     .expect("batched product proves");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_product(
             &proof,
@@ -771,7 +771,7 @@ fn batched_product_proof_rejects_tampered_dotproduct_leaf_eval() {
     };
     let claim = dotproduct_claim(&dotproduct);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (mut proof, _) = prove_spark_batched_product(
         std::slice::from_ref(&product),
         &[dotproduct],
@@ -784,7 +784,7 @@ fn batched_product_proof_rejects_tampered_dotproduct_leaf_eval() {
         .expect("leaf-adjacent layer exists")
         .dotproduct_left_evals[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_product(
             &proof,
@@ -802,14 +802,14 @@ fn batched_product_proof_rejects_tampered_round_poly() {
     let product_a = vec![q(3), q(5), q(7), q(11)];
     let product_b = vec![q(13), q(17), q(19), q(23)];
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (mut proof, _) =
         prove_spark_batched_product(&[product_a.clone(), product_b], &[], &mut prover_challenger)
             .expect("batched product proves");
     let expected_roots = proof.product_roots.clone();
     proof.layers[1].rounds[0].0[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_product(
             &proof,
@@ -827,14 +827,14 @@ fn batched_product_proof_rejects_product_root_mismatch() {
     let product_a = vec![q(3), q(5), q(7), q(11)];
     let product_b = vec![q(13), q(17), q(19), q(23)];
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let (mut proof, _) =
         prove_spark_batched_product(&[product_a.clone(), product_b], &[], &mut prover_challenger)
             .expect("batched product proves");
     let expected_roots = proof.product_roots.clone();
     proof.product_roots[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_product(
             &proof,
@@ -861,7 +861,7 @@ fn grand_product_sumcheck_reduces_to_leaf_opening() {
     ];
     let gamma = spartan_whir::QuinticExtension::from(fe(29));
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_grand_product(&values, gamma, &mut prover_challenger)
         .expect("grand product proves");
 
@@ -872,7 +872,7 @@ fn grand_product_sumcheck_reduces_to_leaf_opening() {
         });
     assert_eq!(proof.root, expected_root);
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let (leaf_point, leaf_eval) =
         verify_spark_grand_product_with_values(&values, gamma, &proof, &mut verifier_challenger)
             .expect("grand product verifies");
@@ -890,12 +890,12 @@ fn grand_product_sumcheck_rejects_tampered_round() {
     ];
     let gamma = spartan_whir::QuinticExtension::from(fe(13));
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof = prove_spark_grand_product(&values, gamma, &mut prover_challenger)
         .expect("grand product proves");
     proof.layers[1].rounds[0].0[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_grand_product_with_values(&values, gamma, &proof, &mut verifier_challenger),
         Err(SpartanWhirError::SumcheckFailed)
@@ -912,12 +912,12 @@ fn grand_product_sumcheck_rejects_tampered_leaf_claim() {
     ];
     let gamma = spartan_whir::QuinticExtension::from(fe(13));
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof = prove_spark_grand_product(&values, gamma, &mut prover_challenger)
         .expect("grand product proves");
     proof.leaf_eval += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_grand_product_with_values(&values, gamma, &proof, &mut verifier_challenger),
         Err(SpartanWhirError::SumcheckFailed)
@@ -938,13 +938,13 @@ fn memory_product_claims_match_joint_tables() {
         spartan_whir::QuinticExtension::from(fe(6)),
     ]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory products prove");
 
     check_spark_memory_product_equations(&proof).expect("product equations hold");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     verify_spark_memory_products_with_tables(&tables, &proof, &r_x, &r_y, &mut verifier_challenger)
         .expect("memory products verify");
 }
@@ -959,7 +959,7 @@ fn memory_product_claims_reject_tampered_root() {
         spartan_whir::QuinticExtension::from(fe(6)),
     ]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof = prove_spark_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory products prove");
     proof.row.read_root += spartan_whir::QuinticExtension::ONE;
@@ -969,7 +969,7 @@ fn memory_product_claims_reject_tampered_root() {
         Err(SpartanWhirError::SumcheckFailed)
     );
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_memory_products_with_tables(
             &tables,
@@ -997,12 +997,12 @@ fn memory_product_claims_reject_tampered_timestamps() {
         spartan_whir::QuinticExtension::from(fe(6)),
     ]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory products prove");
     tampered_tables.read_ts_row[0] += F::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_memory_products_with_tables(
             &tampered_tables,
@@ -1029,11 +1029,11 @@ fn memory_grand_products_verify_against_joint_tables() {
         spartan_whir::QuinticExtension::from(fe(6)),
     ]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_memory_grand_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory grand products prove");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     verify_spark_memory_grand_products_with_tables(
         &tables,
         &proof,
@@ -1056,7 +1056,7 @@ fn batched_memory_products_verify_against_joint_tables() {
     let r_y = MultilinearPoint(vec![q(4), q(6)]);
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_batched_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("batched memory products prove");
 
@@ -1073,7 +1073,7 @@ fn batched_memory_products_verify_against_joint_tables() {
         ]
     );
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     verify_spark_batched_memory_products_with_tables(
         &tables,
         &proof,
@@ -1091,13 +1091,13 @@ fn batched_memory_product_claims_reject_tampered_ops_layer() {
     let r_x = MultilinearPoint(vec![q(3)]);
     let r_y = MultilinearPoint(vec![q(4), q(6)]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof =
         prove_spark_batched_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
             .expect("batched memory products prove");
     proof.proof_ops.layers[1].rounds[0].0[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_memory_product_claims(&tables, &proof, &mut verifier_challenger),
         Err(SpartanWhirError::SumcheckFailed)
@@ -1115,13 +1115,13 @@ fn batched_memory_product_claims_reject_tampered_dotproduct_claim() {
     let r_x = MultilinearPoint(vec![q(3)]);
     let r_y = MultilinearPoint(vec![q(4), q(6)]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof =
         prove_spark_batched_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
             .expect("batched memory products prove");
     proof.proof_ops.dotproduct_claims[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_memory_product_claims(&tables, &proof, &mut verifier_challenger),
         Err(SpartanWhirError::SumcheckFailed)
@@ -1139,13 +1139,13 @@ fn batched_memory_product_claims_reject_tampered_matrix_eval() {
     let r_x = MultilinearPoint(vec![q(3)]);
     let r_y = MultilinearPoint(vec![q(4), q(6)]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof =
         prove_spark_batched_memory_products(&tables, &r_x, &r_y, &mut prover_challenger)
             .expect("batched memory products prove");
     proof.matrix_evals[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_batched_memory_product_claims(&tables, &proof, &mut verifier_challenger),
         Err(SpartanWhirError::SumcheckFailed)
@@ -1167,11 +1167,11 @@ fn memory_grand_product_claims_expose_leaf_opening_obligations() {
     ]);
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let proof = prove_spark_memory_grand_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory grand products prove");
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     let claims =
         verify_spark_memory_grand_product_claims(&tables, &proof, &mut verifier_challenger)
             .expect("memory grand product claims verify");
@@ -1190,12 +1190,12 @@ fn memory_grand_products_reject_tampered_nested_product() {
         spartan_whir::QuinticExtension::from(fe(6)),
     ]);
 
-    let mut prover_challenger = new_keccak_challenger();
+    let mut prover_challenger = keccak_challenger();
     let mut proof = prove_spark_memory_grand_products(&tables, &r_x, &r_y, &mut prover_challenger)
         .expect("memory grand products prove");
     proof.row.read.layers[1].rounds[0].0[0] += spartan_whir::QuinticExtension::ONE;
 
-    let mut verifier_challenger = new_keccak_challenger();
+    let mut verifier_challenger = keccak_challenger();
     assert_eq!(
         verify_spark_memory_grand_products_with_tables(
             &tables,

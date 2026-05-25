@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use spartan_whir::engine::OcticBinExtension;
 use spartan_whir::{
-    encode_spartan_blob_v1_with_report, generate_satisfiable_fixture, new_keccak_challenger,
+    encode_spartan_blob_v1_with_report, generate_satisfiable_fixture, keccak_challenger,
     KeccakEngine, ProofCodecConfig, SecurityConfig, SoundnessAssumption, SpartanProtocol,
     SumcheckStrategy, SyntheticR1csConfig, WhirParams, WhirPcs, WhirPcsConfig,
 };
@@ -86,7 +86,7 @@ fn bench_proof_size_roundtrip(c: &mut Criterion) {
     )
     .expect("setup succeeds");
 
-    let mut challenger = new_keccak_challenger();
+    let mut challenger = keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine<OcticBinExtension>, WhirPcs>::prove(
         &pk,
         &fixture.public_inputs,
@@ -117,7 +117,7 @@ fn bench_proof_size_roundtrip(c: &mut Criterion) {
         &(),
         |b, _| {
             b.iter(|| {
-                let mut prover_challenger = new_keccak_challenger();
+                let mut prover_challenger = keccak_challenger();
                 let (_instance, _proof) =
                     SpartanProtocol::<KeccakEngine<OcticBinExtension>, WhirPcs>::prove(
                         &pk,
@@ -139,7 +139,7 @@ fn bench_proof_size_roundtrip(c: &mut Criterion) {
         &(),
         |b, _| {
             b.iter(|| {
-                let mut verifier_challenger = new_keccak_challenger();
+                let mut verifier_challenger = keccak_challenger();
                 SpartanProtocol::<KeccakEngine<OcticBinExtension>, WhirPcs>::verify(
                     &vk,
                     &instance,

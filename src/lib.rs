@@ -5,11 +5,11 @@ extern crate alloc;
 extern crate std;
 
 mod canonical_challenger;
+#[cfg(feature = "circom")]
+pub mod circom;
 pub mod codec;
 mod codec_v1;
 pub mod config;
-#[cfg(feature = "circom")]
-pub mod circom;
 pub mod domain_separator;
 pub mod engine;
 pub mod error;
@@ -39,9 +39,12 @@ pub use codec::{
 pub use config::SpartanWhirEngine;
 pub use domain_separator::{DomainSeparator, MatrixClosingMode};
 pub use engine::{
-    new_keccak_challenger, new_keccak_merkle_compress, new_keccak_merkle_hash, KeccakChallenger,
-    KeccakEngine, KeccakFieldHash, KeccakNodeCompress, KeccakOcticEngine, KeccakQuarticEngine,
-    KeccakQuinticEngine, OcticBinExtension, QuarticBinExtension, QuinticExtension,
+    keccak_challenger, keccak_merkle_compress, keccak_merkle_hash, poseidon_challenger,
+    poseidon_merkle_compress, poseidon_merkle_hash, KeccakChallenger, KeccakEngine,
+    KeccakFieldHash, KeccakNodeCompress, KeccakOcticEngine, KeccakQuarticEngine,
+    KeccakQuinticEngine, OcticBinExtension, PoseidonChallenger, PoseidonEngine, PoseidonFieldHash,
+    PoseidonNodeCompress, PoseidonOcticEngine, PoseidonQuarticEngine, PoseidonQuinticEngine,
+    QuarticBinExtension, QuinticExtension,
 };
 pub use error::SpartanWhirError;
 pub use fixtures::{
@@ -106,6 +109,6 @@ pub use sumcheck::{
 pub use whir_params::WhirParams;
 pub use whir_pcs::{
     observe_whir_fs_domain_separator, prepare_committed_opening, verify_finalize,
-    verify_parse_commitment, ParsedWhirCommitment, SumcheckStrategy, WhirPcs, WhirPcsConfig,
-    WhirProverData,
+    verify_parse_commitment, ParsedWhirCommitment, ProtocolWhirEngine, SumcheckStrategy, WhirPcs,
+    WhirPcsConfig, WhirProverData, WhirProverDataView,
 };

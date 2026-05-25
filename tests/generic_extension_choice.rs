@@ -75,7 +75,7 @@ where
     )
     .expect("setup succeeds");
 
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine<Ext>, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(9),
@@ -107,7 +107,7 @@ fn whir_pcs_supports_quartic_and_quintic_extensions() {
         let poly = sample_poly(config.num_variables);
         let statement = statement_with_seed::<Ext>(&poly, config.num_variables, 7);
 
-        let mut prover_challenger = spartan_whir::new_keccak_challenger();
+        let mut prover_challenger = spartan_whir::keccak_challenger();
         let (commitment, prover_data) =
             <WhirPcs as MlePcs<KeccakEngine<Ext>>>::commit(&config, &poly, &mut prover_challenger)
                 .expect("commit succeeds");
@@ -119,7 +119,7 @@ fn whir_pcs_supports_quartic_and_quintic_extensions() {
         )
         .expect("open succeeds");
 
-        let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+        let mut verifier_challenger = spartan_whir::keccak_challenger();
         let verified = <WhirPcs as MlePcs<KeccakEngine<Ext>>>::verify(
             &config,
             &commitment,
@@ -141,7 +141,7 @@ fn spartan_protocol_supports_quartic_and_quintic_extensions() {
         Ext: ExtField,
     {
         let (vk, instance, proof, _) = prove_fixture::<Ext>();
-        let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+        let mut verifier_challenger = spartan_whir::keccak_challenger();
         let verified = SpartanProtocol::<KeccakEngine<Ext>, WhirPcs>::verify(
             &vk,
             &instance,
@@ -174,7 +174,7 @@ fn codec_v1_roundtrip_and_profile_support_quartic_and_quintic_extensions() {
         let (decoded_instance, decoded_proof) =
             decode_spartan_blob_v1(&codec, &ctx, &blob).expect("decode succeeds");
 
-        let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+        let mut verifier_challenger = spartan_whir::keccak_challenger();
         let verified = SpartanProtocol::<KeccakEngine<Ext>, WhirPcs>::verify(
             &vk,
             &decoded_instance,
@@ -238,15 +238,21 @@ fn codec_v1_rejects_mismatched_extension_contexts() {
 #[test]
 fn quintic_live_whir_limit_accepts_boundary_and_rejects_above() {
     let boundary = test_whir_config(24);
-    let mut boundary_challenger = spartan_whir::new_keccak_challenger();
-    let boundary_result =
-        observe_whir_fs_domain_separator::<QuinticExtension>(&boundary, &mut boundary_challenger);
+    let mut boundary_challenger = spartan_whir::keccak_challenger();
+    let boundary_result = observe_whir_fs_domain_separator::<
+        KeccakEngine<QuinticExtension>,
+        QuinticExtension,
+        4,
+    >(&boundary, &mut boundary_challenger);
     assert_eq!(boundary_result, Ok(()));
 
     let above = test_whir_config(25);
-    let mut above_challenger = spartan_whir::new_keccak_challenger();
-    let above_result =
-        observe_whir_fs_domain_separator::<QuinticExtension>(&above, &mut above_challenger);
+    let mut above_challenger = spartan_whir::keccak_challenger();
+    let above_result = observe_whir_fs_domain_separator::<
+        KeccakEngine<QuinticExtension>,
+        QuinticExtension,
+        4,
+    >(&above, &mut above_challenger);
     assert_eq!(above_result, Err(SpartanWhirError::InvalidConfig));
 }
 

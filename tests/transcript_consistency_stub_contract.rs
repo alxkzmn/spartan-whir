@@ -20,7 +20,7 @@ fn protocol_transcript_checkpoint_matches_between_prover_and_verifier() {
     )
     .expect("setup succeeds");
 
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         &common::koala_public_inputs(13),
@@ -30,7 +30,7 @@ fn protocol_transcript_checkpoint_matches_between_prover_and_verifier() {
     .expect("prove succeeds");
     let prover_checkpoint = prover_challenger.sample_algebra_element::<EF>();
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &instance,

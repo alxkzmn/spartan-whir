@@ -24,13 +24,13 @@ fn outer_sumcheck_roundtrip_and_tamper_detection() {
     let cz: Vec<EF> = cz_f.into_iter().map(EF::from).collect();
 
     let tau = MultilinearPoint(vec![EF::from(F::from_u32(7))]);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (proof, claims_point, claims) =
         prove_outer::<F, EF, _>(&shape, &az, &bz, &cz, &tau, &mut prover_challenger)
             .expect("outer prove succeeds");
     assert_eq!(claims_point.0.len(), 1);
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let (r_x, final_claim) =
         verify_outer::<F, EF, _>(&proof, EF::ZERO, 1, &mut verifier_challenger)
             .expect("outer verify transcript succeeds");
@@ -45,7 +45,7 @@ fn outer_sumcheck_roundtrip_and_tamper_detection() {
         tampered.rounds[0].0[2],
     ]);
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let (bad_r_x, bad_final) =
         verify_outer::<F, EF, _>(&tampered, EF::ZERO, 1, &mut verifier_challenger)
             .expect("tampered transcript still parses");
@@ -73,14 +73,14 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
         .zip(z.iter())
         .fold(EF::ZERO, |acc, (&a, &b)| acc + a * b);
 
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (proof, r_y, _eval_z) =
         prove_inner::<F, EF, _>(&shape, initial_claim, &poly_abc, &z, &mut prover_challenger)
             .expect("inner prove succeeds");
     assert_eq!(proof.rounds.len(), 2);
     assert_eq!(r_y.0.len(), 2);
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let (r_y_verify, final_claim) =
         verify_inner::<F, EF, _>(&proof, initial_claim, 2, &mut verifier_challenger)
             .expect("inner verify transcript succeeds");
@@ -89,7 +89,7 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
         * evaluate_mle_table(&z, &r_y_verify.0).unwrap();
     assert_eq!(final_claim, expected);
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let bad_round_count =
         verify_inner::<F, EF, _>(&proof, initial_claim, 1, &mut verifier_challenger);
     assert_eq!(bad_round_count, Err(SpartanWhirError::InvalidRoundCount));

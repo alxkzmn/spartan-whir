@@ -22,6 +22,8 @@ impl SpartanWhirEngine for DummyEngine {
     type Hash = ();
     type Compress = ();
     type W = u64;
+    type PackedF = u64;
+    type PackedW = u64;
 
     const DIGEST_ELEMS: usize = 4;
 }

@@ -127,7 +127,7 @@ fn prove(
     witness: &[F],
 ) -> (Vk, Instance, Proof, spartan_whir::WhirPcsConfig) {
     let (pk, vk) = setup_keys(shape);
-    let mut challenger = spartan_whir::new_keccak_challenger();
+    let mut challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         public_inputs,
@@ -180,7 +180,7 @@ fn codec_v1_roundtrip_regular_shape() {
     assert_eq!(decoded_proof.outer_claims, proof.outer_claims);
     assert_eq!(decoded_proof.witness_eval, proof.witness_eval);
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &decoded_instance,
@@ -199,7 +199,7 @@ fn codec_v1_roundtrip_irregular_shape() {
     let ctx = SpartanBlobDecodeContext::from_vk(&vk).unwrap();
     let (decoded_instance, decoded_proof) = decode_spartan_blob(&codec, &ctx, &blob).unwrap();
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &decoded_instance,
@@ -218,7 +218,7 @@ fn codec_v1_roundtrip_multi_round_shape() {
     let ctx = SpartanBlobDecodeContext::from_vk(&vk).unwrap();
     let (decoded_instance, decoded_proof) = decode_spartan_blob_v1(&codec, &ctx, &blob).unwrap();
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
         &vk,
         &decoded_instance,

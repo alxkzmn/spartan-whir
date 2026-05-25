@@ -19,6 +19,7 @@ p3-maybe-rayon = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb0
 p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
 p3-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "c38eb05" }
+serde = { version = "1", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 
 [features]

@@ -11,8 +11,8 @@ use std::{
 use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_paths, compare_spark_layouts, engine::F, KeccakQuarticEngine as KeccakEngine,
-    MatrixClosingMode, R1csShape, R1csWitness, SecurityConfig, SoundnessAssumption,
+    circom::import_paths, compare_spark_layouts, engine::F, KeccakQuarticEngine, MatrixClosingMode,
+    PoseidonQuarticEngine, R1csShape, R1csWitness, SecurityConfig, SoundnessAssumption,
     SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig, SumcheckStrategy, WhirParams,
     WhirPcs, WhirPcsConfig,
 };
@@ -31,18 +31,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| env::temp_dir().join("spartan-whir-sha256-bench"));
     let sizes = parse_sizes()?;
+    let engines = parse_engines()?;
 
     println!("security: 80-bit (demo)");
     println!("sizes: {:?}", sizes);
+    println!("engines: {:?}", engines);
 
     for size in sizes {
-        run_size(&manifest_dir, &workdir, size)?;
+        run_size(&manifest_dir, &workdir, size, &engines)?;
     }
 
     Ok(())
 }
 
-fn run_size(manifest_dir: &Path, workdir: &Path, size: usize) -> Result<(), Box<dyn Error>> {
+fn run_size(
+    manifest_dir: &Path,
+    workdir: &Path,
+    size: usize,
+    engines: &[BenchEngine],
+) -> Result<(), Box<dyn Error>> {
     let circuit = manifest_dir.join(format!("tests/circuits/sha256_{size}b.circom"));
     let size_workdir = workdir.join(format!("sha256_{size}b"));
     let message = reference_message(size);
@@ -52,7 +59,10 @@ fn run_size(manifest_dir: &Path, workdir: &Path, size: usize) -> Result<(), Box<
 
     let compile_start = Instant::now();
     let artifacts = generate_circom_artifacts(manifest_dir, &circuit, &size_workdir, size)?;
-    println!("compile_and_build_ms: {}", compile_start.elapsed().as_millis());
+    println!(
+        "compile_and_build_ms: {}",
+        compile_start.elapsed().as_millis()
+    );
 
     let input_path = size_workdir.join(format!("sha256_{size}b_input.json"));
     write_input_json(&input_path, &message)?;
@@ -104,23 +114,27 @@ fn run_size(manifest_dir: &Path, workdir: &Path, size: usize) -> Result<(), Box<
         selected_layout.max_matrix_nnz_padded
     );
 
-    prove_and_verify(
-        "direct_sparse_no_spark",
-        MatrixClosingMode::DirectSparse,
-        1,
-        &shape,
-        &witness,
-        &public_inputs,
-    )?;
-    let spark_folding_factor = spark_folding_factor(selected_layout.value_domain_size)?;
-    prove_and_verify(
-        "spark",
-        MatrixClosingMode::Spark,
-        spark_folding_factor,
-        &shape,
-        &witness,
-        &public_inputs,
-    )?;
+    for &engine in engines {
+        prove_and_verify(
+            engine,
+            "direct_sparse_no_spark",
+            MatrixClosingMode::DirectSparse,
+            1,
+            &shape,
+            &witness,
+            &public_inputs,
+        )?;
+        let spark_folding_factor = spark_folding_factor(selected_layout.value_domain_size)?;
+        prove_and_verify(
+            engine,
+            "spark",
+            MatrixClosingMode::Spark,
+            spark_folding_factor,
+            &shape,
+            &witness,
+            &public_inputs,
+        )?;
+    }
 
     Ok(())
 }
@@ -174,6 +188,35 @@ fn clear_previous_outputs(workdir: &Path, size: usize) -> Result<(), Box<dyn Err
 }
 
 fn prove_and_verify(
+    engine: BenchEngine,
+    label: &str,
+    matrix_closing: MatrixClosingMode,
+    folding_factor: usize,
+    shape: &R1csShape<F>,
+    witness: &R1csWitness<F>,
+    public_inputs: &[F],
+) -> Result<(), Box<dyn Error>> {
+    match engine {
+        BenchEngine::Poseidon => prove_and_verify_poseidon(
+            label,
+            matrix_closing,
+            folding_factor,
+            shape,
+            witness,
+            public_inputs,
+        ),
+        BenchEngine::Keccak => prove_and_verify_keccak(
+            label,
+            matrix_closing,
+            folding_factor,
+            shape,
+            witness,
+            public_inputs,
+        ),
+    }
+}
+
+fn prove_and_verify_poseidon(
     label: &str,
     matrix_closing: MatrixClosingMode,
     folding_factor: usize,
@@ -183,13 +226,14 @@ fn prove_and_verify(
 ) -> Result<(), Box<dyn Error>> {
     let config = protocol_config(matrix_closing, folding_factor);
     let setup_start = Instant::now();
-    let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(shape, &config)
-        .map_err(|err| format!("{label} setup failed: {err}"))?;
+    let (pk, vk) =
+        SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::setup_with_config(shape, &config)
+            .map_err(|err| format!("{label} setup failed: {err}"))?;
     let setup_ms = setup_start.elapsed().as_millis();
 
     let prove_start = Instant::now();
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::prove_with_mode(
         &pk,
         public_inputs,
         witness,
@@ -200,8 +244,8 @@ fn prove_and_verify(
     let prove_ms = prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
-    SpartanProtocol::<KeccakEngine, WhirPcs>::verify_with_mode(
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::verify_with_mode(
         &vk,
         &instance,
         &proof,
@@ -211,7 +255,51 @@ fn prove_and_verify(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: poseidon mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+    );
+    Ok(())
+}
+
+fn prove_and_verify_keccak(
+    label: &str,
+    matrix_closing: MatrixClosingMode,
+    folding_factor: usize,
+    shape: &R1csShape<F>,
+    witness: &R1csWitness<F>,
+    public_inputs: &[F],
+) -> Result<(), Box<dyn Error>> {
+    let config = protocol_config(matrix_closing, folding_factor);
+    let setup_start = Instant::now();
+    let (pk, vk) =
+        SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::setup_with_config(shape, &config)
+            .map_err(|err| format!("{label} setup failed: {err}"))?;
+    let setup_ms = setup_start.elapsed().as_millis();
+
+    let prove_start = Instant::now();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let (instance, proof) = SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::prove_with_mode(
+        &pk,
+        public_inputs,
+        witness,
+        matrix_closing,
+        &mut prover_challenger,
+    )
+    .map_err(|err| format!("{label} prove failed: {err}"))?;
+    let prove_ms = prove_start.elapsed().as_millis();
+
+    let verify_start = Instant::now();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
+    SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::verify_with_mode(
+        &vk,
+        &instance,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .map_err(|err| format!("{label} verify failed: {err}"))?;
+    let verify_ms = verify_start.elapsed().as_millis();
+
+    println!(
+        "engine: keccak mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
@@ -253,6 +341,37 @@ fn parse_sizes() -> Result<Vec<usize>, Box<dyn Error>> {
         return Err("SHA256_BENCH_SIZES must not be empty".into());
     }
     Ok(sizes)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BenchEngine {
+    Poseidon,
+    Keccak,
+}
+
+fn parse_engines() -> Result<Vec<BenchEngine>, Box<dyn Error>> {
+    let Some(raw) = env::var_os("SHA256_BENCH_ENGINES") else {
+        return Ok(vec![BenchEngine::Poseidon]);
+    };
+    let raw = raw
+        .into_string()
+        .map_err(|_| "SHA256_BENCH_ENGINES must be valid UTF-8")?;
+    let mut engines = Vec::new();
+    for part in raw.split(',') {
+        match part.trim() {
+            "poseidon" => engines.push(BenchEngine::Poseidon),
+            "keccak" => engines.push(BenchEngine::Keccak),
+            "both" => {
+                engines.push(BenchEngine::Keccak);
+                engines.push(BenchEngine::Poseidon);
+            }
+            other => return Err(format!("unsupported SHA benchmark engine: {other}").into()),
+        }
+    }
+    if engines.is_empty() {
+        return Err("SHA256_BENCH_ENGINES must not be empty".into());
+    }
+    Ok(engines)
 }
 
 fn reference_message(size: usize) -> Vec<u8> {

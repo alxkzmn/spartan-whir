@@ -45,7 +45,7 @@ fn sparsity_sweep_target_2_pow_18() {
             )
             .expect("setup succeeds");
 
-            let mut prover_challenger = spartan_whir::new_keccak_challenger();
+            let mut prover_challenger = spartan_whir::keccak_challenger();
             let prove_t0 = Instant::now();
             let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
                 &pk,
@@ -56,7 +56,7 @@ fn sparsity_sweep_target_2_pow_18() {
             .expect("prove succeeds");
             let prove_ms = prove_t0.elapsed().as_millis();
 
-            let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+            let mut verifier_challenger = spartan_whir::keccak_challenger();
             let verify_t0 = Instant::now();
             let verify_result = SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
                 &vk,

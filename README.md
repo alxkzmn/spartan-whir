@@ -2,7 +2,21 @@
 
 `spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields with `whir-p3` as the multilinear PCS backend.
 
-## Current Backend
+## SNARK Instantiations
+
+`spartan-whir` supports two hash instantiations with different deployment
+targets:
+
+- `KeccakEngine<Ext>` is the on-chain-verifier instantiation. It keeps the
+  Keccak transcript and Keccak Merkle hashing needed by the Solidity verifier
+  work.
+- `PoseidonEngine<Ext>` is the client-side-oriented instantiation. It uses the
+  KoalaBear Poseidon2 permutation shape used by `whir-p3` and is the intended
+  path for Circom frontend benchmarks.
+
+The Circom frontend circuits are written over KoalaBear in both cases.
+
+## Keccak Backend
 
 - Engine: `KeccakEngine<Ext>`
   - `QuarticBinExtension = BinomialExtensionField<F, 4>`
@@ -14,15 +28,15 @@
 - Protocol: `SpartanProtocol::setup/prove/verify`
 - Transcript and commitment stack: Keccak challenger plus Keccak Merkle hashing
 
-## Current Capabilities
+## Protocol Capabilities
 
 - Real outer cubic and inner quadratic sumchecks
 - Real R1CS operations: `pad_regular`, `multiply_vec`, `bind_row_vars`, `evaluate_with_tables`, `witness_to_mle`
 - Public instance is external to the proof: `verify(vk, instance, proof, challenger)`
 - `prove` returns `(instance, proof)`
 - WHIR verification is split into commitment-parse and finalize phases to preserve transcript continuity
-- The implemented PCS statement path used by `SpartanProtocol` is point-evaluation-only today
-- Linear and tensor-product PCS constraints are still roadmap items and are rejected by the current live Spartan/WHIR path
+- The `SpartanProtocol` PCS statement path accepts point-evaluation claims
+- Linear and tensor-product PCS constraints are unsupported by the Spartan/WHIR path
 - Blob codec v1 encodes `Proof + Instance`
 - `SpartanBlobDecodeContext::from_vk` derives an engine-typed decode context from the verifying key
 - Codec v1 records extension degree explicitly in the header
@@ -34,7 +48,9 @@
 - Octic is available in the engine surface and is used by the proof-size benchmark target
 - Benchmarking with different extensions is expected to be workload-dependent; extension choice is part of the measurement surface
 
-Current WHIR integration does not enable the univariate-skip path. If skip support is added later, extension-specific two-adicity limits will need to be reviewed; for KoalaBear quintic, skip width must stay within 24.
+WHIR univariate-skip support is disabled. Extension-specific two-adicity limits
+apply to any skip-enabled configuration; for KoalaBear quintic, skip width must
+stay within 24.
 
 ## Implemented Modules
 
@@ -58,26 +74,23 @@ Current WHIR integration does not enable the univariate-skip path. If skip suppo
   - Deterministic codec-driven byte accounting report
   - Tracing span emission for proof-size breakdown (`trace_proof_size_report`)
 
-## Potential Future Upgrade
+## Related Design Notes
 
-- `Spartan-LC` (linear-constraint-based Spartan path) is documented as a possible future protocol upgrade:
+- `Spartan-LC` (linear-constraint-based Spartan path) is documented separately:
   - See [`SPARTAN_LC_UPGRADE_PLAN.md`](SPARTAN_LC_UPGRADE_PLAN.md)
-  - The plan includes two tracks:
-    - Dense/tensor now (limited path)
-    - Sparse-linear extension (scalable long-term path)
-  - This is not implemented yet and is roadmap-only at this stage.
+  - The implementation in this crate uses the R1CS-based Spartan path.
 
 ## Synthetic R1CS Fixtures
 
-- `spartan-whir` now includes synthetic fixture generators for targeted WHIR witness commitment sizes:
+- `spartan-whir` provides synthetic fixture generators for targeted WHIR witness commitment sizes:
   - `generate_satisfiable_fixture(...)`
   - `generate_satisfiable_fixture_for_pow2(k)`
 - These helpers produce satisfiable regular R1CS tuples `(shape, witness, public_inputs)` with witness length exactly `2^k`.
 - This is intended for large-size protocol tests and benchmark scaffolding.
 - The benchmark fixtures are synthetic and only shape-similar to target circuits such as Spartan2 SHA-256.
-- They are useful for matching rough constraint count / witness size / row sparsity, but they are not literal SHA-256 gadgets and should be described that way.
+- They model rough constraint count / witness size / row sparsity for benchmark scaffolding.
 
-## Still Out of Scope
+## Unsupported Features
 
 - Zero-knowledge mode
 - Full EVM verifier contract implementation

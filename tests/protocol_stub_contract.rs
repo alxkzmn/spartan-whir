@@ -231,8 +231,8 @@ fn mid_size_witness() -> spartan_whir::R1csWitness<F> {
 fn protocol_roundtrip_regular_shape() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -276,8 +276,8 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
     assert_eq!(direct_pk.spark_fixed_commitments, None);
     assert_eq!(direct_vk.spark_fixed_commitments, None);
 
-    let mut direct_prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut direct_verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut direct_prover_challenger = spartan_whir::keccak_challenger();
+    let mut direct_verifier_challenger = spartan_whir::keccak_challenger();
     let (direct_instance, direct_proof) =
         SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
             &direct_pk,
@@ -307,8 +307,8 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
     assert!(spark_pk.spark_fixed_commitments.is_some());
     assert!(spark_vk.spark_fixed_commitments.is_some());
 
-    let mut spark_prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut spark_verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut spark_prover_challenger = spartan_whir::keccak_challenger();
+    let mut spark_verifier_challenger = spartan_whir::keccak_challenger();
     let (spark_instance, spark_proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
         &spark_pk,
         &public_inputs,
@@ -328,7 +328,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
     assert_eq!(direct_proof.kind(), MatrixClosingMode::DirectSparse);
     assert_eq!(spark_proof.kind(), MatrixClosingMode::Spark);
 
-    let mut spark_proof_direct_vk_challenger = spartan_whir::new_keccak_challenger();
+    let mut spark_proof_direct_vk_challenger = spartan_whir::keccak_challenger();
     assert_eq!(
         SpartanProtocol::<KeccakEngine, WhirPcs>::verify_with_mode(
             &direct_vk,
@@ -339,7 +339,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         Err(SpartanWhirError::ProofKindMismatch)
     );
 
-    let mut direct_proof_spark_vk_challenger = spartan_whir::new_keccak_challenger();
+    let mut direct_proof_spark_vk_challenger = spartan_whir::keccak_challenger();
     assert_eq!(
         SpartanProtocol::<KeccakEngine, WhirPcs>::verify_with_mode(
             &spark_vk,
@@ -355,8 +355,8 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
 fn protocol_spark_roundtrip_regular_shape() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -388,8 +388,8 @@ fn protocol_spark_roundtrip_shared_union_shape() {
     assert_eq!(tables.layout, SparkLayoutKind::SharedUnion);
 
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -417,8 +417,8 @@ fn protocol_spark_roundtrip_shared_union_shape() {
 fn protocol_roundtrip_irregular_shape_autopad() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = common::koala_witness(9);
     let public_inputs = common::koala_public_inputs(9);
@@ -443,8 +443,8 @@ fn protocol_roundtrip_irregular_shape_autopad() {
 fn protocol_spark_roundtrip_mid_size_mixed_shape() {
     let shape = mid_size_mixed_shape();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let public_inputs = common::koala_public_inputs(7);
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_spark(
@@ -468,8 +468,8 @@ fn protocol_spark_roundtrip_mid_size_mixed_shape() {
 fn protocol_spark_mid_size_tampered_memory_product_fails() {
     let shape = mid_size_mixed_shape();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let public_inputs = common::koala_public_inputs(7);
     let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_spark(
@@ -494,8 +494,8 @@ fn protocol_spark_mid_size_tampered_memory_product_fails() {
 fn protocol_spark_tampered_matrix_eval_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -524,8 +524,8 @@ fn protocol_spark_tampered_matrix_eval_fails() {
 fn protocol_spark_tampered_memory_product_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -554,8 +554,8 @@ fn protocol_spark_tampered_memory_product_fails() {
 fn protocol_spark_tampered_read_opening_commitment_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -584,8 +584,8 @@ fn protocol_spark_tampered_read_opening_commitment_fails() {
 fn protocol_spark_tampered_read_opening_eval_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -614,8 +614,8 @@ fn protocol_spark_tampered_read_opening_eval_fails() {
 fn protocol_spark_tampered_fixed_opening_commitment_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -644,8 +644,8 @@ fn protocol_spark_tampered_fixed_opening_commitment_fails() {
 fn protocol_spark_tampered_fixed_opening_eval_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -674,8 +674,8 @@ fn protocol_spark_tampered_fixed_opening_eval_fails() {
 fn protocol_spark_tampered_shared_union_val_a_opening_fails() {
     let shape = shared_union_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -704,8 +704,8 @@ fn protocol_spark_tampered_shared_union_val_a_opening_fails() {
 fn protocol_spark_swapped_shared_union_val_ab_openings_fail() {
     let shape = shared_union_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -736,8 +736,8 @@ fn protocol_spark_swapped_shared_union_val_ab_openings_fail() {
 fn protocol_spark_verifying_key_fixed_commitment_mismatch_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, mut vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let witness = spartan_whir::R1csWitness {
         w: vec![F::from_u32(7), F::ZERO],
@@ -769,8 +769,8 @@ fn protocol_spark_verifying_key_fixed_commitment_mismatch_fails() {
 fn protocol_wrong_public_input_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
@@ -795,8 +795,8 @@ fn protocol_wrong_public_input_fails() {
 fn protocol_tampered_commitment_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
@@ -821,8 +821,8 @@ fn protocol_tampered_commitment_fails() {
 fn protocol_tampered_outer_claims_fail() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
@@ -846,8 +846,8 @@ fn protocol_tampered_outer_claims_fail() {
 fn protocol_tampered_witness_eval_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
@@ -874,8 +874,8 @@ fn protocol_tampered_witness_eval_fails() {
 fn protocol_tampered_pcs_proof_fails() {
     let shape = common::koala_shape_single_constraint(2);
     let (pk, vk) = setup_keys_with_mode(&shape, MatrixClosingMode::DirectSparse);
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
 
     let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,

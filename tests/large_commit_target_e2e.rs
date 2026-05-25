@@ -29,7 +29,7 @@ fn run_target_e2e<EF: ExtField>(
     assert_eq!(pk.pcs_config.num_variables, k);
     assert_eq!(vk.pcs_config.num_variables, k);
 
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::prove(
         &pk,
         &fixture.public_inputs,
@@ -38,7 +38,7 @@ fn run_target_e2e<EF: ExtField>(
     )
     .expect("prove succeeds");
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     let verified = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::verify(
         &vk,
         &instance,

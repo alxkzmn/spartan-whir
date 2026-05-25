@@ -6,19 +6,18 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, Hash};
 
-use crate::engine::{ExtField, KeccakEngine, F};
+use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
 use crate::{
-    compute_spark_read_tables, evaluate_mle_table, prepare_committed_opening,
-    preprocess_spark_tables, prove_inner, prove_outer,
-    prove_spark_batched_memory_products_with_leaf_claims, verify_finalize, verify_inner,
-    verify_outer, verify_parse_commitment, verify_spark_batched_memory_leaf_claims_with_openings,
+    compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
+    prove_outer, prove_spark_batched_memory_products_with_leaf_claims, verify_inner, verify_outer,
+    verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, DomainSeparator, EqPolynomial, InnerSumcheckProof,
     MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver, OuterSumcheckProof,
-    ParsedWhirCommitment, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolStage,
+    PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolStage, ProtocolWhirEngine,
     R1csInstance, R1csShape, R1csWitness, SecurityConfig, SparkBatchedMemoryProductsLeafClaims,
     SparkBatchedMemoryProductsProof, SparkFixedTableOpeningEvals, SparkReadTableOpeningEvals,
     SparkReadTables, SpartanWhirEngine, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
-    WhirProverData,
+    WhirProverDataView,
 };
 
 pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
@@ -30,8 +29,8 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
-    pub spark_fixed_commitments: Option<SparkFixedCommitments>,
-    spark_fixed_prover_data: Option<SparkFixedProverData<E::EF>>,
+    pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    spark_fixed_prover_data: Option<SparkFixedProverData<E, Pcs>>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -46,7 +45,7 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
-    pub spark_fixed_commitments: Option<SparkFixedCommitments>,
+    pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -120,55 +119,131 @@ impl<E: SpartanWhirEngine, Pcs: MlePcs<E>> SpartanProofKind<E, Pcs> {
     }
 }
 
-struct SparkReadProverData<EF: ExtField> {
-    data: WhirProverData<EF>,
+struct SparkReadProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
+    data: Pcs::ProverData,
+    marker: PhantomData<E>,
 }
 
-struct SparkReadCommitments {
-    commitment: [u64; 4],
+struct SparkReadCommitments<C> {
+    commitment: C,
 }
 
-#[derive(Clone)]
-struct SparkFixedProverData<EF> {
-    value: WhirProverData<EF>,
-    audit: WhirProverData<EF>,
+struct SparkFixedProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
+    value: Pcs::ProverData,
+    audit: Pcs::ProverData,
+    marker: PhantomData<E>,
+}
+
+impl<E, Pcs> Clone for SparkFixedProverData<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+    Pcs::ProverData: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            audit: self.audit.clone(),
+            marker: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SparkFixedCommitments {
-    pub value: [u64; 4],
-    pub audit: [u64; 4],
+pub struct SparkFixedCommitments<C = [u64; 4]> {
+    pub value: C,
+    pub audit: C,
 }
 
-struct ParsedSparkReadOpenings<EF: ExtField> {
-    commitment: ParsedWhirCommitment<EF>,
+struct ParsedSparkReadOpenings<E, EF>
+where
+    EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+{
+    commitment: E::ParsedCommitment,
 }
 
-struct ParsedSparkFixedOpenings<EF: ExtField> {
-    value: ParsedWhirCommitment<EF>,
-    audit: ParsedWhirCommitment<EF>,
+struct ParsedSparkFixedOpenings<E, EF>
+where
+    EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+{
+    value: E::ParsedCommitment,
+    audit: E::ParsedCommitment,
+}
+
+pub trait SpartanContextEngine: SpartanWhirEngine<F = F>
+where
+    Self::EF: ExtField,
+{
+    fn observe_spartan_context(
+        challenger: &mut Self::Challenger,
+        domain_separator: &DomainSeparator,
+        public_inputs: &[F],
+    ) -> Result<(), SpartanWhirError>;
+}
+
+impl<Ext> SpartanContextEngine for KeccakEngine<Ext>
+where
+    Ext: ExtField,
+{
+    fn observe_spartan_context(
+        challenger: &mut Self::Challenger,
+        domain_separator: &DomainSeparator,
+        public_inputs: &[F],
+    ) -> Result<(), SpartanWhirError> {
+        let digest_bytes = Keccak256Hash {}.hash_iter(domain_separator.to_bytes());
+        let digest_hash: Hash<F, u8, 32> = digest_bytes.into();
+        challenger.observe(digest_hash);
+        for &input in public_inputs {
+            challenger.observe(input);
+        }
+        Ok(())
+    }
+}
+
+impl<Ext> SpartanContextEngine for PoseidonEngine<Ext>
+where
+    Ext: ExtField,
+{
+    fn observe_spartan_context(
+        challenger: &mut Self::Challenger,
+        domain_separator: &DomainSeparator,
+        public_inputs: &[F],
+    ) -> Result<(), SpartanWhirError> {
+        // TODO: decide whether the Poseidon transcript should first compress
+        // the domain separator into field elements instead of absorbing bytes.
+        for byte in domain_separator.to_bytes() {
+            challenger.observe(F::from_u8(byte));
+        }
+        for &input in public_inputs {
+            challenger.observe(input);
+        }
+        Ok(())
+    }
 }
 
 pub struct SpartanProtocol<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
-impl<EF> SpartanProtocol<KeccakEngine<EF>, WhirPcs>
+impl<E> SpartanProtocol<E, WhirPcs>
 where
-    EF: ExtField,
+    E: ProtocolWhirEngine + SpartanContextEngine,
+    E::EF: ExtField,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<E::EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
+    E::Challenger: FieldChallenger<F>,
 {
     pub fn setup(
         shape: &R1csShape<F>,
         security: &SecurityConfig,
         whir_params: &WhirParams,
         pcs_config: &WhirPcsConfig,
-    ) -> Result<
-        (
-            ProvingKey<KeccakEngine<EF>, WhirPcs>,
-            VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        ),
-        SpartanWhirError,
-    > {
+    ) -> Result<(ProvingKey<E, WhirPcs>, VerifyingKey<E, WhirPcs>), SpartanWhirError> {
         // Defaults to SPARK setup; call `setup_with_config` with
         // `DirectSparse` to skip SPARK preprocessing.
         Self::setup_for_mode(
@@ -183,13 +258,7 @@ where
     pub fn setup_with_config(
         shape: &R1csShape<F>,
         config: &SpartanSnarkConfig,
-    ) -> Result<
-        (
-            ProvingKey<KeccakEngine<EF>, WhirPcs>,
-            VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        ),
-        SpartanWhirError,
-    > {
+    ) -> Result<(ProvingKey<E, WhirPcs>, VerifyingKey<E, WhirPcs>), SpartanWhirError> {
         Self::setup_for_mode(
             shape,
             &config.security,
@@ -205,13 +274,7 @@ where
         whir_params: &WhirParams,
         pcs_config: &WhirPcsConfig,
         matrix_closing: MatrixClosingMode,
-    ) -> Result<
-        (
-            ProvingKey<KeccakEngine<EF>, WhirPcs>,
-            VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        ),
-        SpartanWhirError,
-    > {
+    ) -> Result<(ProvingKey<E, WhirPcs>, VerifyingKey<E, WhirPcs>), SpartanWhirError> {
         let mut observer = NoopObserver;
         observer.on_stage(ProtocolStage::SetupStart);
 
@@ -236,7 +299,7 @@ where
         let spark_fixed_setup = match matrix_closing {
             MatrixClosingMode::DirectSparse => None,
             MatrixClosingMode::Spark => {
-                setup_spark_fixed_commitments::<EF>(&canonical_pcs_config, &shape_canonical)?
+                setup_spark_fixed_commitments::<E, E::EF>(&canonical_pcs_config, &shape_canonical)?
             }
         };
         let (spark_fixed_prover_data, spark_fixed_commitments) = match spark_fixed_setup {
@@ -280,15 +343,15 @@ where
     }
 
     pub fn prove_with_mode(
-        pk: &ProvingKey<KeccakEngine<EF>, WhirPcs>,
+        pk: &ProvingKey<E, WhirPcs>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
         mode: MatrixClosingMode,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        challenger: &mut E::Challenger,
     ) -> Result<
         (
-            R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-            SpartanProofKind<KeccakEngine<EF>, WhirPcs>,
+            R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+            SpartanProofKind<E, WhirPcs>,
         ),
         SpartanWhirError,
     > {
@@ -305,10 +368,10 @@ where
     }
 
     pub fn verify_with_mode(
-        vk: &VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        instance: &R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-        proof: &SpartanProofKind<KeccakEngine<EF>, WhirPcs>,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        vk: &VerifyingKey<E, WhirPcs>,
+        instance: &R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+        proof: &SpartanProofKind<E, WhirPcs>,
+        challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
         match proof {
             SpartanProofKind::Direct(proof) => Self::verify(vk, instance, proof, challenger),
@@ -327,14 +390,14 @@ where
     }
 
     pub fn prove(
-        pk: &ProvingKey<KeccakEngine<EF>, WhirPcs>,
+        pk: &ProvingKey<E, WhirPcs>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        challenger: &mut E::Challenger,
     ) -> Result<
         (
-            R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-            SpartanProof<KeccakEngine<EF>, WhirPcs>,
+            R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+            SpartanProof<E, WhirPcs>,
         ),
         SpartanWhirError,
     > {
@@ -349,7 +412,7 @@ where
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context::<EF>(challenger, &pk.domain_separator, public_inputs)?;
+        observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
 
         let mut witness_padded = witness.w.clone();
         witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
@@ -357,7 +420,7 @@ where
 
         observer.on_stage(ProtocolStage::PcsCommit);
         let (witness_commitment, prover_data) =
-            WhirPcs::commit(&pk.pcs_config, &witness_mle, challenger)?;
+            <WhirPcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_mle, challenger)?;
         let instance = R1csInstance {
             public_inputs: public_inputs.to_vec(),
             witness_commitment,
@@ -369,32 +432,32 @@ where
         let z_short = build_matrix_z(&z_witness_half, public_inputs);
 
         let (az_f, bz_f, cz_f) = pk.shape_canonical.multiply_vec(&z_short)?;
-        let az: Vec<EF> = az_f.iter().map(|&v| EF::from(v)).collect();
-        let bz: Vec<EF> = bz_f.iter().map(|&v| EF::from(v)).collect();
-        let cz: Vec<EF> = cz_f.iter().map(|&v| EF::from(v)).collect();
+        let az: Vec<E::EF> = az_f.iter().map(|&v| E::EF::from(v)).collect();
+        let bz: Vec<E::EF> = bz_f.iter().map(|&v| E::EF::from(v)).collect();
+        let cz: Vec<E::EF> = cz_f.iter().map(|&v| E::EF::from(v)).collect();
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
+        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
         let tau_point = MultilinearPoint(tau.clone());
 
         let (outer_sumcheck, r_x, outer_claims) =
-            prove_outer::<F, EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?;
+            prove_outer::<F, E::EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?;
 
         challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
-        let r = challenger.sample_algebra_element::<EF>();
+        let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
         let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<EF>(&t_x)?;
-        let poly_abc: Vec<EF> = evals_a
+        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?;
+        let poly_abc: Vec<E::EF> = evals_a
             .iter()
             .zip(evals_b.iter())
             .zip(evals_c.iter())
             .map(|((&a, &b), &c)| a + r * b + r * r * c)
             .collect();
-        let z_lifted: Vec<EF> = z_full.iter().map(|&v| EF::from(v)).collect();
+        let z_lifted: Vec<E::EF> = z_full.iter().map(|&v| E::EF::from(v)).collect();
 
-        let (inner_sumcheck, r_y, eval_z) = prove_inner::<F, EF, _>(
+        let (inner_sumcheck, r_y, eval_z) = prove_inner::<F, E::EF, _>(
             &pk.shape_canonical,
             claim_inner_joint,
             &poly_abc,
@@ -406,7 +469,7 @@ where
         let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
         let witness_eval = recover_witness_eval(r_y.0[0], eval_z, eval_x)?;
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
+        let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: witness_eval,
@@ -414,7 +477,8 @@ where
             .finalize()?;
 
         observer.on_stage(ProtocolStage::PcsOpen);
-        let pcs_proof = WhirPcs::open(&pk.pcs_config, prover_data, &pcs_statement, challenger)?;
+        let pcs_proof =
+            <WhirPcs as MlePcs<E>>::open(&pk.pcs_config, prover_data, &pcs_statement, challenger)?;
         observer.on_stage(ProtocolStage::ProveEnd);
 
         Ok((
@@ -430,10 +494,10 @@ where
     }
 
     pub fn verify(
-        vk: &VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        instance: &R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-        proof: &SpartanProof<KeccakEngine<EF>, WhirPcs>,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        vk: &VerifyingKey<E, WhirPcs>,
+        instance: &R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+        proof: &SpartanProof<E, WhirPcs>,
+        challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
@@ -443,10 +507,14 @@ where
             return Err(SpartanWhirError::InvalidPublicInputLength);
         }
 
-        observe_spartan_context::<EF>(challenger, &vk.domain_separator, &instance.public_inputs)?;
+        observe_spartan_context::<E, E::EF>(
+            challenger,
+            &vk.domain_separator,
+            &instance.public_inputs,
+        )?;
 
         observer.on_stage(ProtocolStage::PcsVerify);
-        let parsed_commitment = verify_parse_commitment(
+        let parsed_commitment = <E as ProtocolWhirEngine>::verify_parse_commitment(
             &vk.pcs_config,
             &instance.witness_commitment,
             &proof.pcs_proof,
@@ -454,9 +522,13 @@ where
         )?;
 
         let num_rounds_x = vk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
-        let (r_x, final_outer_claim) =
-            verify_outer::<F, EF, _>(&proof.outer_sumcheck, EF::ZERO, num_rounds_x, challenger)?;
+        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
+        let (r_x, final_outer_claim) = verify_outer::<F, E::EF, _>(
+            &proof.outer_sumcheck,
+            E::EF::ZERO,
+            num_rounds_x,
+            challenger,
+        )?;
 
         let expected_outer = eq_point_eval(&tau, &r_x.0)
             * (proof.outer_claims.0 * proof.outer_claims.1 - proof.outer_claims.2);
@@ -469,12 +541,12 @@ where
             proof.outer_claims.1,
             proof.outer_claims.2,
         ]);
-        let r = challenger.sample_algebra_element::<EF>();
+        let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint =
             proof.outer_claims.0 + r * proof.outer_claims.1 + r * r * proof.outer_claims.2;
 
         let num_rounds_y = vk.shape_canonical.num_vars.ilog2() as usize + 1;
-        let (r_y, inner_final_claim) = verify_inner::<F, EF, _>(
+        let (r_y, inner_final_claim) = verify_inner::<F, E::EF, _>(
             &proof.inner_sumcheck,
             claim_inner_joint,
             num_rounds_y,
@@ -483,25 +555,27 @@ where
 
         let t_x = EqPolynomial::evals_from_point(&r_x.0);
         let t_y = EqPolynomial::evals_from_point(&r_y.0);
-        let (eval_a, eval_b, eval_c) = vk.shape_canonical.evaluate_with_tables::<EF>(&t_x, &t_y)?;
+        let (eval_a, eval_b, eval_c) = vk
+            .shape_canonical
+            .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
 
         let eval_x_table =
             public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
         let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
-        let eval_z = (EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
+        let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let expected_inner = (eval_a + r * eval_b + r * r * eval_c) * eval_z;
         if inner_final_claim != expected_inner {
             return Err(SpartanWhirError::SumcheckFailed);
         }
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
+        let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: proof.witness_eval,
             })
             .finalize()?;
 
-        verify_finalize(
+        <E as ProtocolWhirEngine>::verify_finalize(
             &vk.pcs_config,
             &parsed_commitment,
             &pcs_statement,
@@ -514,14 +588,14 @@ where
     }
 
     pub fn prove_spark(
-        pk: &ProvingKey<KeccakEngine<EF>, WhirPcs>,
+        pk: &ProvingKey<E, WhirPcs>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        challenger: &mut E::Challenger,
     ) -> Result<
         (
-            R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-            SparkSpartanProof<KeccakEngine<EF>, WhirPcs>,
+            R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+            SparkSpartanProof<E, WhirPcs>,
         ),
         SpartanWhirError,
     > {
@@ -536,7 +610,7 @@ where
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context::<EF>(challenger, &pk.domain_separator, public_inputs)?;
+        observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
 
         let mut witness_padded = witness.w.clone();
         witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
@@ -544,7 +618,7 @@ where
 
         observer.on_stage(ProtocolStage::PcsCommit);
         let (witness_commitment, prover_data) =
-            WhirPcs::commit(&pk.pcs_config, &witness_mle, challenger)?;
+            <WhirPcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_mle, challenger)?;
         let instance = R1csInstance {
             public_inputs: public_inputs.to_vec(),
             witness_commitment,
@@ -556,32 +630,32 @@ where
         let z_short = build_matrix_z(&z_witness_half, public_inputs);
 
         let (az_f, bz_f, cz_f) = pk.shape_canonical.multiply_vec(&z_short)?;
-        let az: Vec<EF> = az_f.iter().map(|&v| EF::from(v)).collect();
-        let bz: Vec<EF> = bz_f.iter().map(|&v| EF::from(v)).collect();
-        let cz: Vec<EF> = cz_f.iter().map(|&v| EF::from(v)).collect();
+        let az: Vec<E::EF> = az_f.iter().map(|&v| E::EF::from(v)).collect();
+        let bz: Vec<E::EF> = bz_f.iter().map(|&v| E::EF::from(v)).collect();
+        let cz: Vec<E::EF> = cz_f.iter().map(|&v| E::EF::from(v)).collect();
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
+        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
         let tau_point = MultilinearPoint(tau.clone());
 
         let (outer_sumcheck, r_x, outer_claims) =
-            prove_outer::<F, EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?;
+            prove_outer::<F, E::EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?;
 
         challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
-        let r = challenger.sample_algebra_element::<EF>();
+        let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
         let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<EF>(&t_x)?;
-        let poly_abc: Vec<EF> = evals_a
+        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?;
+        let poly_abc: Vec<E::EF> = evals_a
             .iter()
             .zip(evals_b.iter())
             .zip(evals_c.iter())
             .map(|((&a, &b), &c)| a + r * b + r * r * c)
             .collect();
-        let z_lifted: Vec<EF> = z_full.iter().map(|&v| EF::from(v)).collect();
+        let z_lifted: Vec<E::EF> = z_full.iter().map(|&v| E::EF::from(v)).collect();
 
-        let (inner_sumcheck, r_y, eval_z) = prove_inner::<F, EF, _>(
+        let (inner_sumcheck, r_y, eval_z) = prove_inner::<F, E::EF, _>(
             &pk.shape_canonical,
             claim_inner_joint,
             &poly_abc,
@@ -598,7 +672,7 @@ where
             spark_tables.row_memory_size,
             spark_tables.col_memory_size,
         )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<EF>(&spark_value_pcs_config)?;
+        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
         let fixed_prover_data = pk
             .spark_fixed_prover_data
             .clone()
@@ -606,7 +680,7 @@ where
         let expected_fixed_commitments = pk
             .spark_fixed_commitments
             .ok_or(SpartanWhirError::InvalidConfig)?;
-        let fixed_prover_data = prepare_spark_fixed_openings(
+        let fixed_prover_data = prepare_spark_fixed_openings::<E, E::EF>(
             &spark_fixed_value_pcs_config,
             &spark_fixed_audit_pcs_config,
             fixed_prover_data,
@@ -614,7 +688,7 @@ where
         )?;
         let read_tables = compute_spark_read_tables(&spark_tables, &r_x, &r_y)?;
         let (read_prover_data, read_commitments) =
-            commit_spark_read_tables(&spark_read_pcs_config, &read_tables, challenger)?;
+            commit_spark_read_tables::<E, E::EF>(&spark_read_pcs_config, &read_tables, challenger)?;
         let (spark_products, product_claims) =
             prove_spark_batched_memory_products_with_leaf_claims(
                 &spark_tables,
@@ -622,7 +696,7 @@ where
                 &r_y,
                 challenger,
             )?;
-        let spark_fixed_openings = open_spark_fixed_tables(
+        let spark_fixed_openings = open_spark_fixed_tables::<E, E::EF>(
             &spark_fixed_value_pcs_config,
             &spark_fixed_audit_pcs_config,
             fixed_prover_data,
@@ -631,7 +705,7 @@ where
             &product_claims,
             challenger,
         )?;
-        let spark_read_openings = open_spark_read_tables(
+        let spark_read_openings = open_spark_read_tables::<E, E::EF>(
             &spark_read_pcs_config,
             read_prover_data,
             read_commitments,
@@ -643,7 +717,7 @@ where
         let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
         let witness_eval = recover_witness_eval(r_y.0[0], eval_z, eval_x)?;
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
+        let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: witness_eval,
@@ -651,7 +725,8 @@ where
             .finalize()?;
 
         observer.on_stage(ProtocolStage::PcsOpen);
-        let pcs_proof = WhirPcs::open(&pk.pcs_config, prover_data, &pcs_statement, challenger)?;
+        let pcs_proof =
+            <WhirPcs as MlePcs<E>>::open(&pk.pcs_config, prover_data, &pcs_statement, challenger)?;
         observer.on_stage(ProtocolStage::ProveEnd);
 
         Ok((
@@ -670,10 +745,10 @@ where
     }
 
     pub fn verify_spark(
-        vk: &VerifyingKey<KeccakEngine<EF>, WhirPcs>,
-        instance: &R1csInstance<F, <WhirPcs as MlePcs<KeccakEngine<EF>>>::Commitment>,
-        proof: &SparkSpartanProof<KeccakEngine<EF>, WhirPcs>,
-        challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+        vk: &VerifyingKey<E, WhirPcs>,
+        instance: &R1csInstance<F, <WhirPcs as MlePcs<E>>::Commitment>,
+        proof: &SparkSpartanProof<E, WhirPcs>,
+        challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
@@ -683,10 +758,14 @@ where
             return Err(SpartanWhirError::InvalidPublicInputLength);
         }
 
-        observe_spartan_context::<EF>(challenger, &vk.domain_separator, &instance.public_inputs)?;
+        observe_spartan_context::<E, E::EF>(
+            challenger,
+            &vk.domain_separator,
+            &instance.public_inputs,
+        )?;
 
         observer.on_stage(ProtocolStage::PcsVerify);
-        let parsed_commitment = verify_parse_commitment(
+        let parsed_commitment = <E as ProtocolWhirEngine>::verify_parse_commitment(
             &vk.pcs_config,
             &instance.witness_commitment,
             &proof.pcs_proof,
@@ -694,9 +773,13 @@ where
         )?;
 
         let num_rounds_x = vk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<EF>(challenger, num_rounds_x);
-        let (r_x, final_outer_claim) =
-            verify_outer::<F, EF, _>(&proof.outer_sumcheck, EF::ZERO, num_rounds_x, challenger)?;
+        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
+        let (r_x, final_outer_claim) = verify_outer::<F, E::EF, _>(
+            &proof.outer_sumcheck,
+            E::EF::ZERO,
+            num_rounds_x,
+            challenger,
+        )?;
 
         let expected_outer = eq_point_eval(&tau, &r_x.0)
             * (proof.outer_claims.0 * proof.outer_claims.1 - proof.outer_claims.2);
@@ -709,12 +792,12 @@ where
             proof.outer_claims.1,
             proof.outer_claims.2,
         ]);
-        let r = challenger.sample_algebra_element::<EF>();
+        let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint =
             proof.outer_claims.0 + r * proof.outer_claims.1 + r * r * proof.outer_claims.2;
 
         let num_rounds_y = vk.shape_canonical.num_vars.ilog2() as usize + 1;
-        let (r_y, inner_final_claim) = verify_inner::<F, EF, _>(
+        let (r_y, inner_final_claim) = verify_inner::<F, E::EF, _>(
             &proof.inner_sumcheck,
             claim_inner_joint,
             num_rounds_y,
@@ -730,18 +813,21 @@ where
             spark_tables.row_memory_size,
             spark_tables.col_memory_size,
         )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<EF>(&spark_value_pcs_config)?;
+        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
         let expected_fixed_commitments = vk
             .spark_fixed_commitments
             .ok_or(SpartanWhirError::InvalidConfig)?;
-        validate_spark_fixed_commitments(&proof.spark_fixed_openings, &expected_fixed_commitments)?;
-        let parsed_fixed_openings = parse_spark_fixed_openings(
+        validate_spark_fixed_commitments::<E, E::EF>(
+            &proof.spark_fixed_openings,
+            &expected_fixed_commitments,
+        )?;
+        let parsed_fixed_openings = parse_spark_fixed_openings::<E, E::EF>(
             &spark_fixed_value_pcs_config,
             &spark_fixed_audit_pcs_config,
             &proof.spark_fixed_openings,
             challenger,
         )?;
-        let parsed_read_openings = parse_spark_read_openings(
+        let parsed_read_openings = parse_spark_read_openings::<E, E::EF>(
             &spark_read_pcs_config,
             &proof.spark_read_openings,
             challenger,
@@ -751,7 +837,7 @@ where
             &proof.spark_products,
             challenger,
         )?;
-        finalize_spark_fixed_openings(
+        finalize_spark_fixed_openings::<E, E::EF>(
             &spark_fixed_value_pcs_config,
             &spark_fixed_audit_pcs_config,
             spark_tables.row_memory_size,
@@ -761,7 +847,7 @@ where
             &product_claims,
             challenger,
         )?;
-        let read_opening_evals = finalize_spark_read_openings(
+        let read_opening_evals = finalize_spark_read_openings::<E, E::EF>(
             &spark_read_pcs_config,
             &proof.spark_read_openings,
             parsed_read_openings,
@@ -781,20 +867,20 @@ where
         let eval_x_table =
             public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
         let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
-        let eval_z = (EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
+        let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let spark_matrix_eval = matrix_eval_rlc(product_claims.matrix_evals, r);
         if inner_final_claim != spark_matrix_eval * eval_z {
             return Err(SpartanWhirError::SumcheckFailed);
         }
 
-        let pcs_statement = PcsStatementBuilder::<KeccakEngine<EF>>::new()
+        let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
                 point: MultilinearPoint(r_y.0[1..].to_vec()),
                 value: proof.witness_eval,
             })
             .finalize()?;
 
-        verify_finalize(
+        <E as ProtocolWhirEngine>::verify_finalize(
             &vk.pcs_config,
             &parsed_commitment,
             &pcs_statement,
@@ -807,29 +893,23 @@ where
     }
 }
 
-fn observe_spartan_context<Ext>(
-    challenger: &mut <KeccakEngine<Ext> as SpartanWhirEngine>::Challenger,
+fn observe_spartan_context<E, Ext>(
+    challenger: &mut E::Challenger,
     domain_separator: &DomainSeparator,
     public_inputs: &[F],
 ) -> Result<(), SpartanWhirError>
 where
     Ext: ExtField,
+    E: SpartanContextEngine<EF = Ext>,
 {
-    let digest_bytes = Keccak256Hash {}.hash_iter(domain_separator.to_bytes());
-    let digest_hash: Hash<F, u8, 32> = digest_bytes.into();
-    challenger.observe(digest_hash);
-    for &input in public_inputs {
-        challenger.observe(input);
-    }
-    Ok(())
+    E::observe_spartan_context(challenger, domain_separator, public_inputs)
 }
 
-fn sample_algebra_vec<Ext>(
-    challenger: &mut <KeccakEngine<Ext> as SpartanWhirEngine>::Challenger,
-    len: usize,
-) -> Vec<Ext>
+fn sample_algebra_vec<E, Ext>(challenger: &mut E::Challenger, len: usize) -> Vec<Ext>
 where
     Ext: ExtField,
+    E: SpartanWhirEngine<F = F, EF = Ext>,
+    E::Challenger: FieldChallenger<F>,
 {
     (0..len)
         .map(|_| challenger.sample_algebra_element::<Ext>())
@@ -843,12 +923,22 @@ where
     matrix_evals[0] + r * matrix_evals[1] + r * r * matrix_evals[2]
 }
 
-fn setup_spark_fixed_commitments<EF>(
+fn setup_spark_fixed_commitments<E, EF>(
     pcs_config: &WhirPcsConfig,
     shape: &R1csShape<F>,
-) -> Result<Option<(SparkFixedProverData<EF>, SparkFixedCommitments)>, SpartanWhirError>
+) -> Result<
+    Option<(
+        SparkFixedProverData<E, WhirPcs>,
+        SparkFixedCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
+    )>,
+    SpartanWhirError,
+>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let spark_tables = preprocess_spark_tables(shape)?;
     let spark_value_pcs_config = spark_table_pcs_config(pcs_config, spark_tables.value_domain_size);
@@ -867,8 +957,8 @@ where
         return Ok(None);
     };
 
-    let mut spark_setup_challenger = crate::engine::new_keccak_challenger();
-    let (prover_data, commitments) = commit_spark_fixed_tables::<EF>(
+    let mut spark_setup_challenger = E::challenger();
+    let (prover_data, commitments) = commit_spark_fixed_tables::<E, EF>(
         &fixed_value_config,
         &audit_config,
         &spark_tables,
@@ -932,22 +1022,38 @@ fn spark_fixed_audit_pcs_config(
     spark_table_pcs_config(base, audit_domain_size)
 }
 
-fn commit_spark_fixed_tables<EF>(
+fn commit_spark_fixed_tables<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
     tables: &crate::SparkTables,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<(SparkFixedProverData<EF>, SparkFixedCommitments), SpartanWhirError>
+    challenger: &mut E::Challenger,
+) -> Result<
+    (
+        SparkFixedProverData<E, WhirPcs>,
+        SparkFixedCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
+    ),
+    SpartanWhirError,
+>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let value_bundle = fixed_value_bundle(tables, fixed_value_config)?;
     let audit_bundle = fixed_audit_bundle(tables, audit_config)?;
-    let (value_commitment, value) = WhirPcs::commit(fixed_value_config, &value_bundle, challenger)?;
-    let (audit_commitment, audit) = WhirPcs::commit(audit_config, &audit_bundle, challenger)?;
+    let (value_commitment, value) =
+        <WhirPcs as MlePcs<E>>::commit(fixed_value_config, &value_bundle, challenger)?;
+    let (audit_commitment, audit) =
+        <WhirPcs as MlePcs<E>>::commit(audit_config, &audit_bundle, challenger)?;
 
     Ok((
-        SparkFixedProverData { value, audit },
+        SparkFixedProverData {
+            value,
+            audit,
+            marker: PhantomData,
+        },
         SparkFixedCommitments {
             value: value_commitment,
             audit: audit_commitment,
@@ -1016,13 +1122,23 @@ fn copy_rectangular_base_column(
     Ok(())
 }
 
-fn commit_spark_read_tables<EF>(
+fn commit_spark_read_tables<E, EF>(
     config: &WhirPcsConfig,
     read_tables: &SparkReadTables<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<(SparkReadProverData<EF>, SparkReadCommitments), SpartanWhirError>
+    challenger: &mut E::Challenger,
+) -> Result<
+    (
+        SparkReadProverData<E, WhirPcs>,
+        SparkReadCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
+    ),
+    SpartanWhirError,
+>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let erow_columns = extension_table_to_base_columns(&read_tables.erow)?;
     let ecol_columns = extension_table_to_base_columns(&read_tables.ecol)?;
@@ -1046,40 +1162,51 @@ where
         packed[column_index * domain_size..(column_index + 1) * domain_size]
             .copy_from_slice(column);
     }
-    let (commitment, data) = WhirPcs::commit(config, &packed, challenger)?;
+    let (commitment, data) = <WhirPcs as MlePcs<E>>::commit(config, &packed, challenger)?;
 
     Ok((
-        SparkReadProverData { data },
+        SparkReadProverData {
+            data,
+            marker: PhantomData,
+        },
         SparkReadCommitments { commitment },
     ))
 }
 
-fn prepare_spark_fixed_openings<EF>(
+fn prepare_spark_fixed_openings<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
-    prover_data: SparkFixedProverData<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<SparkFixedProverData<EF>, SpartanWhirError>
+    prover_data: SparkFixedProverData<E, WhirPcs>,
+    challenger: &mut E::Challenger,
+) -> Result<SparkFixedProverData<E, WhirPcs>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
 {
     Ok(SparkFixedProverData {
-        value: prepare_committed_opening(fixed_value_config, prover_data.value, challenger)?,
-        audit: prepare_committed_opening(audit_config, prover_data.audit, challenger)?,
+        value: E::prepare_committed_opening(fixed_value_config, prover_data.value, challenger)?,
+        audit: E::prepare_committed_opening(audit_config, prover_data.audit, challenger)?,
+        marker: PhantomData,
     })
 }
 
-fn open_spark_fixed_tables<EF>(
+fn open_spark_fixed_tables<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
-    prover_data: SparkFixedProverData<EF>,
-    commitments: SparkFixedCommitments,
+    prover_data: SparkFixedProverData<E, WhirPcs>,
+    commitments: SparkFixedCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
     tables: &crate::SparkTables,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<SparkFixedOpeningProof<KeccakEngine<EF>, WhirPcs>, SpartanWhirError>
+    challenger: &mut E::Challenger,
+) -> Result<SparkFixedOpeningProof<E, WhirPcs>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let (value_claims, value_evals) = fixed_value_opening_claims_from_prover_data(
         fixed_value_config,
@@ -1097,8 +1224,8 @@ where
     if product_claims.ops.dotproduct_weight_evals.as_slice() != expected_weights {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    let value_statement = point_eval_statement::<EF>(&value_claims)?;
-    let value_proof = WhirPcs::open(
+    let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
+    let value_proof = <WhirPcs as MlePcs<E>>::open(
         fixed_value_config,
         prover_data.value,
         &value_statement,
@@ -1112,8 +1239,8 @@ where
         tables.col_memory_size,
         product_claims,
     )?;
-    let audit_statement = point_eval_statement::<EF>(&audit_claims)?;
-    let audit_proof = WhirPcs::open(
+    let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
+    let audit_proof = <WhirPcs as MlePcs<E>>::open(
         audit_config,
         prover_data.audit,
         &audit_statement,
@@ -1147,15 +1274,19 @@ where
     })
 }
 
-fn open_spark_read_tables<EF>(
+fn open_spark_read_tables<E, EF>(
     config: &WhirPcsConfig,
-    prover_data: SparkReadProverData<EF>,
-    commitments: SparkReadCommitments,
+    prover_data: SparkReadProverData<E, WhirPcs>,
+    commitments: SparkReadCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<SparkReadOpeningProof<KeccakEngine<EF>, WhirPcs>, SpartanWhirError>
+    challenger: &mut E::Challenger,
+) -> Result<SparkReadOpeningProof<E, WhirPcs>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::ProverData: Clone + WhirProverDataView<EF>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let value_num_variables = config
         .num_variables
@@ -1189,8 +1320,8 @@ where
     {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    let statement = point_eval_statement::<EF>(&claims)?;
-    let proof = WhirPcs::open(config, prover_data.data, &statement, challenger)?;
+    let statement = point_eval_statement::<E, EF>(&claims)?;
+    let proof = <WhirPcs as MlePcs<E>>::open(config, prover_data.data, &statement, challenger)?;
 
     Ok(SparkReadOpeningProof {
         num_variables: config.num_variables,
@@ -1207,24 +1338,27 @@ where
     })
 }
 
-fn parse_spark_fixed_openings<EF>(
+fn parse_spark_fixed_openings<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
-    proof: &SparkFixedOpeningProof<KeccakEngine<EF>, WhirPcs>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<ParsedSparkFixedOpenings<EF>, SpartanWhirError>
+    proof: &SparkFixedOpeningProof<E, WhirPcs>,
+    challenger: &mut E::Challenger,
+) -> Result<ParsedSparkFixedOpenings<E, EF>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
-    validate_spark_fixed_opening_shape(fixed_value_config, audit_config, proof)?;
+    validate_spark_fixed_opening_shape::<E, EF>(fixed_value_config, audit_config, proof)?;
     Ok(ParsedSparkFixedOpenings {
-        value: verify_parse_commitment(
+        value: E::verify_parse_commitment(
             fixed_value_config,
             &proof.value_commitment,
             &proof.value_proof,
             challenger,
         )?,
-        audit: verify_parse_commitment(
+        audit: E::verify_parse_commitment(
             audit_config,
             &proof.audit_commitment,
             &proof.audit_proof,
@@ -1233,37 +1367,48 @@ where
     })
 }
 
-fn parse_spark_read_openings<EF>(
+fn parse_spark_read_openings<E, EF>(
     config: &WhirPcsConfig,
-    proof: &SparkReadOpeningProof<KeccakEngine<EF>, WhirPcs>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
-) -> Result<ParsedSparkReadOpenings<EF>, SpartanWhirError>
+    proof: &SparkReadOpeningProof<E, WhirPcs>,
+    challenger: &mut E::Challenger,
+) -> Result<ParsedSparkReadOpenings<E, EF>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
-    validate_spark_read_opening_shape::<EF>(config, proof)?;
+    validate_spark_read_opening_shape::<E, EF>(config, proof)?;
     Ok(ParsedSparkReadOpenings {
-        commitment: verify_parse_commitment(config, &proof.commitment, &proof.proof, challenger)?,
+        commitment: E::verify_parse_commitment(
+            config,
+            &proof.commitment,
+            &proof.proof,
+            challenger,
+        )?,
     })
 }
 
-fn finalize_spark_fixed_openings<EF>(
+fn finalize_spark_fixed_openings<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
     row_memory_size: usize,
     col_memory_size: usize,
-    proof: &SparkFixedOpeningProof<KeccakEngine<EF>, WhirPcs>,
-    parsed: ParsedSparkFixedOpenings<EF>,
+    proof: &SparkFixedOpeningProof<E, WhirPcs>,
+    parsed: ParsedSparkFixedOpenings<E, EF>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+    challenger: &mut E::Challenger,
 ) -> Result<(), SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
-    validate_spark_fixed_opening_shape(fixed_value_config, audit_config, proof)?;
+    validate_spark_fixed_opening_shape::<E, EF>(fixed_value_config, audit_config, proof)?;
     let value_claims = fixed_value_opening_claims_from_evals(product_claims, &proof.evals)?;
-    let value_statement = point_eval_statement::<EF>(&value_claims)?;
-    verify_finalize(
+    let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
+    E::verify_finalize(
         fixed_value_config,
         &parsed.value,
         &value_statement,
@@ -1278,8 +1423,8 @@ where
         product_claims,
         &proof.evals,
     )?;
-    let audit_statement = point_eval_statement::<EF>(&audit_claims)?;
-    verify_finalize(
+    let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
+    E::verify_finalize(
         audit_config,
         &parsed.audit,
         &audit_statement,
@@ -1288,17 +1433,20 @@ where
     )
 }
 
-fn finalize_spark_read_openings<EF>(
+fn finalize_spark_read_openings<E, EF>(
     config: &WhirPcsConfig,
-    proof: &SparkReadOpeningProof<KeccakEngine<EF>, WhirPcs>,
-    parsed: ParsedSparkReadOpenings<EF>,
+    proof: &SparkReadOpeningProof<E, WhirPcs>,
+    parsed: ParsedSparkReadOpenings<E, EF>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-    challenger: &mut <KeccakEngine<EF> as SpartanWhirEngine>::Challenger,
+    challenger: &mut E::Challenger,
 ) -> Result<SparkReadTableOpeningEvals<EF>, SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
-    validate_spark_read_opening_shape::<EF>(config, proof)?;
+    validate_spark_read_opening_shape::<E, EF>(config, proof)?;
     let value_num_variables = config
         .num_variables
         .checked_sub(read_column_bits::<EF>())
@@ -1317,8 +1465,8 @@ where
         proof.ecol_ops_evals.as_slice(),
     ];
     let claims = read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
-    let statement = point_eval_statement::<EF>(&claims)?;
-    verify_finalize(
+    let statement = point_eval_statement::<E, EF>(&claims)?;
+    E::verify_finalize(
         config,
         &parsed.commitment,
         &statement,
@@ -1339,9 +1487,9 @@ where
     )
 }
 
-fn fixed_value_opening_claims_from_prover_data<EF>(
+fn fixed_value_opening_claims_from_prover_data<EF, D>(
     config: &WhirPcsConfig,
-    prover_data: &WhirProverData<EF>,
+    prover_data: &D,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
 ) -> Result<
     (
@@ -1352,8 +1500,9 @@ fn fixed_value_opening_claims_from_prover_data<EF>(
 >
 where
     EF: ExtField,
+    D: WhirProverDataView<EF>,
 {
-    if prover_data.num_variables != config.num_variables {
+    if prover_data.num_variables() != config.num_variables {
         return Err(SpartanWhirError::InvalidConfig);
     }
     let value_num_variables = config
@@ -1364,7 +1513,7 @@ where
         return Err(SpartanWhirError::InvalidNumVariables);
     }
     let poly_ext: Vec<EF> = prover_data
-        .polynomial
+        .polynomial()
         .iter()
         .map(|&value| EF::from(value))
         .collect();
@@ -1525,9 +1674,9 @@ where
     ])
 }
 
-fn fixed_audit_opening_claims_from_prover_data<EF>(
+fn fixed_audit_opening_claims_from_prover_data<EF, D>(
     config: &WhirPcsConfig,
-    prover_data: &WhirProverData<EF>,
+    prover_data: &D,
     row_memory_size: usize,
     col_memory_size: usize,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
@@ -1540,8 +1689,9 @@ fn fixed_audit_opening_claims_from_prover_data<EF>(
 >
 where
     EF: ExtField,
+    D: WhirProverDataView<EF>,
 {
-    if prover_data.num_variables != config.num_variables {
+    if prover_data.num_variables() != config.num_variables {
         return Err(SpartanWhirError::InvalidConfig);
     }
     let audit_memory_bits = config
@@ -1549,7 +1699,7 @@ where
         .checked_sub(fixed_audit_column_bits())
         .ok_or(SpartanWhirError::InvalidConfig)?;
     let poly_ext: Vec<EF> = prover_data
-        .polynomial
+        .polynomial()
         .iter()
         .map(|&value| EF::from(value))
         .collect();
@@ -1645,9 +1795,9 @@ struct SparkFixedAuditOpeningEvals<EF> {
 
 type ReadCoordinateEvals<EF> = [Vec<EF>; 3];
 
-fn read_opening_claims_from_prover_data<EF>(
+fn read_opening_claims_from_prover_data<EF, D>(
     config: &WhirPcsConfig,
-    prover_data: &WhirProverData<EF>,
+    prover_data: &D,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
 ) -> Result<
     (
@@ -1659,12 +1809,13 @@ fn read_opening_claims_from_prover_data<EF>(
 >
 where
     EF: ExtField,
+    D: WhirProverDataView<EF>,
 {
-    if prover_data.num_variables != config.num_variables {
+    if prover_data.num_variables() != config.num_variables {
         return Err(SpartanWhirError::InvalidConfig);
     }
     let poly_ext: Vec<EF> = prover_data
-        .polynomial
+        .polynomial()
         .iter()
         .map(|&v| EF::from(v))
         .collect();
@@ -1953,13 +2104,14 @@ fn fixed_audit_column_bits() -> usize {
     1
 }
 
-fn point_eval_statement<EF>(
+fn point_eval_statement<E, EF>(
     claims: &[(MultilinearPoint<EF>, EF)],
-) -> Result<crate::PcsStatement<KeccakEngine<EF>>, SpartanWhirError>
+) -> Result<crate::PcsStatement<E>, SpartanWhirError>
 where
     EF: ExtField,
+    E: SpartanWhirEngine<F = F, EF = EF>,
 {
-    let mut builder = PcsStatementBuilder::<KeccakEngine<EF>>::new();
+    let mut builder = PcsStatementBuilder::<E>::new();
     for (point, value) in claims {
         builder = builder.add_point_eval(PointEvalClaim {
             point: point.clone(),
@@ -1969,13 +2121,15 @@ where
     builder.finalize()
 }
 
-fn validate_spark_fixed_opening_shape<EF>(
+fn validate_spark_fixed_opening_shape<E, EF>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
-    proof: &SparkFixedOpeningProof<KeccakEngine<EF>, WhirPcs>,
+    proof: &SparkFixedOpeningProof<E, WhirPcs>,
 ) -> Result<(), SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
 {
     if proof.value_num_variables != fixed_value_config.num_variables
         || proof.value_column_bits != fixed_value_column_bits()
@@ -1987,12 +2141,15 @@ where
     Ok(())
 }
 
-fn validate_spark_fixed_commitments<EF>(
-    proof: &SparkFixedOpeningProof<KeccakEngine<EF>, WhirPcs>,
-    expected: &SparkFixedCommitments,
+fn validate_spark_fixed_commitments<E, EF>(
+    proof: &SparkFixedOpeningProof<E, WhirPcs>,
+    expected: &SparkFixedCommitments<<WhirPcs as MlePcs<E>>::Commitment>,
 ) -> Result<(), SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
+    <WhirPcs as MlePcs<E>>::Commitment: Copy + PartialEq,
 {
     let actual = SparkFixedCommitments {
         value: proof.value_commitment,
@@ -2004,12 +2161,14 @@ where
     Ok(())
 }
 
-fn validate_spark_read_opening_shape<EF>(
+fn validate_spark_read_opening_shape<E, EF>(
     config: &WhirPcsConfig,
-    proof: &SparkReadOpeningProof<KeccakEngine<EF>, WhirPcs>,
+    proof: &SparkReadOpeningProof<E, WhirPcs>,
 ) -> Result<(), SpartanWhirError>
 where
     EF: ExtField,
+    E: ProtocolWhirEngine<EF = EF>,
+    WhirPcs: MlePcs<E, Config = WhirPcsConfig>,
 {
     if proof.num_variables != config.num_variables
         || proof.column_bits != read_column_bits::<EF>()

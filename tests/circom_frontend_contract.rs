@@ -34,7 +34,7 @@ fn prove_and_verify(
             .expect("setup succeeds");
     assert_eq!(pk.num_vars_unpadded, witness.w.len());
 
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
         &pk,
         public_inputs,
@@ -43,7 +43,7 @@ fn prove_and_verify(
     )
     .expect("prove succeeds");
 
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     assert_eq!(
         SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
             &vk,
@@ -102,7 +102,7 @@ fn proves_and_verifies_real_generated_tiny_fixture() {
 
     let mut bad_witness = witness.clone();
     bad_witness.w.push(F::ZERO);
-    let mut bad_challenger = spartan_whir::new_keccak_challenger();
+    let mut bad_challenger = spartan_whir::keccak_challenger();
     assert!(matches!(
         SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
             &pk,

@@ -114,7 +114,7 @@ fn prove_and_verify(
     );
 
     let prove_start = Instant::now();
-    let mut prover_challenger = spartan_whir::new_keccak_challenger();
+    let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
         &pk,
         &public_inputs,
@@ -126,7 +126,7 @@ fn prove_and_verify(
     println!("prove: elapsed_ms={}", prove_start.elapsed().as_millis());
 
     let verify_start = Instant::now();
-    let mut verifier_challenger = spartan_whir::new_keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
     SpartanProtocol::<KeccakEngine, WhirPcs>::verify_with_mode(
         &vk,
         &instance,

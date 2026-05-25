@@ -29,7 +29,7 @@ use p3_field::integers::QuotientMap;
 use p3_field::PrimeCharacteristicRing;
 use p3_koala_bear::KoalaBear;
 use p3_maybe_rayon::prelude::*;
-use spartan_whir::new_keccak_challenger;
+use spartan_whir::keccak_challenger;
 
 fn parse_list(var: &str, default: &[u32]) -> Vec<u32> {
     match env::var(var) {
@@ -98,7 +98,7 @@ fn main() {
     // different keccak path. The exact seed does not matter for rate.
     let make_cha = || {
         use p3_challenger::CanObserve;
-        let mut cha = new_keccak_challenger();
+        let mut cha = keccak_challenger();
         // Seed with 16 base-field elements so the inner Keccak buffer state is
         // representative of a mid-protocol challenger, not an empty one.
         for i in 0..16u32 {
