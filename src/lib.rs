@@ -43,8 +43,8 @@ pub use circom::{
     import_witness_bytes_with_layout as import_circom_witness_bytes_with_layout,
     import_witness_path as import_circom_witness_path,
     import_witness_values as import_circom_witness_values,
-    import_witness_values_with_layout as import_circom_witness_values_with_layout, CircomR1cs,
-    ImportedWitness,
+    import_witness_values_with_layout as import_circom_witness_values_with_layout,
+    validate_satisfaction as validate_circom_satisfaction, CircomR1cs, ImportedWitness,
 };
 #[cfg(feature = "whir-p3-backend")]
 pub use codec::{
@@ -86,7 +86,10 @@ pub use poly::{
 };
 pub use poseidon::{setup_poseidon, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig};
 #[cfg(feature = "circom")]
-pub use poseidon::{PoseidonWitnessGenerator, PoseidonWitnessGeneratorError};
+pub use poseidon::{
+    LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
+    PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,
+};
 #[cfg(feature = "whir-p3-backend")]
 pub use profiling::profile_spartan_blob_v1;
 pub use profiling::{

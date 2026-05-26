@@ -19,6 +19,20 @@ targets:
 
 The Circom frontend circuits are written over KoalaBear in both cases.
 
+#### Poseidon Deployment Witness Generation
+
+The Poseidon deployment API uses a linked native witness generator. A
+`PoseidonWitnessGenerator` loads a circuit `.dat` payload once through the
+linked loader and stores the returned circuit handle plus FFI function pointers.
+`PoseidonProvingKey::prove_from_witness_generator` passes an application-defined
+binary input buffer into the linked function, which fills private/internal
+witness and public-value buffers directly as canonical KoalaBear `u32` values.
+
+Public values are ordered as `public_outputs || public_inputs`, matching the
+Circom R1CS wire layout. The witness buffer contains witness columns only.
+Rust validates R1CS satisfaction before proving. The path has no JSON file,
+`.wtns` file, subprocess, or witness re-import.
+
 ## Keccak Backend
 
 The Keccak backend is enabled with the `whir-p3-backend` Cargo feature.

@@ -8,21 +8,34 @@ use std::{
     time::Instant,
 };
 
+use libloading::Library;
 use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_paths, compare_spark_layouts, engine::F, KeccakQuarticEngine, MatrixClosingMode,
-    PoseidonQuarticEngine, PoseidonSpartanProtocol, QuarticBinExtension, R1csShape, R1csWitness,
-    SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig,
-    SumcheckStrategy, WhirParams, WhirPcs, WhirPcsConfig,
+    circom::import_r1cs_path, compare_spark_layouts, engine::F, KeccakQuarticEngine,
+    MatrixClosingMode, OcticBinExtension, PoseidonOcticEngine, PoseidonSpartanProtocol,
+    PoseidonWitnessGenerator, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
+    SpartanProtocol, SpartanSnarkConfig, SumcheckStrategy, WhirParams, WhirPcs, WhirPcsConfig,
 };
 
 const DEFAULT_SIZES: &[usize] = &[128, 256, 512, 1024, 2048];
+const POSEIDON_DIRECT_SCHEDULE: &str = "octic_constant_pow0_ff8_lir1_rsv8";
+const POSEIDON_DIRECT_FOLDING_FACTOR: usize = 8;
+const POSEIDON_DIRECT_STARTING_LOG_INV_RATE: usize = 1;
+const POSEIDON_DIRECT_RS_REDUCTION_FACTOR: usize = 8;
+const POSEIDON_SECURITY_BITS: u32 = 128;
 
 #[derive(Debug)]
 struct ArtifactPaths {
     r1cs: PathBuf,
-    wtns: PathBuf,
+    linked_library: PathBuf,
+    circuit_data: Vec<u8>,
+    run_name: String,
+}
+
+struct LoadedWitnessGenerator {
+    generator: PoseidonWitnessGenerator,
+    _library: Library,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -36,7 +49,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let modes = parse_modes()?;
     let repeats = parse_repeats()?;
 
-    println!("security: 80-bit (demo)");
+    println!("security: {POSEIDON_SECURITY_BITS}-bit JohnsonBound");
+    println!("poseidon_direct_schedule: {POSEIDON_DIRECT_SCHEDULE}");
     println!("sizes: {:?}", sizes);
     println!("engines: {:?}", engines);
     println!("modes: {:?}", modes);
@@ -86,28 +100,19 @@ fn run_size(
     println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
     spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
 
-    let input_path = size_workdir.join(format!("sha256_{size}b_input.json"));
-    write_input_json(&input_path, &message)?;
-
-    let witness_start = Instant::now();
-    run(Command::new(
-        size_workdir
-            .join(format!("sha256_{size}b_cpp"))
-            .join(format!("sha256_{size}b")),
-    )
-    .arg(&input_path)
-    .arg(&artifacts.wtns))?;
-    let witness_elapsed = witness_start.elapsed();
-    println!("witness_ms: {}", witness_elapsed.as_millis());
-    spartan_whir::profiling::record_profile_phase("witness_generation", witness_elapsed);
-
     let import_start = Instant::now();
-    let (shape, witness, public_inputs) = import_paths(&artifacts.r1cs, &artifacts.wtns)?;
+    let circom = import_r1cs_path(&artifacts.r1cs)?;
+    let shape = circom.shape;
+    let input_binary = input_binary(&message);
+    let loaded_generator = load_linked_witness_generator(&artifacts)?;
     let import_elapsed = import_start.elapsed();
-    println!("import_ms: {}", import_elapsed.as_millis());
-    spartan_whir::profiling::record_profile_phase("circom_import", import_elapsed);
+    println!("shape_import_ms: {}", import_elapsed.as_millis());
+    spartan_whir::profiling::record_profile_phase("circom_shape_import", import_elapsed);
 
-    let actual_digest_bits = public_digest_bits(&public_inputs)?;
+    let (_validation_witness, validation_public_inputs) = loaded_generator
+        .generator
+        .generate_witness(&input_binary, shape.num_vars, shape.num_io)?;
+    let actual_digest_bits = public_digest_bits(&validation_public_inputs)?;
     let expected_digest_bits = expected_digest_bits(&expected_digest);
     if actual_digest_bits != expected_digest_bits {
         return Err(format!("digest mismatch for {size}B circuit").into());
@@ -120,7 +125,7 @@ fn run_size(
         shape.num_cons,
         shape.num_cons / blocks,
         shape.num_vars,
-        public_inputs.len()
+        validation_public_inputs.len()
     );
 
     let padded_shape = shape
@@ -149,12 +154,12 @@ fn run_size(
                 match mode {
                     BenchMode::Direct => prove_and_verify(
                         engine,
-                        "direct_sparse_no_spark",
+                        "direct_sparse_octic_constant_pow0_ff8_lir1_rsv8",
                         MatrixClosingMode::DirectSparse,
-                        1,
+                        POSEIDON_DIRECT_FOLDING_FACTOR,
                         &shape,
-                        &witness,
-                        &public_inputs,
+                        &loaded_generator.generator,
+                        &input_binary,
                     )?,
                     BenchMode::Spark => {
                         let spark_folding_factor =
@@ -165,8 +170,8 @@ fn run_size(
                             MatrixClosingMode::Spark,
                             spark_folding_factor,
                             &shape,
-                            &witness,
-                            &public_inputs,
+                            &loaded_generator.generator,
+                            &input_binary,
                         )?;
                     }
                 }
@@ -199,24 +204,21 @@ fn generate_circom_artifacts(
         .arg(workdir))?;
 
     let cpp_dir = workdir.join(format!("sha256_{size}b_cpp"));
-    let mut make = Command::new("make");
-    make.arg("-C").arg(&cpp_dir);
-    pass_make_override(&mut make, "CC");
-    pass_make_override(&mut make, "CFLAGS");
-    pass_make_override(&mut make, "CXXFLAGS");
-    apply_default_gmp_search_paths(&mut make);
-    run(&mut make)?;
+    let linked_library = workdir.join(dynamic_library_name(size));
+    build_linked_witness_library(&cpp_dir, size, &linked_library)?;
+    let circuit_data = fs::read(cpp_dir.join(format!("sha256_{size}b.dat")))?;
 
     Ok(ArtifactPaths {
         r1cs: workdir.join(format!("sha256_{size}b.r1cs")),
-        wtns: workdir.join(format!("sha256_{size}b.wtns")),
+        linked_library,
+        circuit_data,
+        run_name: format!("sha256_{size}b"),
     })
 }
 
 fn clear_previous_outputs(workdir: &Path, size: usize) -> Result<(), Box<dyn Error>> {
     remove_file_if_exists(&workdir.join(format!("sha256_{size}b.r1cs")))?;
-    remove_file_if_exists(&workdir.join(format!("sha256_{size}b.wtns")))?;
-    remove_file_if_exists(&workdir.join(format!("sha256_{size}b_input.json")))?;
+    remove_file_if_exists(&workdir.join(dynamic_library_name(size)))?;
 
     let cpp_dir = workdir.join(format!("sha256_{size}b_cpp"));
     match fs::remove_dir_all(&cpp_dir) {
@@ -226,14 +228,91 @@ fn clear_previous_outputs(workdir: &Path, size: usize) -> Result<(), Box<dyn Err
     }
 }
 
+fn build_linked_witness_library(
+    cpp_dir: &Path,
+    size: usize,
+    output: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let cxx = env::var_os("CXX").unwrap_or_else(|| OsString::from("c++"));
+    let mut command = Command::new(cxx);
+    command
+        .arg("-std=c++11")
+        .arg("-O3")
+        .arg("-fPIC")
+        .arg("-fvisibility=hidden")
+        .arg("-UNDEBUG")
+        .arg("-DCIRCOM_LINKED_WITNESS_ONLY")
+        .arg("-I")
+        .arg(cpp_dir)
+        .arg(cpp_dir.join("calcwit.cpp"))
+        .arg(cpp_dir.join("fr.cpp"))
+        .arg(cpp_dir.join("main.cpp"))
+        .arg(cpp_dir.join(format!("sha256_{size}b.cpp")));
+    add_include_path_if_exists(&mut command, Path::new("/opt/homebrew/include"), "gmp.h");
+    add_include_path_if_exists(&mut command, Path::new("/usr/local/include"), "gmp.h");
+    match env::consts::OS {
+        "macos" | "ios" => {
+            command.arg("-dynamiclib").arg(format!(
+                "-Wl,-install_name,@rpath/{}",
+                output.file_name().unwrap().to_str().unwrap()
+            ));
+        }
+        _ => {
+            command.arg("-shared");
+        }
+    }
+    run(command.arg("-o").arg(output))
+}
+
+fn add_include_path_if_exists(command: &mut Command, dir: &Path, marker: &str) {
+    if dir.join(marker).exists() {
+        command.arg("-I").arg(dir);
+    }
+}
+
+fn load_linked_witness_generator(
+    artifacts: &ArtifactPaths,
+) -> Result<LoadedWitnessGenerator, Box<dyn Error>> {
+    let library = unsafe { Library::new(&artifacts.linked_library)? };
+    let mut load_symbol = format!("{}_load_circuit", artifacts.run_name).into_bytes();
+    load_symbol.push(0);
+    let mut generate_symbol = format!("{}_linked_witness", artifacts.run_name).into_bytes();
+    generate_symbol.push(0);
+    let mut free_symbol = format!("{}_free_circuit", artifacts.run_name).into_bytes();
+    free_symbol.push(0);
+    let load = unsafe { *library.get::<spartan_whir::LinkedWitnessLoadCircuitFn>(&load_symbol)? };
+    let generate =
+        unsafe { *library.get::<spartan_whir::LinkedWitnessGeneratorFn>(&generate_symbol)? };
+    let free = unsafe { *library.get::<spartan_whir::LinkedWitnessFreeCircuitFn>(&free_symbol)? };
+    let generator = PoseidonWitnessGenerator::linked(
+        "sha256_circom_bench",
+        &artifacts.circuit_data,
+        load,
+        generate,
+        free,
+    )?;
+    Ok(LoadedWitnessGenerator {
+        generator,
+        _library: library,
+    })
+}
+
+fn dynamic_library_name(size: usize) -> String {
+    format!(
+        "{}sha256_{size}b_witness.{}",
+        env::consts::DLL_PREFIX,
+        env::consts::DLL_EXTENSION
+    )
+}
+
 fn prove_and_verify(
     engine: BenchEngine,
     label: &str,
     matrix_closing: MatrixClosingMode,
     folding_factor: usize,
     shape: &R1csShape<F>,
-    witness: &R1csWitness<F>,
-    public_inputs: &[F],
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     match engine {
         BenchEngine::Poseidon => prove_and_verify_poseidon(
@@ -241,24 +320,24 @@ fn prove_and_verify(
             matrix_closing,
             folding_factor,
             shape,
-            witness,
-            public_inputs,
+            generator,
+            input_binary,
         ),
         BenchEngine::PoseidonPlonky3 => prove_and_verify_poseidon_plonky3(
             label,
             matrix_closing,
             folding_factor,
             shape,
-            witness,
-            public_inputs,
+            generator,
+            input_binary,
         ),
         BenchEngine::Keccak => prove_and_verify_keccak(
             label,
             matrix_closing,
             folding_factor,
             shape,
-            witness,
-            public_inputs,
+            generator,
+            input_binary,
         ),
     }
 }
@@ -268,10 +347,10 @@ fn prove_and_verify_poseidon_plonky3(
     matrix_closing: MatrixClosingMode,
     folding_factor: usize,
     shape: &R1csShape<F>,
-    witness: &R1csWitness<F>,
-    public_inputs: &[F],
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
-    type Protocol = PoseidonSpartanProtocol<QuarticBinExtension>;
+    type Protocol = PoseidonSpartanProtocol<OcticBinExtension>;
 
     let _profile_context =
         spartan_whir::profiling::set_profile_context("poseidon-plonky3-whir", label);
@@ -285,11 +364,13 @@ fn prove_and_verify_poseidon_plonky3(
 
     let prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let (witness, public_inputs) =
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = Protocol::prove_with_mode(
         &pk,
-        public_inputs,
-        witness,
+        &public_inputs,
+        &witness,
         matrix_closing,
         &mut prover_challenger,
     )
@@ -316,26 +397,28 @@ fn prove_and_verify_poseidon(
     matrix_closing: MatrixClosingMode,
     folding_factor: usize,
     shape: &R1csShape<F>,
-    witness: &R1csWitness<F>,
-    public_inputs: &[F],
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     let _profile_context = spartan_whir::profiling::set_profile_context("poseidon", label);
     let config = protocol_config(matrix_closing, folding_factor);
     let setup_start = Instant::now();
     let _setup_profile = spartan_whir::profiling::profile_scope("setup");
     let (pk, vk) =
-        SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::setup_with_config(shape, &config)
+        SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::setup_with_config(shape, &config)
             .map_err(|err| format!("{label} setup failed: {err}"))?;
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
     let prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let (witness, public_inputs) =
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::poseidon_challenger();
-    let (instance, proof) = SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::prove_with_mode(
+    let (instance, proof) = SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::prove_with_mode(
         &pk,
-        public_inputs,
-        witness,
+        &public_inputs,
+        &witness,
         matrix_closing,
         &mut prover_challenger,
     )
@@ -346,7 +429,7 @@ fn prove_and_verify_poseidon(
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
     let mut verifier_challenger = spartan_whir::poseidon_challenger();
-    SpartanProtocol::<PoseidonQuarticEngine, WhirPcs>::verify_with_mode(
+    SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::verify_with_mode(
         &vk,
         &instance,
         &proof,
@@ -367,8 +450,8 @@ fn prove_and_verify_keccak(
     matrix_closing: MatrixClosingMode,
     folding_factor: usize,
     shape: &R1csShape<F>,
-    witness: &R1csWitness<F>,
-    public_inputs: &[F],
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     let _profile_context = spartan_whir::profiling::set_profile_context("keccak", label);
     let config = protocol_config(matrix_closing, folding_factor);
@@ -382,11 +465,13 @@ fn prove_and_verify_keccak(
 
     let prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let (witness, public_inputs) =
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::prove_with_mode(
         &pk,
-        public_inputs,
-        witness,
+        &public_inputs,
+        &witness,
         matrix_closing,
         &mut prover_challenger,
     )
@@ -411,54 +496,6 @@ fn prove_and_verify_keccak(
         "engine: keccak mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
-}
-
-fn pass_make_override(make: &mut Command, name: &str) {
-    if let Some(value) = env::var_os(name) {
-        let mut arg = OsString::from(name);
-        arg.push("=");
-        arg.push(value);
-        make.arg(arg);
-    }
-}
-
-fn apply_default_gmp_search_paths(command: &mut Command) {
-    add_env_path_if_exists(
-        command,
-        "CPATH",
-        Path::new("/opt/homebrew/include"),
-        "gmp.h",
-    );
-    add_env_path_if_exists(command, "CPATH", Path::new("/usr/local/include"), "gmp.h");
-    add_env_path_if_exists(
-        command,
-        "LIBRARY_PATH",
-        Path::new("/opt/homebrew/lib"),
-        "libgmp.dylib",
-    );
-    add_env_path_if_exists(
-        command,
-        "LIBRARY_PATH",
-        Path::new("/usr/local/lib"),
-        "libgmp.dylib",
-    );
-}
-
-fn add_env_path_if_exists(command: &mut Command, var: &str, dir: &Path, marker: &str) {
-    if !dir.join(marker).exists() {
-        return;
-    }
-
-    let mut paths: Vec<PathBuf> = env::var_os(var)
-        .map(|value| env::split_paths(&value).collect())
-        .unwrap_or_default();
-    if paths.iter().any(|path| path == dir) {
-        return;
-    }
-    paths.push(dir.to_path_buf());
-    if let Ok(joined) = env::join_paths(paths) {
-        command.env(var, joined);
-    }
 }
 
 fn run(command: &mut Command) -> Result<(), Box<dyn Error>> {
@@ -586,21 +623,15 @@ fn reference_message(size: usize) -> Vec<u8> {
         .collect()
 }
 
-fn write_input_json(path: &Path, message: &[u8]) -> Result<(), Box<dyn Error>> {
-    let mut out = String::from("{\"in\":[");
-    for (i, bit) in message
+fn input_binary(message: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(message.len() * 8 * core::mem::size_of::<u32>());
+    for bit in message
         .iter()
-        .flat_map(|byte| (0..8).rev().map(move |bit| (byte >> bit) & 1))
-        .enumerate()
+        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from((byte >> bit) & 1)))
     {
-        if i != 0 {
-            out.push(',');
-        }
-        out.push(char::from(b'0' + bit));
+        out.extend_from_slice(&bit.to_le_bytes());
     }
-    out.push_str("]}\n");
-    fs::write(path, out)?;
-    Ok(())
+    out
 }
 
 fn expected_digest_bits(digest: &[u8]) -> Vec<u8> {
@@ -644,15 +675,19 @@ fn spark_folding_factor(value_domain_size: usize) -> Result<usize, Box<dyn Error
 
 fn protocol_config(matrix_closing: MatrixClosingMode, folding_factor: usize) -> SpartanSnarkConfig {
     let security = SecurityConfig {
-        security_level_bits: 80,
-        merkle_security_bits: 80,
-        soundness_assumption: SoundnessAssumption::CapacityBound,
+        security_level_bits: POSEIDON_SECURITY_BITS,
+        merkle_security_bits: POSEIDON_SECURITY_BITS,
+        soundness_assumption: SoundnessAssumption::JohnsonBound,
+    };
+    let rs_domain_initial_reduction_factor = match matrix_closing {
+        MatrixClosingMode::DirectSparse => POSEIDON_DIRECT_RS_REDUCTION_FACTOR,
+        MatrixClosingMode::Spark => 1,
     };
     let whir_params = WhirParams {
         pow_bits: 0,
         folding_factor,
-        starting_log_inv_rate: 1,
-        rs_domain_initial_reduction_factor: 1,
+        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
+        rs_domain_initial_reduction_factor,
         ..WhirParams::default()
     };
     SpartanSnarkConfig {

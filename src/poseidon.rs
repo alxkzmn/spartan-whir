@@ -118,69 +118,119 @@ where
 
 #[cfg(feature = "circom")]
 mod witness_generator {
-    use alloc::string::{String, ToString};
-    use core::fmt;
-    use std::{
-        fs,
-        io::{ErrorKind, Read},
-        path::{Path, PathBuf},
-        process::{Command, Stdio},
-        thread,
-        time::{Duration, Instant},
+    use alloc::{string::String, vec};
+    use core::{
+        ffi::{c_int, c_void},
+        fmt,
+        ptr::NonNull,
     };
-    use tempfile::TempDir;
+    use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::circom::{import_witness_bytes_with_layout, CircomAdapterError};
+    use crate::circom::{validate_satisfaction, CircomAdapterError, KOALABEAR_MODULUS};
 
-    const DEFAULT_TIMEOUT_MILLIS: u64 = 30_000;
-    const DEFAULT_MAX_WITNESS_BYTES: u64 = 1 << 30;
+    pub const LINKED_WITNESS_GENERATOR_OK: c_int = 0;
 
-    /// Native Circom witness generator handle.
+    /// Linked witness-generator circuit loader ABI.
     ///
-    /// The executable is invoked as:
+    /// `circuit_ptr/circuit_len` is the linked Circom `.dat` payload. Return
+    /// an opaque non-null circuit handle on success, or null on failure after
+    /// optionally writing a UTF-8, nul-terminated error message to `error_msg`.
+    pub type LinkedWitnessLoadCircuitFn = unsafe extern "C" fn(
+        circuit_ptr: *const u8,
+        circuit_len: usize,
+        error_msg: *mut u8,
+        error_msg_len: usize,
+    ) -> *mut c_void;
+
+    /// Linked witness-generator circuit release ABI.
+    pub type LinkedWitnessFreeCircuitFn = unsafe extern "C" fn(circuit: *mut c_void);
+
+    /// Linked witness-generator ABI.
     ///
-    /// ```text
-    /// executable input.json output.wtns
-    /// ```
+    /// `circuit` is the opaque handle returned by `LinkedWitnessLoadCircuitFn`.
+    /// `input_ptr/input_len` is an application-defined binary input buffer. The
+    /// generator writes exactly `witness_len` private/internal witness values
+    /// and `public_inputs_len` public values, all as canonical KoalaBear `u32`
+    /// limbs. Public values must be ordered as Circom exposes them:
+    /// `public_outputs || public_inputs`.
     ///
-    /// `input.json` is written into a private temporary directory and
-    /// `output.wtns` is read back after the process exits successfully.
-    /// Proving from this generator blocks the calling thread until the
-    /// generator exits or the configured timeout elapses.
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    /// Return `LINKED_WITNESS_GENERATOR_OK` on success. On failure, return a
+    /// non-zero code and optionally write a UTF-8, nul-terminated error message
+    /// into `error_msg`.
+    pub type LinkedWitnessGeneratorFn = unsafe extern "C" fn(
+        circuit: *mut c_void,
+        input_ptr: *const u8,
+        input_len: usize,
+        witness_ptr: *mut u32,
+        witness_len: usize,
+        public_inputs_ptr: *mut u32,
+        public_inputs_len: usize,
+        error_msg: *mut u8,
+        error_msg_len: usize,
+    ) -> c_int;
+
+    /// Linked native witness generator handle.
     pub struct PoseidonWitnessGenerator {
-        executable: String,
-        timeout_millis: u64,
-        max_witness_bytes: u64,
+        name: &'static str,
+        circuit: NonNull<c_void>,
+        generate: LinkedWitnessGeneratorFn,
+        free: LinkedWitnessFreeCircuitFn,
     }
+
+    // The generated witness function allocates a fresh Circom_CalcWit per call.
+    // The shared circuit handle is read-only after loading.
+    unsafe impl Send for PoseidonWitnessGenerator {}
+    unsafe impl Sync for PoseidonWitnessGenerator {}
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum PoseidonWitnessGeneratorError {
-        Io { kind: ErrorKind, message: String },
-        Timeout { timeout_millis: u64 },
-        WitnessTooLarge { max_bytes: u64, actual_bytes: u64 },
-        ProcessFailed { status: Option<i32> },
+        CircuitLoadFailed {
+            name: &'static str,
+            message: String,
+        },
+        GeneratorFailed {
+            name: &'static str,
+            code: c_int,
+            message: String,
+        },
+        InvalidFieldElement {
+            value: u32,
+        },
         Circom(CircomAdapterError),
         Protocol(SpartanWhirError),
+    }
+
+    impl fmt::Debug for PoseidonWitnessGenerator {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PoseidonWitnessGenerator")
+                .field("name", &self.name)
+                .finish_non_exhaustive()
+        }
     }
 
     impl fmt::Display for PoseidonWitnessGeneratorError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
-                Self::Io { kind, message } => write!(f, "I/O error ({kind:?}): {message}"),
-                Self::Timeout { timeout_millis } => {
-                    write!(f, "witness generator timed out after {timeout_millis} ms")
+                Self::CircuitLoadFailed { name, message } => {
+                    write!(
+                        f,
+                        "linked witness generator {name} failed to load circuit: {message}"
+                    )
                 }
-                Self::WitnessTooLarge {
-                    max_bytes,
-                    actual_bytes,
+                Self::GeneratorFailed {
+                    name,
+                    code,
+                    message,
                 } => write!(
                     f,
-                    "witness output is too large: max {max_bytes} bytes, got {actual_bytes}"
+                    "linked witness generator {name} failed with code {code}: {message}"
                 ),
-                Self::ProcessFailed { status } => {
-                    write!(f, "witness generator failed with status {status:?}")
+                Self::InvalidFieldElement { value } => {
+                    write!(
+                        f,
+                        "linked witness generator returned non-canonical field element {value}"
+                    )
                 }
                 Self::Circom(error) => write!(f, "Circom witness import failed: {error}"),
                 Self::Protocol(error) => write!(f, "Poseidon proof failed: {error:?}"),
@@ -189,15 +239,6 @@ mod witness_generator {
     }
 
     impl std::error::Error for PoseidonWitnessGeneratorError {}
-
-    impl From<std::io::Error> for PoseidonWitnessGeneratorError {
-        fn from(value: std::io::Error) -> Self {
-            Self::Io {
-                kind: value.kind(),
-                message: value.to_string(),
-            }
-        }
-    }
 
     impl From<CircomAdapterError> for PoseidonWitnessGeneratorError {
         fn from(value: CircomAdapterError) -> Self {
@@ -212,89 +253,106 @@ mod witness_generator {
     }
 
     impl PoseidonWitnessGenerator {
-        pub fn native_executable(path: impl Into<PathBuf>) -> Self {
-            let path = path.into();
-            Self {
-                executable: path.to_string_lossy().into_owned(),
-                timeout_millis: DEFAULT_TIMEOUT_MILLIS,
-                max_witness_bytes: DEFAULT_MAX_WITNESS_BYTES,
-            }
-        }
-
-        pub fn executable(&self) -> &Path {
-            Path::new(&self.executable)
-        }
-
-        pub fn with_timeout(mut self, timeout: Duration) -> Self {
-            self.timeout_millis = timeout.as_millis().try_into().unwrap_or(u64::MAX);
-            self
-        }
-
-        pub fn with_max_witness_bytes(mut self, max_witness_bytes: u64) -> Self {
-            self.max_witness_bytes = max_witness_bytes;
-            self
-        }
-
-        fn generate_witness(
-            &self,
-            input: impl AsRef<[u8]>,
-        ) -> Result<Vec<u8>, PoseidonWitnessGeneratorError> {
-            let tempdir = TempDir::new()?;
-            let input_path = tempdir.path().join("input.json");
-            let witness_path = tempdir.path().join("witness.wtns");
-
-            fs::write(&input_path, input)?;
-            let mut child = Command::new(&self.executable)
-                .arg(&input_path)
-                .arg(&witness_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
-            let timeout = Duration::from_millis(self.timeout_millis);
-            let started = Instant::now();
-            let status = loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break status,
-                    Ok(None) => {}
-                    Err(error) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(error.into());
-                    }
-                }
-                if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(PoseidonWitnessGeneratorError::Timeout {
-                        timeout_millis: self.timeout_millis,
-                    });
-                }
-                thread::sleep(Duration::from_millis(1));
+        pub fn linked(
+            name: &'static str,
+            circuit_data: &[u8],
+            load: LinkedWitnessLoadCircuitFn,
+            generate: LinkedWitnessGeneratorFn,
+            free: LinkedWitnessFreeCircuitFn,
+        ) -> Result<Self, PoseidonWitnessGeneratorError> {
+            let mut error_msg = vec![0u8; 512];
+            let circuit = unsafe {
+                load(
+                    circuit_data.as_ptr(),
+                    circuit_data.len(),
+                    error_msg.as_mut_ptr(),
+                    error_msg.len(),
+                )
             };
-            if !status.success() {
-                return Err(PoseidonWitnessGeneratorError::ProcessFailed {
-                    status: status.code(),
-                });
-            }
-
-            let actual_bytes = fs::metadata(&witness_path)?.len();
-            if actual_bytes > self.max_witness_bytes {
-                return Err(PoseidonWitnessGeneratorError::WitnessTooLarge {
-                    max_bytes: self.max_witness_bytes,
-                    actual_bytes,
-                });
-            }
-            let capacity: usize = actual_bytes.try_into().map_err(|_| {
-                PoseidonWitnessGeneratorError::WitnessTooLarge {
-                    max_bytes: self.max_witness_bytes,
-                    actual_bytes,
+            let circuit = NonNull::new(circuit).ok_or_else(|| {
+                PoseidonWitnessGeneratorError::CircuitLoadFailed {
+                    name,
+                    message: error_message(&error_msg),
                 }
             })?;
-            let mut witness = Vec::with_capacity(capacity);
-            fs::File::open(&witness_path)?.read_to_end(&mut witness)?;
-            Ok(witness)
+            Ok(Self {
+                name,
+                circuit,
+                generate,
+                free,
+            })
         }
+
+        pub const fn name(&self) -> &'static str {
+            self.name
+        }
+
+        pub fn generate_witness(
+            &self,
+            input: impl AsRef<[u8]>,
+            num_vars: usize,
+            num_io: usize,
+        ) -> Result<(R1csWitness<F>, Vec<F>), PoseidonWitnessGeneratorError> {
+            let input = input.as_ref();
+            let mut raw_witness = vec![0u32; num_vars];
+            let mut raw_public_inputs = vec![0u32; num_io];
+            let mut error_msg = vec![0u8; 512];
+            let code = unsafe {
+                (self.generate)(
+                    self.circuit.as_ptr(),
+                    input.as_ptr(),
+                    input.len(),
+                    raw_witness.as_mut_ptr(),
+                    raw_witness.len(),
+                    raw_public_inputs.as_mut_ptr(),
+                    raw_public_inputs.len(),
+                    error_msg.as_mut_ptr(),
+                    error_msg.len(),
+                )
+            };
+            if code != LINKED_WITNESS_GENERATOR_OK {
+                return Err(PoseidonWitnessGeneratorError::GeneratorFailed {
+                    name: self.name,
+                    code,
+                    message: error_message(&error_msg),
+                });
+            }
+
+            let public_inputs = raw_public_inputs
+                .into_iter()
+                .map(canonical_field)
+                .collect::<Result<Vec<_>, _>>()?;
+            let witness = R1csWitness {
+                w: raw_witness
+                    .into_iter()
+                    .map(canonical_field)
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            Ok((witness, public_inputs))
+        }
+    }
+
+    impl Drop for PoseidonWitnessGenerator {
+        fn drop(&mut self) {
+            unsafe {
+                (self.free)(self.circuit.as_ptr());
+            }
+        }
+    }
+
+    fn canonical_field(value: u32) -> Result<F, PoseidonWitnessGeneratorError> {
+        if value >= KOALABEAR_MODULUS {
+            return Err(PoseidonWitnessGeneratorError::InvalidFieldElement { value });
+        }
+        Ok(F::from_u32(value))
+    }
+
+    fn error_message(buffer: &[u8]) -> String {
+        let len = buffer
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(buffer.len());
+        String::from_utf8_lossy(&buffer[..len]).into_owned()
     }
 
     impl<Ext> crate::PoseidonProvingKey<Ext>
@@ -307,17 +365,16 @@ mod witness_generator {
             generator: &PoseidonWitnessGenerator,
             input: impl AsRef<[u8]>,
         ) -> Result<PoseidonProof<Ext>, PoseidonWitnessGeneratorError> {
-            let witness_bytes = generator.generate_witness(input)?;
-            let (witness, public_inputs) = import_witness_bytes_with_layout(
-                &self.shape_canonical,
-                self.num_vars_unpadded,
-                self.num_io,
-                &witness_bytes,
-            )?;
+            let (witness, public_inputs) =
+                generator.generate_witness(input, self.num_vars_unpadded, self.num_io)?;
+            validate_satisfaction(&self.shape_canonical, &witness, &public_inputs)?;
             self.prove(witness, public_inputs).map_err(Into::into)
         }
     }
 }
 
 #[cfg(feature = "circom")]
-pub use witness_generator::{PoseidonWitnessGenerator, PoseidonWitnessGeneratorError};
+pub use witness_generator::{
+    LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
+    PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,
+};

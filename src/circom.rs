@@ -149,6 +149,17 @@ pub fn import_witness_values_with_layout(
     num_io: usize,
     witness_values: Vec<F>,
 ) -> Result<ImportedWitness, CircomAdapterError> {
+    let (witness, public_inputs) =
+        split_witness_values_with_layout(num_vars, num_io, witness_values)?;
+    validate_satisfaction(validation_shape, &witness, &public_inputs)?;
+    Ok((witness, public_inputs))
+}
+
+fn split_witness_values_with_layout(
+    num_vars: usize,
+    num_io: usize,
+    witness_values: Vec<F>,
+) -> Result<ImportedWitness, CircomAdapterError> {
     let expected = num_vars
         .checked_add(num_io)
         .and_then(|n| n.checked_add(1))
@@ -166,7 +177,6 @@ pub fn import_witness_values_with_layout(
     let witness = R1csWitness {
         w: witness_values[one_plus_io..].to_vec(),
     };
-    validate_satisfaction(validation_shape, &witness, &public_inputs)?;
     Ok((witness, public_inputs))
 }
 
@@ -250,7 +260,11 @@ fn build_circom_r1cs(r1cs: ParsedR1cs) -> Result<CircomR1cs, CircomAdapterError>
     })
 }
 
-fn validate_satisfaction(
+/// Validate an imported Circom witness against a Spartan-WHIR R1CS shape.
+///
+/// `shape` may be the padded shape stored in a proving key. The witness may be
+/// unpadded; it is zero-padded to `shape.num_vars` before matrix evaluation.
+pub fn validate_satisfaction(
     shape: &R1csShape<F>,
     witness: &R1csWitness<F>,
     public_inputs: &[F],

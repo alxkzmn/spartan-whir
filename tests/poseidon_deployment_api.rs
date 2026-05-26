@@ -119,19 +119,12 @@ fn poseidon_spark_proving_key_is_serializable() {
     assert_eq!(vk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
 }
 
-#[cfg(all(feature = "circom", unix))]
+#[cfg(feature = "circom")]
 #[test]
-fn poseidon_can_prove_from_native_witness_generator() {
-    use std::time::Duration;
-    use std::{fs, os::unix::fs::PermissionsExt};
-    use tempfile::TempDir;
-
-    use spartan_whir::{
-        circom::import_r1cs_bytes, PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
-    };
+fn poseidon_can_prove_from_linked_witness_generator() {
+    use spartan_whir::{circom::import_r1cs_bytes, PoseidonWitnessGenerator};
 
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
-    const TINY_WTNS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.wtns");
 
     let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
     let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
@@ -140,33 +133,229 @@ fn poseidon_can_prove_from_native_witness_generator() {
     )
     .expect("setup succeeds");
 
-    let dir = TempDir::new().expect("temp dir created");
-    let wtns_path = dir.path().join("fixture.wtns");
-    let script_path = dir.path().join("witness.sh");
-    fs::write(&wtns_path, TINY_WTNS).expect("wtns fixture written");
-    fs::write(
-        &script_path,
-        format!("#!/bin/sh\ncp '{}' \"$2\"\n", wtns_path.display()),
+    let generator = PoseidonWitnessGenerator::linked(
+        "tiny_arithmetic",
+        b"tiny.dat",
+        tiny_load_circuit,
+        tiny_arithmetic_witness,
+        tiny_free_circuit,
     )
-    .expect("script written");
-    let mut permissions = fs::metadata(&script_path)
-        .expect("script metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions).expect("script executable");
-
-    let too_small_generator = PoseidonWitnessGenerator::native_executable(&script_path)
-        .with_timeout(Duration::from_secs(5))
-        .with_max_witness_bytes(1);
-    assert!(matches!(
-        pk.prove_from_witness_generator(&too_small_generator, b"{}"),
-        Err(PoseidonWitnessGeneratorError::WitnessTooLarge { .. })
-    ));
-
-    let generator = PoseidonWitnessGenerator::native_executable(&script_path)
-        .with_timeout(Duration::from_secs(5));
+    .expect("linked generator loads circuit");
     let proof = pk
-        .prove_from_witness_generator(&generator, b"{}")
+        .prove_from_witness_generator(&generator, b"\x05")
         .expect("prove from witness generator succeeds");
     vk.verify(&proof).expect("proof verifies");
+}
+
+#[cfg(feature = "circom")]
+#[test]
+fn linked_witness_generator_errors_are_reported() {
+    use spartan_whir::{
+        circom::import_r1cs_bytes, PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
+    };
+
+    const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
+
+    let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
+    let (pk, _vk) = setup_poseidon::<QuarticBinExtension>(
+        circom.shape,
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+
+    let failing = PoseidonWitnessGenerator::linked(
+        "failing",
+        b"tiny.dat",
+        tiny_load_circuit,
+        failing_witness,
+        tiny_free_circuit,
+    )
+    .expect("linked generator loads circuit");
+    assert!(matches!(
+        pk.prove_from_witness_generator(&failing, b""),
+        Err(PoseidonWitnessGeneratorError::GeneratorFailed {
+            name: "failing",
+            code: 7,
+            ..
+        })
+    ));
+
+    let noncanonical = PoseidonWitnessGenerator::linked(
+        "noncanonical",
+        b"tiny.dat",
+        tiny_load_circuit,
+        noncanonical_tiny_arithmetic_witness,
+        tiny_free_circuit,
+    )
+    .expect("linked generator loads circuit");
+    assert!(matches!(
+        pk.prove_from_witness_generator(&noncanonical, b"\x05"),
+        Err(PoseidonWitnessGeneratorError::InvalidFieldElement { .. })
+    ));
+}
+
+#[cfg(feature = "circom")]
+#[test]
+fn linked_witness_generator_rejects_unsatisfied_witness() {
+    use spartan_whir::{
+        circom::{import_r1cs_bytes, CircomAdapterError},
+        PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
+    };
+
+    const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
+
+    let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
+    let (pk, _vk) = setup_poseidon::<QuarticBinExtension>(
+        circom.shape,
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+
+    let bad = PoseidonWitnessGenerator::linked(
+        "bad_satisfaction",
+        b"tiny.dat",
+        tiny_load_circuit,
+        bad_satisfaction_witness,
+        tiny_free_circuit,
+    )
+    .expect("linked generator loads circuit");
+    assert!(matches!(
+        pk.prove_from_witness_generator(&bad, b"\x05"),
+        Err(PoseidonWitnessGeneratorError::Circom(
+            CircomAdapterError::UnsatisfiedConstraint { .. }
+        ))
+    ));
+}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn tiny_load_circuit(
+    circuit_ptr: *const u8,
+    circuit_len: usize,
+    error_msg: *mut u8,
+    error_msg_len: usize,
+) -> *mut core::ffi::c_void {
+    if circuit_len == 8 && core::slice::from_raw_parts(circuit_ptr, circuit_len) == b"tiny.dat" {
+        1usize as *mut core::ffi::c_void
+    } else {
+        write_error(error_msg, error_msg_len, b"unexpected circuit data");
+        core::ptr::null_mut()
+    }
+}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn tiny_free_circuit(_circuit: *mut core::ffi::c_void) {}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn tiny_arithmetic_witness(
+    circuit: *mut core::ffi::c_void,
+    input_ptr: *const u8,
+    input_len: usize,
+    witness_ptr: *mut u32,
+    witness_len: usize,
+    public_inputs_ptr: *mut u32,
+    public_inputs_len: usize,
+    error_msg: *mut u8,
+    error_msg_len: usize,
+) -> i32 {
+    if circuit.is_null()
+        || input_len != 1
+        || *input_ptr != 5
+        || witness_len != 1
+        || public_inputs_len != 2
+    {
+        write_error(
+            error_msg,
+            error_msg_len,
+            b"unexpected linked witness ABI inputs",
+        );
+        return 1;
+    }
+    *witness_ptr = 7;
+    *public_inputs_ptr.add(0) = 47;
+    *public_inputs_ptr.add(1) = 5;
+    spartan_whir::LINKED_WITNESS_GENERATOR_OK
+}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn noncanonical_tiny_arithmetic_witness(
+    circuit: *mut core::ffi::c_void,
+    input_ptr: *const u8,
+    input_len: usize,
+    witness_ptr: *mut u32,
+    witness_len: usize,
+    public_inputs_ptr: *mut u32,
+    public_inputs_len: usize,
+    error_msg: *mut u8,
+    error_msg_len: usize,
+) -> i32 {
+    let code = tiny_arithmetic_witness(
+        circuit,
+        input_ptr,
+        input_len,
+        witness_ptr,
+        witness_len,
+        public_inputs_ptr,
+        public_inputs_len,
+        error_msg,
+        error_msg_len,
+    );
+    if code == spartan_whir::LINKED_WITNESS_GENERATOR_OK {
+        *witness_ptr = spartan_whir::circom::KOALABEAR_MODULUS;
+    }
+    code
+}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn bad_satisfaction_witness(
+    circuit: *mut core::ffi::c_void,
+    input_ptr: *const u8,
+    input_len: usize,
+    witness_ptr: *mut u32,
+    witness_len: usize,
+    public_inputs_ptr: *mut u32,
+    public_inputs_len: usize,
+    error_msg: *mut u8,
+    error_msg_len: usize,
+) -> i32 {
+    let code = tiny_arithmetic_witness(
+        circuit,
+        input_ptr,
+        input_len,
+        witness_ptr,
+        witness_len,
+        public_inputs_ptr,
+        public_inputs_len,
+        error_msg,
+        error_msg_len,
+    );
+    if code == spartan_whir::LINKED_WITNESS_GENERATOR_OK {
+        *witness_ptr = 8;
+    }
+    code
+}
+
+#[cfg(feature = "circom")]
+unsafe extern "C" fn failing_witness(
+    _circuit: *mut core::ffi::c_void,
+    _input_ptr: *const u8,
+    _input_len: usize,
+    _witness_ptr: *mut u32,
+    _witness_len: usize,
+    _public_inputs_ptr: *mut u32,
+    _public_inputs_len: usize,
+    error_msg: *mut u8,
+    error_msg_len: usize,
+) -> i32 {
+    write_error(error_msg, error_msg_len, b"fixture failure");
+    7
+}
+
+#[cfg(feature = "circom")]
+unsafe fn write_error(error_msg: *mut u8, error_msg_len: usize, message: &[u8]) {
+    if error_msg.is_null() || error_msg_len == 0 {
+        return;
+    }
+    let copy_len = message.len().min(error_msg_len.saturating_sub(1));
+    core::ptr::copy_nonoverlapping(message.as_ptr(), error_msg, copy_len);
+    *error_msg.add(copy_len) = 0;
 }

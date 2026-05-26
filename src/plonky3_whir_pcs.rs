@@ -2,16 +2,18 @@ use alloc::{rc::Rc, vec::Vec};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::{Field, PackedValue};
+use p3_field::{dot_product, Field, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::{dense::DenseMatrix, Dimensions, Matrix};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::{point::Point, poly::Poly};
 use p3_sumcheck::{
     commit::commit_base,
     constraints::{statement::EqStatement, Constraint},
+    lagrange::{extrapolate_01inf, lagrange_weights_01inf_multi},
     layout::{Layout, LayoutStrategy},
     product_polynomial::ProductPolynomial,
     strategy::{SumcheckProver, VariableOrder},
+    svo::SvoPoint,
     SumcheckData,
 };
 use p3_util::log2_strict_usize;
@@ -338,11 +340,276 @@ where
     }
 }
 
+#[derive(Clone)]
 struct SpartanEqLayout<Ext: ExtField> {
     polynomial: Poly<F>,
     claims: Vec<(Point<Ext>, Ext)>,
     folding: usize,
     num_variables: usize,
+}
+
+impl<Ext> SpartanEqLayout<Ext>
+where
+    Ext: ExtField,
+{
+    fn uses_svo(&self) -> bool {
+        if self.folding <= 1 || self.folding >= self.num_variables {
+            return false;
+        }
+        let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        self.num_variables - self.folding >= packing_log
+    }
+
+    fn into_sumcheck_svo<Ch>(
+        self,
+        sumcheck_data: &mut SumcheckData<F, Ext>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, Ext>, Point<Ext>)
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let _profile = profile_scope("initial_sumcheck_svo");
+        let alpha: Ext = challenger.sample_algebra_element();
+        let claims = self
+            .claims
+            .into_iter()
+            .zip(alpha.powers())
+            .map(|((point, eval), coeff)| {
+                let point = SvoPoint::new_packed(self.folding, &point);
+                let (actual_eval, partials) = point.eval(&self.polynomial);
+                debug_assert_eq!(actual_eval, eval);
+                SvoClaim {
+                    point,
+                    coeff,
+                    eval,
+                    partials,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut claimed_sum = claims
+            .iter()
+            .map(|claim| claim.coeff * claim.eval)
+            .sum::<Ext>();
+        let accumulators = {
+            let _profile = profile_scope("svo_accumulators");
+            claims
+                .iter()
+                .map(|claim| calculate_svo_accumulators(claim))
+                .collect::<Vec<_>>()
+        };
+
+        let mut rs = Vec::with_capacity(self.folding);
+        for round_idx in 0..self.folding {
+            let weights = lagrange_weights_01inf_multi(&rs);
+            let (c0, c_inf) = accumulators.iter().fold(
+                (Ext::ZERO, Ext::ZERO),
+                |(c0, c_inf), claim_accumulators| {
+                    let round = &claim_accumulators[round_idx];
+                    (
+                        c0 + dot_product::<Ext, _, _>(
+                            round[0].iter().copied(),
+                            weights.iter().copied(),
+                        ),
+                        c_inf
+                            + dot_product::<Ext, _, _>(
+                                round[1].iter().copied(),
+                                weights.iter().copied(),
+                            ),
+                    )
+                },
+            );
+            let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+            claimed_sum = extrapolate_01inf(c0, claimed_sum - c0, c_inf, r);
+            rs.push(r);
+        }
+
+        let rs = Point::new(rs);
+        let (compressed_evals, residual_weights) = {
+            let _profile = profile_scope("svo_residual_pack");
+            let compressed_evals = self.polynomial.compress_prefix_to_packed(&rs, Ext::ONE);
+            let residual_variables = self.num_variables - self.folding;
+            let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            let mut residual_weights =
+                Ext::ExtensionPacking::zero_vec(1 << (residual_variables - packing_log));
+            for claim in &claims {
+                claim
+                    .point
+                    .accumulate_into_packed(&mut residual_weights, &rs, claim.coeff);
+            }
+            (compressed_evals, Poly::new(residual_weights))
+        };
+
+        let product = ProductPolynomial::new_packed(
+            VariableOrder::Prefix,
+            compressed_evals,
+            residual_weights,
+        );
+        let prover = SumcheckProver::new(product, claimed_sum);
+        (prover, rs)
+    }
+
+    fn into_sumcheck_packed_extension<Ch>(
+        self,
+        sumcheck_data: &mut SumcheckData<F, Ext>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, Ext>, Point<Ext>)
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let _profile = profile_scope("initial_sumcheck_packed_extension");
+        let mut eq_statement = EqStatement::initialize(self.num_variables);
+        for (point, eval) in self.claims {
+            eq_statement.add_evaluated_constraint(point, eval);
+        }
+        let alpha = challenger.sample_algebra_element();
+        let constraint = Constraint::new_eq_only(alpha, eq_statement);
+        if self.num_variables > log2_strict_usize(<F as Field>::Packing::WIDTH) {
+            let (weights, sum) = constraint.combine_new_packed();
+            let evals = pack_base_evals::<Ext>(self.polynomial.as_slice());
+            let product = ProductPolynomial::new_packed(VariableOrder::Prefix, evals, weights);
+            let mut prover = SumcheckProver::new(product, sum);
+            let point = prover.compute_sumcheck_polynomials(
+                sumcheck_data,
+                challenger,
+                self.folding,
+                pow_bits,
+                None,
+            );
+            (prover, point)
+        } else {
+            let (weights, sum) = constraint.combine_new();
+            let evals = Poly::new(
+                self.polynomial
+                    .as_slice()
+                    .iter()
+                    .map(|&value| Ext::from(value))
+                    .collect(),
+            );
+            let product = ProductPolynomial::new_unpacked(VariableOrder::Prefix, evals, weights);
+            let mut prover = SumcheckProver::new(product, sum);
+            let point = prover.compute_sumcheck_polynomials(
+                sumcheck_data,
+                challenger,
+                self.folding,
+                pow_bits,
+                None,
+            );
+            (prover, point)
+        }
+    }
+}
+
+struct SvoClaim<Ext: ExtField> {
+    point: SvoPoint<F, Ext>,
+    coeff: Ext,
+    eval: Ext,
+    partials: Vec<Poly<Ext>>,
+}
+
+type SvoAccumulators<Ext> = Vec<[Vec<Ext>; 2]>;
+
+// Plonky3's accumulator builder is crate-private. This local helper mirrors the
+// prefix case only, which is the layout Spartan uses for caller-supplied claims.
+fn calculate_svo_accumulators<Ext>(claim: &SvoClaim<Ext>) -> SvoAccumulators<Ext>
+where
+    Ext: ExtField,
+{
+    (0..claim.point.num_variables_svo())
+        .map(|round_idx| {
+            let active = claim.point.z_svo().get_subpoint_over_range(..round_idx + 1);
+            calculate_svo_accumulator(
+                claim.partials[round_idx].as_slice(),
+                active.as_slice(),
+                claim.coeff,
+            )
+        })
+        .collect()
+}
+
+fn calculate_svo_accumulator<Ext>(
+    partial_evals: &[Ext],
+    active_point: &[Ext],
+    coeff: Ext,
+) -> [Vec<Ext>; 2]
+where
+    Ext: ExtField,
+{
+    let l = log2_strict_usize(partial_evals.len());
+    debug_assert_eq!(active_point.len(), l);
+    debug_assert!(l > 0);
+
+    let eq = Poly::new_from_point(active_point, Ext::ONE);
+    let grid_len = 3usize.pow(l as u32);
+    let mut eq_grid = Ext::zero_vec(grid_len);
+    let mut partial_grid = Ext::zero_vec(grid_len);
+    let mut scratch = Ext::zero_vec(grid_len);
+    evals_01inf_grid_into(eq.as_slice(), &mut eq_grid, &mut scratch);
+    evals_01inf_grid_into(partial_evals, &mut partial_grid, &mut scratch);
+    let stride = 3usize.pow((l - 1) as u32);
+
+    let acc0 = eq_grid[..stride]
+        .iter()
+        .copied()
+        .zip(partial_grid[..stride].iter().copied())
+        .map(|(eq, eval)| coeff * eq * eval)
+        .collect();
+    let acc_inf = eq_grid[2 * stride..]
+        .iter()
+        .copied()
+        .zip(partial_grid[2 * stride..].iter().copied())
+        .map(|(eq, eval)| coeff * eq * eval)
+        .collect();
+
+    [acc0, acc_inf]
+}
+
+fn evals_01inf_grid_into<Ext>(boolean_evals: &[Ext], output: &mut [Ext], scratch: &mut [Ext])
+where
+    Ext: ExtField,
+{
+    let num_variables = log2_strict_usize(boolean_evals.len());
+    let output_len = 3usize.pow(num_variables as u32);
+
+    assert_eq!(output.len(), output_len);
+    assert_eq!(scratch.len(), output_len);
+
+    if num_variables == 0 {
+        output[0] = boolean_evals[0];
+        return;
+    }
+
+    let (mut cur, mut next) = if num_variables % 2 == 1 {
+        scratch[..boolean_evals.len()].copy_from_slice(boolean_evals);
+        (&mut scratch[..], &mut output[..])
+    } else {
+        output[..boolean_evals.len()].copy_from_slice(boolean_evals);
+        (&mut output[..], &mut scratch[..])
+    };
+
+    for stage in 0..num_variables {
+        let in_stride = 3usize.pow(stage as u32);
+        let blocks = 1usize << (num_variables - stage - 1);
+        let cur_slice = &cur[..blocks * 2 * in_stride];
+        let next_slice = &mut next[..blocks * 3 * in_stride];
+
+        for (c_chunk, n_chunk) in cur_slice
+            .chunks_exact(2 * in_stride)
+            .zip(next_slice.chunks_exact_mut(3 * in_stride))
+        {
+            for j in 0..in_stride {
+                let f0 = c_chunk[j];
+                let f1 = c_chunk[in_stride + j];
+                n_chunk[3 * j] = f0;
+                n_chunk[3 * j + 1] = f1;
+                n_chunk[3 * j + 2] = f1 - f0;
+            }
+        }
+
+        core::mem::swap(&mut cur, &mut next);
+    }
 }
 
 impl<Ext> Layout<F, Ext> for SpartanEqLayout<Ext>
@@ -420,44 +687,10 @@ where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let _profile = profile_scope("initial_sumcheck");
-        let mut eq_statement = EqStatement::initialize(self.num_variables);
-        for (point, eval) in self.claims {
-            eq_statement.add_evaluated_constraint(point, eval);
-        }
-        let alpha = challenger.sample_algebra_element();
-        let constraint = Constraint::new_eq_only(alpha, eq_statement);
-        if self.num_variables > log2_strict_usize(<F as Field>::Packing::WIDTH) {
-            let (weights, sum) = constraint.combine_new_packed();
-            let evals = pack_base_evals::<Ext>(self.polynomial.as_slice());
-            let product = ProductPolynomial::new_packed(VariableOrder::Prefix, evals, weights);
-            let mut prover = SumcheckProver::new(product, sum);
-            let point = prover.compute_sumcheck_polynomials(
-                sumcheck_data,
-                challenger,
-                self.folding,
-                pow_bits,
-                None,
-            );
-            (prover, point)
+        if self.uses_svo() {
+            self.into_sumcheck_svo(sumcheck_data, pow_bits, challenger)
         } else {
-            let (weights, sum) = constraint.combine_new();
-            let evals = Poly::new(
-                self.polynomial
-                    .as_slice()
-                    .iter()
-                    .map(|&value| Ext::from(value))
-                    .collect(),
-            );
-            let product = ProductPolynomial::new_unpacked(VariableOrder::Prefix, evals, weights);
-            let mut prover = SumcheckProver::new(product, sum);
-            let point = prover.compute_sumcheck_polynomials(
-                sumcheck_data,
-                challenger,
-                self.folding,
-                pow_bits,
-                None,
-            );
-            (prover, point)
+            self.into_sumcheck_packed_extension(sumcheck_data, pow_bits, challenger)
         }
     }
 }
@@ -487,6 +720,7 @@ where
     if prover_data.num_variables != config.num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
+    #[cfg(debug_assertions)]
     {
         let _validate_profile = profile_scope("validate_user_point_claims");
         validate_user_point_claims(statement, &prover_data.polynomial, config.num_variables)?;
@@ -643,6 +877,7 @@ where
         .collect()
 }
 
+#[cfg(debug_assertions)]
 fn validate_user_point_claims<Ext>(
     statement: &PcsStatement<PoseidonEngine<Ext>>,
     polynomial: &[F],
@@ -725,5 +960,162 @@ const fn map_soundness_assumption(soundness: SoundnessAssumption) -> Plonky3Secu
         SoundnessAssumption::UniqueDecoding => Plonky3SecurityAssumption::UniqueDecoding,
         SoundnessAssumption::JohnsonBound => Plonky3SecurityAssumption::JohnsonBound,
         SoundnessAssumption::CapacityBound => Plonky3SecurityAssumption::CapacityBound,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{poseidon_challenger, QuarticBinExtension};
+
+    type Ext = QuarticBinExtension;
+
+    fn deterministic_poly(num_variables: usize) -> Poly<F> {
+        Poly::new(
+            (0..(1usize << num_variables))
+                .map(|i| F::from_u32((17 * i as u32 + 5) % 97))
+                .collect(),
+        )
+    }
+
+    fn deterministic_point(num_variables: usize, seed: u32) -> Point<Ext> {
+        Point::new(
+            (0..num_variables)
+                .map(|i| Ext::from(F::from_u32(seed + 11 * i as u32 + 3)))
+                .collect(),
+        )
+    }
+
+    fn deterministic_claims(poly: &Poly<F>, count: usize) -> Vec<(Point<Ext>, Ext)> {
+        (0..count)
+            .map(|i| {
+                let point = deterministic_point(poly.num_variables(), 19 * i as u32 + 7);
+                let eval = poly.eval_base(&point);
+                (point, eval)
+            })
+            .collect()
+    }
+
+    fn compare_svo_with_packed_extension(
+        num_variables: usize,
+        folding: usize,
+        claims: Vec<(Point<Ext>, Ext)>,
+    ) {
+        let polynomial = deterministic_poly(num_variables);
+        let layout = SpartanEqLayout {
+            polynomial,
+            claims,
+            folding,
+            num_variables,
+        };
+        assert!(layout.uses_svo());
+
+        let mut svo_data = SumcheckData::<F, Ext>::default();
+        let mut baseline_data = SumcheckData::<F, Ext>::default();
+        let mut svo_challenger = poseidon_challenger();
+        let mut baseline_challenger = poseidon_challenger();
+
+        let (mut svo_prover, svo_point) =
+            layout
+                .clone()
+                .into_sumcheck_svo(&mut svo_data, 0, &mut svo_challenger);
+        let (mut baseline_prover, baseline_point) =
+            layout.into_sumcheck_packed_extension(&mut baseline_data, 0, &mut baseline_challenger);
+
+        assert_eq!(svo_point, baseline_point);
+        assert_eq!(
+            svo_data.polynomial_evaluations,
+            baseline_data.polynomial_evaluations
+        );
+        assert_eq!(svo_data.pow_witnesses, baseline_data.pow_witnesses);
+        assert_eq!(svo_prover.num_variables(), baseline_prover.num_variables());
+
+        let remaining_rounds = svo_prover.num_variables();
+        let svo_tail = svo_prover.compute_sumcheck_polynomials(
+            &mut svo_data,
+            &mut svo_challenger,
+            remaining_rounds,
+            0,
+            None,
+        );
+        let baseline_tail = baseline_prover.compute_sumcheck_polynomials(
+            &mut baseline_data,
+            &mut baseline_challenger,
+            remaining_rounds,
+            0,
+            None,
+        );
+
+        assert_eq!(svo_tail, baseline_tail);
+        assert_eq!(
+            svo_data.polynomial_evaluations,
+            baseline_data.polynomial_evaluations
+        );
+        assert_eq!(svo_prover.evals(), baseline_prover.evals());
+    }
+
+    #[test]
+    fn svo_initial_sumcheck_matches_baseline_for_one_claim() {
+        let poly = deterministic_poly(8);
+        compare_svo_with_packed_extension(8, 3, deterministic_claims(&poly, 1));
+    }
+
+    #[test]
+    fn svo_initial_sumcheck_matches_baseline_for_multiple_claims() {
+        let poly = deterministic_poly(9);
+        compare_svo_with_packed_extension(9, 4, deterministic_claims(&poly, 5));
+    }
+
+    #[test]
+    fn svo_initial_sumcheck_preserves_user_then_ood_claim_order() {
+        let poly = deterministic_poly(9);
+        let mut user_claims = deterministic_claims(&poly, 2);
+        let ood_claims = deterministic_claims(&poly, 3)
+            .into_iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let point = deterministic_point(poly.num_variables(), 101 + 23 * i as u32);
+                let eval = poly.eval_base(&point);
+                (point, eval)
+            });
+        user_claims.extend(ood_claims);
+
+        compare_svo_with_packed_extension(9, 4, user_claims);
+    }
+
+    #[test]
+    fn initial_sumcheck_uses_baseline_when_svo_residual_is_too_small() {
+        let num_variables = 3;
+        let folding = 2;
+        let polynomial = deterministic_poly(num_variables);
+        let layout = SpartanEqLayout {
+            claims: deterministic_claims(&polynomial, 1),
+            polynomial,
+            folding,
+            num_variables,
+        };
+        assert!(!layout.uses_svo());
+
+        let mut data = SumcheckData::<F, Ext>::default();
+        let mut challenger = poseidon_challenger();
+        let (prover, point) = layout.into_sumcheck(&mut data, 0, &mut challenger);
+
+        assert_eq!(point.num_variables(), folding);
+        assert_eq!(data.num_rounds(), folding);
+        assert_eq!(prover.num_variables(), num_variables - folding);
+    }
+
+    #[test]
+    fn initial_sumcheck_keeps_single_fold_on_baseline_path() {
+        let num_variables = 8;
+        let folding = 1;
+        let polynomial = deterministic_poly(num_variables);
+        let layout = SpartanEqLayout {
+            claims: deterministic_claims(&polynomial, 2),
+            polynomial,
+            folding,
+            num_variables,
+        };
+        assert!(!layout.uses_svo());
     }
 }
