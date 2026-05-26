@@ -125,7 +125,7 @@ pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, Po
 pub use sumcheck::{
     prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
-pub use whir_params::WhirParams;
+pub use whir_params::{WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES};
 pub use whir_pcs::{
     observe_whir_fs_domain_separator, prepare_committed_opening, verify_finalize,
     verify_parse_commitment, ParsedWhirCommitment, ProtocolWhirEngine, SumcheckStrategy, WhirPcs,

@@ -91,7 +91,7 @@ fn octic_k22_jb100_schedule_is_locked() {
 fn quartic_k22_jb100_schedule_rejects_pow_budget_at_start() {
     let security = common::k22_jb100_security();
     let whir_params = common::k22_jb100_whir_params();
-    let config = Schedule4::new(22, protocol_params(security, whir_params));
+    let config = Schedule4::new(22, protocol_params(security, whir_params.clone()));
 
     assert!(config.starting_folding_pow_bits > whir_params.pow_bits as usize);
     assert!(!config.check_pow_bits());

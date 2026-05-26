@@ -52,7 +52,7 @@ impl DomainSeparator {
             security_level_bits: security.security_level_bits,
             merkle_security_bits: security.merkle_security_bits,
             soundness_assumption: security.soundness_assumption,
-            whir_params: *whir_params,
+            whir_params: whir_params.clone(),
         }
     }
 
@@ -72,7 +72,46 @@ impl DomainSeparator {
         out.extend_from_slice(
             &(self.whir_params.rs_domain_initial_reduction_factor as u64).to_le_bytes(),
         );
+        if should_encode_schedule_suffix(&self.whir_params) {
+            encode_folding_schedule(&self.whir_params, &mut out);
+        }
         out
+    }
+}
+
+fn should_encode_schedule_suffix(params: &WhirParams) -> bool {
+    if !params.round_log_inv_rates.is_empty() {
+        return true;
+    }
+    match &params.folding_schedule {
+        None => false,
+        Some(crate::WhirFoldingSchedule::Constant(factor)) => *factor != params.folding_factor,
+        Some(_) => true,
+    }
+}
+
+fn encode_folding_schedule(params: &WhirParams, out: &mut Vec<u8>) {
+    match params.effective_folding_schedule() {
+        crate::WhirFoldingSchedule::Constant(factor) => {
+            out.push(0);
+            out.extend_from_slice(&(factor as u64).to_le_bytes());
+        }
+        crate::WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => {
+            out.push(1);
+            out.extend_from_slice(&(first as u64).to_le_bytes());
+            out.extend_from_slice(&(rest as u64).to_le_bytes());
+        }
+        crate::WhirFoldingSchedule::PerRound(factors) => {
+            out.push(2);
+            out.extend_from_slice(&(factors.len() as u64).to_le_bytes());
+            for factor in factors {
+                out.extend_from_slice(&(factor as u64).to_le_bytes());
+            }
+        }
+    }
+    out.extend_from_slice(&(params.round_log_inv_rates.len() as u64).to_le_bytes());
+    for rate in &params.round_log_inv_rates {
+        out.extend_from_slice(&(*rate as u64).to_le_bytes());
     }
 }
 

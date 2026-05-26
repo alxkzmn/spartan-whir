@@ -653,11 +653,12 @@ fn protocol_config(matrix_closing: MatrixClosingMode, folding_factor: usize) -> 
         folding_factor,
         starting_log_inv_rate: 1,
         rs_domain_initial_reduction_factor: 1,
+        ..WhirParams::default()
     };
     SpartanSnarkConfig {
         matrix_closing,
         security,
-        whir_params,
+        whir_params: whir_params.clone(),
         pcs_config: WhirPcsConfig {
             num_variables: 0,
             security,

@@ -48,7 +48,7 @@ type WhirMerkleTree<W, const DIGEST_ELEMS: usize> =
 pub type ParsedWhirCommitment<Ext, W = u64, const DIGEST_ELEMS: usize = 4> =
     whir_p3::whir::committer::reader::ParsedCommitment<Ext, Hash<F, W, DIGEST_ELEMS>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhirPcsConfig {
     pub num_variables: usize,
     pub security: SecurityConfig,
@@ -77,7 +77,7 @@ impl Serialize for WhirPcsConfig {
         WhirPcsConfigSerde {
             num_variables: self.num_variables,
             security: self.security,
-            whir: self.whir,
+            whir: self.whir.clone(),
             sumcheck_strategy,
         }
         .serialize(serializer)
@@ -124,10 +124,13 @@ impl WhirPcsConfig {
     pub fn validate(&self) -> Result<(), SpartanWhirError> {
         self.security.validate()?;
 
-        if self.whir.folding_factor == 0
+        let folding_schedule = self.whir.effective_folding_schedule();
+        let first_folding_factor = folding_schedule.first_round();
+
+        if first_folding_factor == 0
             || self.whir.rs_domain_initial_reduction_factor == 0
-            || self.whir.rs_domain_initial_reduction_factor > self.whir.folding_factor
-            || self.whir.folding_factor > self.num_variables
+            || self.whir.rs_domain_initial_reduction_factor > first_folding_factor
+            || !folding_schedule.is_valid_for(self.num_variables)
         {
             return Err(SpartanWhirError::InvalidConfig);
         }
@@ -135,7 +138,7 @@ impl WhirPcsConfig {
         let log_folded_domain_size = self
             .num_variables
             .checked_add(self.whir.starting_log_inv_rate)
-            .and_then(|v| v.checked_sub(self.whir.folding_factor))
+            .and_then(|v| v.checked_sub(first_folding_factor))
             .ok_or(SpartanWhirError::InvalidConfig)?;
 
         if log_folded_domain_size > F::TWO_ADICITY {
@@ -746,7 +749,7 @@ where
     let protocol_params = ProtocolParameters {
         starting_log_inv_rate: config.whir.starting_log_inv_rate,
         rs_domain_initial_reduction_factor: config.whir.rs_domain_initial_reduction_factor,
-        folding_factor: FoldingFactor::Constant(config.whir.folding_factor),
+        folding_factor: map_whir_p3_folding_schedule(&config.whir)?,
         soundness_type: map_soundness_assumption(config.security.soundness_assumption),
         security_level: config.security.security_level_bits as usize,
         pow_bits: config.whir.pow_bits as usize,
@@ -759,6 +762,16 @@ where
     // skip width must remain <= Ext::TWO_ADICITY (24 for KoalaBear quintic).
     let whir_config = PcsConfig::<E, Ext>::new(config.num_variables, protocol_params.clone());
     Ok((protocol_params, whir_config))
+}
+
+fn map_whir_p3_folding_schedule(params: &WhirParams) -> Result<FoldingFactor, SpartanWhirError> {
+    match params.effective_folding_schedule() {
+        crate::WhirFoldingSchedule::Constant(factor) => Ok(FoldingFactor::Constant(factor)),
+        crate::WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => {
+            Ok(FoldingFactor::ConstantFromSecondRound(first, rest))
+        }
+        crate::WhirFoldingSchedule::PerRound(_) => Err(SpartanWhirError::InvalidConfig),
+    }
 }
 
 fn observe_whir_fs_domain_separator_for_config<E, Ext, const DIGEST_ELEMS: usize>(

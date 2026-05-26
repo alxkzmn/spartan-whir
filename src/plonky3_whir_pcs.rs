@@ -502,7 +502,7 @@ where
     let layout = SpartanEqLayout {
         polynomial: Poly::new(prover_data.polynomial),
         claims,
-        folding: config.whir.folding_factor,
+        folding: config.whir.first_folding_factor(),
         num_variables: config.num_variables,
     };
     let mut proof = prover_data.proof;
@@ -536,8 +536,14 @@ where
     config.validate()?;
     let protocol_params = ProtocolParameters {
         starting_log_inv_rate: config.whir.starting_log_inv_rate,
-        round_log_inv_rates: round_log_inv_rates(config.num_variables, config.whir.folding_factor),
-        folding_factor: Plonky3FoldingFactor::Constant(config.whir.folding_factor),
+        round_log_inv_rates: poseidon_round_log_inv_rates(
+            config.num_variables,
+            &config.whir.effective_folding_schedule(),
+            config.whir.starting_log_inv_rate,
+            config.whir.rs_domain_initial_reduction_factor,
+            &config.whir.round_log_inv_rates,
+        )?,
+        folding_factor: map_poseidon_folding_schedule(&config.whir.effective_folding_schedule()),
         soundness_type: map_soundness_assumption(config.security.soundness_assumption),
         security_level: config.security.security_level_bits as usize,
         pow_bits: config.whir.pow_bits as usize,
@@ -667,16 +673,51 @@ fn validate_polynomial_shape(
     Ok(())
 }
 
-fn round_log_inv_rates(num_variables: usize, folding_factor: usize) -> Vec<usize> {
-    let folding = Plonky3FoldingFactor::Constant(folding_factor);
+pub(crate) fn poseidon_round_log_inv_rates(
+    num_variables: usize,
+    folding: &crate::WhirFoldingSchedule,
+    starting_log_inv_rate: usize,
+    rs_domain_initial_reduction_factor: usize,
+    explicit_round_log_inv_rates: &[usize],
+) -> Result<Vec<usize>, SpartanWhirError> {
+    let folding = map_poseidon_folding_schedule(folding);
     let (num_rounds, _) = folding.compute_number_of_rounds(num_variables);
+    if !explicit_round_log_inv_rates.is_empty() {
+        if explicit_round_log_inv_rates.len() != num_rounds {
+            return Err(SpartanWhirError::InvalidConfig);
+        }
+        return Ok(explicit_round_log_inv_rates.to_vec());
+    }
     let mut rates = Vec::with_capacity(num_rounds);
-    let mut rate = 1;
+    let mut rate = starting_log_inv_rate;
     for round in 0..num_rounds {
-        rate += folding.at_round(round) - 1;
+        let reduction = if round == 0 {
+            rs_domain_initial_reduction_factor
+        } else {
+            1
+        };
+        let folding_factor = folding.at_round(round);
+        if reduction > rate + folding_factor {
+            return Err(SpartanWhirError::InvalidConfig);
+        }
+        rate += folding_factor - reduction;
         rates.push(rate);
     }
-    rates
+    Ok(rates)
+}
+
+pub(crate) fn map_poseidon_folding_schedule(
+    schedule: &crate::WhirFoldingSchedule,
+) -> Plonky3FoldingFactor {
+    match schedule {
+        crate::WhirFoldingSchedule::Constant(factor) => Plonky3FoldingFactor::Constant(*factor),
+        crate::WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => {
+            Plonky3FoldingFactor::ConstantFromSecondRound(*first, *rest)
+        }
+        crate::WhirFoldingSchedule::PerRound(factors) => {
+            Plonky3FoldingFactor::PerRound(factors.clone())
+        }
+    }
 }
 
 const fn map_soundness_assumption(soundness: SoundnessAssumption) -> Plonky3SecurityAssumption {

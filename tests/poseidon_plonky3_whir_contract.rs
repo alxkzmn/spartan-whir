@@ -4,7 +4,8 @@ use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
     engine::F, generate_satisfiable_fixture, MatrixClosingMode, MultilinearPoint,
     PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim, PoseidonQuarticEngine,
-    PoseidonSpartanProtocol, SpartanSnarkConfig, SyntheticR1csConfig,
+    PoseidonSpartanProtocol, SpartanSnarkConfig, SyntheticR1csConfig, WhirFoldingSchedule,
+    WhirParams,
 };
 
 type PoseidonEngineForTest = PoseidonQuarticEngine;
@@ -52,6 +53,45 @@ fn poseidon_direct_plonky3_whir_roundtrip() {
 
     Protocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
         .expect("Poseidon verify succeeds");
+}
+
+#[test]
+fn poseidon_direct_accepts_explicit_per_round_schedule() {
+    let fixture = generate_satisfiable_fixture(&SyntheticR1csConfig {
+        target_log2_witness_poly: 12,
+        num_constraints: 8,
+        num_io: 1,
+        a_terms_per_constraint: 2,
+        b_terms_per_constraint: 2,
+        seed: 0x5C4E_DA1E,
+    })
+    .expect("fixture generation succeeds");
+    let mut config = poseidon_config(MatrixClosingMode::DirectSparse);
+    let whir_params = WhirParams {
+        pow_bits: 4,
+        folding_factor: 2,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 1,
+        folding_schedule: Some(WhirFoldingSchedule::PerRound(vec![2, 2, 2])),
+        round_log_inv_rates: vec![2, 3],
+    };
+    config.whir_params = whir_params.clone();
+    config.pcs_config.whir = whir_params;
+
+    let (pk, vk) =
+        Protocol::setup_with_config(&fixture.shape, &config).expect("explicit setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = Protocol::prove(
+        &pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut prover_challenger,
+    )
+    .expect("explicit schedule prove succeeds");
+
+    Protocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
+        .expect("explicit schedule verify succeeds");
 }
 
 #[test]

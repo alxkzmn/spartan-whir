@@ -5,7 +5,7 @@ use spartan_whir::{
     engine::F, observe_whir_fs_domain_separator, KeccakChallenger, KeccakFieldHash,
     KeccakNodeCompress, KeccakQuarticEngine as KeccakEngine, MlePcs, MultilinearPoint,
     PcsStatementBuilder, PointEvalClaim, QuarticBinExtension as EF, SecurityConfig,
-    SoundnessAssumption, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
+    SoundnessAssumption, SpartanWhirError, WhirFoldingSchedule, WhirParams, WhirPcs, WhirPcsConfig,
 };
 use whir_p3::{
     fiat_shamir::domain_separator::DomainSeparator as WhirFsDomainSeparator,
@@ -114,6 +114,22 @@ fn whir_pcs_roundtrip_point_eval() {
         &mut verifier_challenger,
     );
     assert_eq!(verify_result, Ok(()));
+}
+
+#[test]
+fn whir_pcs_legacy_backend_rejects_per_round_schedule() {
+    let mut config = test_config(8);
+    config.whir = WhirParams {
+        folding_factor: 2,
+        folding_schedule: Some(WhirFoldingSchedule::PerRound(vec![2])),
+        ..WhirParams::default()
+    };
+    let poly = sample_poly(config.num_variables);
+    let mut challenger = spartan_whir::keccak_challenger();
+
+    let result = whir_commit(&config, &poly, &mut challenger);
+
+    assert!(matches!(result, Err(SpartanWhirError::InvalidConfig)));
 }
 
 #[test]

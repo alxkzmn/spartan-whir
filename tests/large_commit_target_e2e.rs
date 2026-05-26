@@ -18,7 +18,7 @@ fn run_target_e2e<EF: ExtField>(
         &SpartanSnarkConfig {
             matrix_closing: MatrixClosingMode::DirectSparse,
             security: *security,
-            whir_params: *whir_params,
+            whir_params: whir_params.clone(),
             pcs_config: common::phase3_pcs_config(),
         },
     )

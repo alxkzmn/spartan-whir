@@ -137,7 +137,7 @@ fn prove(
         &mut challenger,
     )
     .expect("prove succeeds");
-    let pcs_config = vk.pcs_config;
+    let pcs_config = vk.pcs_config.clone();
     (vk, instance, proof, pcs_config)
 }
 

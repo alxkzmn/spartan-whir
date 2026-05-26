@@ -129,7 +129,7 @@ pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<E>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpartanSnarkConfig {
     pub matrix_closing: MatrixClosingMode,
     pub security: SecurityConfig,
@@ -334,10 +334,10 @@ where
         let shape_canonical = shape.pad_regular()?;
         let num_variables = shape_canonical.num_vars.ilog2() as usize;
 
-        let mut canonical_pcs_config = *pcs_config;
+        let mut canonical_pcs_config = pcs_config.clone();
         canonical_pcs_config.num_variables = num_variables;
         canonical_pcs_config.security = *security;
-        canonical_pcs_config.whir = *whir_params;
+        canonical_pcs_config.whir = whir_params.clone();
         canonical_pcs_config.validate()?;
 
         let domain_separator = DomainSeparator::new_with_matrix_closing(
@@ -368,8 +368,8 @@ where
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
             security: *security,
-            whir_params: *whir_params,
-            pcs_config: canonical_pcs_config,
+            whir_params: whir_params.clone(),
+            pcs_config: canonical_pcs_config.clone(),
             spark_fixed_commitments: spark_fixed_commitments.clone(),
             spark_fixed_prover_data,
             domain_separator: domain_separator.clone(),
@@ -384,7 +384,7 @@ where
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
             security: *security,
-            whir_params: *whir_params,
+            whir_params: whir_params.clone(),
             pcs_config: canonical_pcs_config,
             spark_fixed_commitments,
             domain_separator,
@@ -1083,7 +1083,7 @@ fn spark_table_pcs_config(
     if domain_size == 0 || !domain_size.is_power_of_two() {
         return Err(SpartanWhirError::InvalidPolynomialLength);
     }
-    let mut config = *base;
+    let mut config = base.clone();
     config.num_variables = domain_size.ilog2() as usize;
     config.validate()?;
     Ok(config)
@@ -1095,7 +1095,7 @@ fn spark_read_pcs_config<EF>(
 where
     EF: ExtField,
 {
-    let mut config = *value_config;
+    let mut config = value_config.clone();
     config.num_variables = config
         .num_variables
         .checked_add(read_column_bits::<EF>())
@@ -1107,7 +1107,7 @@ where
 fn spark_fixed_value_pcs_config(
     value_config: &WhirPcsConfig,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
-    let mut config = *value_config;
+    let mut config = value_config.clone();
     config.num_variables = config
         .num_variables
         .checked_add(fixed_value_column_bits())

@@ -23,6 +23,7 @@ fn test_whir_config(num_variables: usize) -> WhirPcsConfig {
             folding_factor: 1,
             starting_log_inv_rate: 1,
             rs_domain_initial_reduction_factor: 1,
+            ..WhirParams::default()
         },
         sumcheck_strategy: common::phase3_pcs_config().sumcheck_strategy,
     }
@@ -84,7 +85,7 @@ where
     )
     .expect("prove succeeds");
 
-    let pcs_config = vk.pcs_config;
+    let pcs_config = vk.pcs_config.clone();
     (vk, instance, proof, pcs_config)
 }
 

@@ -202,6 +202,7 @@ pub fn phase3_whir_params() -> WhirParams {
         folding_factor: 1,
         starting_log_inv_rate: 1,
         rs_domain_initial_reduction_factor: 1,
+        ..WhirParams::default()
     }
 }
 
@@ -228,6 +229,7 @@ pub fn k22_jb100_whir_params() -> WhirParams {
         folding_factor: 4,
         starting_log_inv_rate: 6,
         rs_domain_initial_reduction_factor: 1,
+        ..WhirParams::default()
     }
 }
 

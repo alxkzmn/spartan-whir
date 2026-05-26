@@ -1,6 +1,8 @@
 mod common;
 
-use spartan_whir::{DomainSeparator, MatrixClosingMode, SecurityConfig, WhirParams};
+use spartan_whir::{
+    DomainSeparator, MatrixClosingMode, SecurityConfig, WhirFoldingSchedule, WhirParams,
+};
 
 #[test]
 fn domain_separator_encoding_is_deterministic() {
@@ -60,4 +62,20 @@ fn domain_separator_changes_when_matrix_closing_changes() {
     assert_ne!(direct.to_bytes(), spark.to_bytes());
     assert_eq!(direct.to_bytes()[15], 0);
     assert_eq!(spark.to_bytes()[15], 1);
+}
+
+#[test]
+fn domain_separator_canonicalizes_legacy_constant_schedule() {
+    let shape = common::sample_shape();
+    let security = SecurityConfig::default();
+    let legacy = WhirParams::default();
+    let explicit = WhirParams {
+        folding_schedule: Some(WhirFoldingSchedule::Constant(legacy.folding_factor)),
+        ..legacy.clone()
+    };
+
+    let legacy_bytes = DomainSeparator::new(&shape, &security, &legacy).to_bytes();
+    let explicit_bytes = DomainSeparator::new(&shape, &security, &explicit).to_bytes();
+
+    assert_eq!(legacy_bytes, explicit_bytes);
 }

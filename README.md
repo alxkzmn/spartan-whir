@@ -90,6 +90,128 @@ stay within 24.
 - The benchmark fixtures are synthetic and only shape-similar to target circuits such as Spartan2 SHA-256.
 - They model rough constraint count / witness size / row sparsity for benchmark scaffolding.
 
+## Poseidon Schedule Scoring
+
+The Poseidon Plonky3-WHIR prover has a manual schedule-scoring workflow for
+`MatrixClosingMode::DirectSparse` with Johnson-bound soundness. The scorer does
+not run during setup. A user generates candidate schedules, scores them with a
+calibration file, optionally validates the top rows with full proofs, and then
+passes the selected `PoseidonSetupConfig` into `setup_poseidon`.
+
+#### Workflow
+
+1. Measure local component costs:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" \
+cargo run --release -p spartan-whir --features parallel \
+  --bin poseidon-schedule-calibration -- \
+  --out /tmp/poseidon-calibration.json
+```
+
+2. Enumerate backend-derived candidate schedules:
+
+```bash
+cargo run -q -p spartan-whir --bin poseidon-schedule-candidates -- \
+  --num-variables 19 \
+  --security-bits 128 \
+  --max-pow-bits 22 \
+  > /tmp/poseidon-candidates.json
+```
+
+3. Score candidates and write the selected setup config:
+
+```bash
+python3 scripts/poseidon_schedule_scorer.py \
+  --candidates /tmp/poseidon-candidates.json \
+  --calibration /tmp/poseidon-calibration.json \
+  --constraint-work 519678 \
+  --out-report /tmp/poseidon-report.json \
+  --out-config /tmp/poseidon-config.json
+```
+
+4. Measure full-proof heldout rows for the actual circuit:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" \
+cargo run --release -p spartan-whir --features circom,parallel \
+  --bin poseidon-schedule-heldout -- \
+  --r1cs circuit.r1cs \
+  --wtns witness.wtns \
+  --report /tmp/poseidon-report.json \
+  --out /tmp/poseidon-heldout.json \
+  --extension octic \
+  --max-rows 5 \
+  --include-strata
+```
+
+5. Add heldout measurements to the calibration and refit component scales:
+
+```bash
+python3 scripts/poseidon_schedule_add_heldout.py \
+  --calibration /tmp/poseidon-calibration.json \
+  --heldout /tmp/poseidon-heldout.json \
+  --out /tmp/poseidon-calibration-heldout.json \
+  --replace \
+  --recalibrate
+```
+
+#### Artifacts
+
+- `poseidon-schedule-calibration` writes component coefficients and raw
+  microbenchmark measurements. Sumcheck coefficients are stored per extension
+  (`quartic`, `quintic`, `octic`).
+- `poseidon-schedule-candidates` writes the backend-derived schedule rows,
+  achieved security, derived PoW bits, WHIR round data, work units, and the
+  candidate `PoseidonSetupConfig`.
+- `poseidon_schedule_scorer.py` writes a ranked report with projected time,
+  per-component `cost_breakdown`, validation status, and one selected config.
+- `poseidon-schedule-heldout` writes measured full-proof rows for the selected
+  circuit. With `--include-strata`, it samples across the accepted ranking
+  instead of measuring only the first `--max-rows` rows.
+- `poseidon_schedule_add_heldout.py` merges heldout rows into the calibration
+  and can refit component scale factors.
+  Heldout files must contain every component metric used by the scorer. Re-run
+  `poseidon-schedule-heldout` after adding calibration components such as
+  `merkle_path`.
+
+#### Scope And Trust
+
+Candidate validity and achieved security come from constructing Plonky3 WHIR
+configs. The scorer has no independent security derivation. Rows are rejected
+when backend derivation fails, achieved security is below the target, derived
+PoW exceeds the policy cap, or the schedule exceeds field two-adicity limits.
+
+The scorer is a linear component model:
+
+```text
+projected_time = fixed_overhead + dft + merkle + merkle_path + row_opening + sumcheck + pow + spartan
+```
+
+The report marks recommendations as untrusted until heldout rows for the target
+circuit and extension are within the configured error tolerance. The model is
+intended for schedule selection. Full-proof benchmarks remain the deployment
+check.
+
+Heldout recalibration updates the sumcheck coefficient only for extensions that
+appear in the measured rows. A calibration validated with octic heldouts does
+not make quintic or quartic recommendations trusted.
+
+The Merkle commitment term is calibrated against opened matrix field elements,
+and the Merkle-path term is calibrated against path depth. The row-opening term
+tracks opened row field elements separately. Clustered schedules should still be
+confirmed with heldout measurements because cache behavior and shared backend
+work are intentionally not modeled as separate interaction terms.
+
+Candidate rows include `proof_size_bytes_estimate`, a verifier-facing proxy that
+counts opened field elements, Merkle path digests, and round commitments. It is
+used as the ranking tie-breaker when projected times match. It is not a
+byte-exact serialization size.
+
+The PoW term counts expected Bernoulli trials for each grind slot. The hard cap
+is `--max-pow-bits`; the default candidate set is
+`0, 4, 8, 12, 16, 20, 22`.
+
 ## Unsupported Features
 
 - Zero-knowledge mode
