@@ -2,12 +2,13 @@ use alloc::{rc::Rc, vec, vec::Vec};
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::{PackedValue, TwoAdicField};
+use p3_field::PackedValue;
 
 use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTree;
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
+use whir_p3::whir::parameters::SumcheckStrategy as WhirP3SumcheckStrategy;
 use whir_p3::{
     fiat_shamir::domain_separator::DomainSeparator as WhirFsDomainSeparator,
     parameters::{errors::SecurityAssumption as WhirSecurity, FoldingFactor, ProtocolParameters},
@@ -27,10 +28,9 @@ use crate::{
     effective_digest_bytes_for_security_bits,
     engine::{ExtField, KeccakEngine, PoseidonEngine, WhirHashEngine, F},
     CommittedPolynomialView, Evaluations, LinearConstraintClaim, MlePcs, PcsStatement, ProtocolPcs,
-    SecurityConfig, SoundnessAssumption, SpartanWhirEngine, SpartanWhirError, WhirParams,
+    SoundnessAssumption, SpartanWhirEngine, SpartanWhirError, SumcheckStrategy, WhirParams,
+    WhirPcsConfig,
 };
-
-pub use whir_p3::whir::parameters::SumcheckStrategy;
 
 type WhirProtocolParams<E> =
     ProtocolParameters<<E as SpartanWhirEngine>::Hash, <E as SpartanWhirEngine>::Compress>;
@@ -47,107 +47,6 @@ type WhirMerkleTree<W, const DIGEST_ELEMS: usize> =
     MerkleTree<F, W, DenseMatrix<F>, 2, DIGEST_ELEMS>;
 pub type ParsedWhirCommitment<Ext, W = u64, const DIGEST_ELEMS: usize = 4> =
     whir_p3::whir::committer::reader::ParsedCommitment<Ext, Hash<F, W, DIGEST_ELEMS>>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WhirPcsConfig {
-    pub num_variables: usize,
-    pub security: SecurityConfig,
-    pub whir: WhirParams,
-    pub sumcheck_strategy: SumcheckStrategy,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WhirPcsConfigSerde {
-    num_variables: usize,
-    security: SecurityConfig,
-    whir: WhirParams,
-    sumcheck_strategy: u8,
-}
-
-impl Serialize for WhirPcsConfig {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let sumcheck_strategy = match self.sumcheck_strategy {
-            // Keep stable on the wire: 0 = Classic, 1 = Svo.
-            SumcheckStrategy::Classic => 0,
-            SumcheckStrategy::Svo => 1,
-        };
-        WhirPcsConfigSerde {
-            num_variables: self.num_variables,
-            security: self.security,
-            whir: self.whir.clone(),
-            sumcheck_strategy,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for WhirPcsConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let config = WhirPcsConfigSerde::deserialize(deserializer)?;
-        let sumcheck_strategy = match config.sumcheck_strategy {
-            // Keep stable on the wire: 0 = Classic, 1 = Svo.
-            0 => SumcheckStrategy::Classic,
-            1 => SumcheckStrategy::Svo,
-            other => {
-                return Err(serde::de::Error::custom(alloc::format!(
-                    "unsupported sumcheck strategy {other}"
-                )))
-            }
-        };
-        Ok(Self {
-            num_variables: config.num_variables,
-            security: config.security,
-            whir: config.whir,
-            sumcheck_strategy,
-        })
-    }
-}
-
-impl Default for WhirPcsConfig {
-    fn default() -> Self {
-        Self {
-            num_variables: 0,
-            security: SecurityConfig::default(),
-            whir: WhirParams::default(),
-            sumcheck_strategy: SumcheckStrategy::Svo,
-        }
-    }
-}
-
-impl WhirPcsConfig {
-    pub fn validate(&self) -> Result<(), SpartanWhirError> {
-        self.security.validate()?;
-
-        let folding_schedule = self.whir.effective_folding_schedule();
-        let first_folding_factor = folding_schedule.first_round();
-
-        if first_folding_factor == 0
-            || self.whir.rs_domain_initial_reduction_factor == 0
-            || self.whir.rs_domain_initial_reduction_factor > first_folding_factor
-            || !folding_schedule.is_valid_for(self.num_variables)
-        {
-            return Err(SpartanWhirError::InvalidConfig);
-        }
-
-        let log_folded_domain_size = self
-            .num_variables
-            .checked_add(self.whir.starting_log_inv_rate)
-            .and_then(|v| v.checked_sub(first_folding_factor))
-            .ok_or(SpartanWhirError::InvalidConfig)?;
-
-        if log_folded_domain_size > F::TWO_ADICITY {
-            return Err(SpartanWhirError::InvalidConfig);
-        }
-
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct WhirProverData<Ext, W = u64, const DIGEST_ELEMS: usize = 4> {
@@ -425,7 +324,7 @@ where
         let polynomial = poly.clone();
         let mut statement = whir_config.initial_statement(
             WhirEvaluations::new(polynomial.clone()),
-            config.sumcheck_strategy,
+            map_sumcheck_strategy(config.sumcheck_strategy),
         );
 
         let mut proof =
@@ -771,6 +670,13 @@ fn map_whir_p3_folding_schedule(params: &WhirParams) -> Result<FoldingFactor, Sp
             Ok(FoldingFactor::ConstantFromSecondRound(first, rest))
         }
         crate::WhirFoldingSchedule::PerRound(_) => Err(SpartanWhirError::InvalidConfig),
+    }
+}
+
+fn map_sumcheck_strategy(strategy: SumcheckStrategy) -> WhirP3SumcheckStrategy {
+    match strategy {
+        SumcheckStrategy::Classic => WhirP3SumcheckStrategy::Classic,
+        SumcheckStrategy::Svo => WhirP3SumcheckStrategy::Svo,
     }
 }
 

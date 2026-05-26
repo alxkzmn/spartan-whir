@@ -23,7 +23,7 @@ fn finalize_accepts_point_eval_statement() {
 }
 
 #[test]
-#[ignore = "Reserved for non-Spartan/batched use cases in Phase 2+"]
+#[ignore = "Reserved for non-Spartan/batched use cases"]
 fn finalize_accepts_linear_constraint_statement() {
     let result = PcsStatementBuilder::<common::DummyEngine>::new()
         .add_linear_constraint(LinearConstraintClaim {

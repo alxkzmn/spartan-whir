@@ -28,6 +28,7 @@ fn phase3_whir_params() -> WhirParams {
         folding_factor: 4,
         starting_log_inv_rate: 6,
         rs_domain_initial_reduction_factor: 3,
+        ..WhirParams::default()
     }
 }
 

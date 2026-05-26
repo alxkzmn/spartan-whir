@@ -1,4 +1,4 @@
-#![cfg(feature = "circom")]
+#![cfg(all(feature = "circom", feature = "whir-p3-backend"))]
 
 mod common;
 

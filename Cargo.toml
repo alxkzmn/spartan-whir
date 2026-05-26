@@ -8,7 +8,7 @@ name = "spartan_whir"
 path = "src/lib.rs"
 
 [dependencies]
-whir-p3 = { path = "../whir-p3", default-features = false }
+whir-p3 = { path = "../whir-p3", default-features = false, optional = true }
 p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
@@ -31,12 +31,13 @@ tracing = { version = "0.1.44", default-features = false }
 [features]
 default = []
 circom = ["dep:tempfile"]
+whir-p3-backend = ["dep:whir-p3"]
 keccak_no_prefix = []
 # Enables data-parallelism in hot paths via rayon (currently affects the
 # grinding loop in `CanonicalSerializingChallenger32::grind`, plus any
 # `into_par_iter` calls reachable from this crate). Without this feature,
 # `p3-maybe-rayon` falls back to a serial shim and grinding runs on one core.
-parallel = ["p3-maybe-rayon/parallel", "whir-p3/parallel"]
+parallel = ["p3-maybe-rayon/parallel", "whir-p3?/parallel"]
 
 [[bin]]
 name = "circom-adapter-check"
@@ -51,12 +52,12 @@ required-features = ["circom"]
 [[example]]
 name = "sha256_512b_circom"
 path = "examples/sha256_512b_circom.rs"
-required-features = ["circom"]
+required-features = ["circom", "whir-p3-backend"]
 
 [[example]]
 name = "sha256_circom_bench"
 path = "examples/sha256_circom_bench.rs"
-required-features = ["circom"]
+required-features = ["circom", "whir-p3-backend"]
 
 [dev-dependencies]
 bincode = "1.3"
@@ -68,3 +69,4 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 [[bench]]
 name = "proof_size_roundtrip"
 harness = false
+required-features = ["whir-p3-backend"]

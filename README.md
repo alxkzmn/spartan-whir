@@ -1,6 +1,9 @@
 # spartan-whir
 
-`spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields with `whir-p3` as the multilinear PCS backend.
+`spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields.
+The Poseidon instantiation uses upstream Plonky3 WHIR as its multilinear PCS
+backend. The Keccak instantiation uses the legacy `whir-p3` backend behind the
+`whir-p3-backend` feature.
 
 ## SNARK Instantiations
 
@@ -11,12 +14,14 @@ targets:
   Keccak transcript and Keccak Merkle hashing needed by the Solidity verifier
   work.
 - `PoseidonEngine<Ext>` is the client-side-oriented instantiation. It uses the
-  KoalaBear Poseidon2 permutation shape used by `whir-p3` and is the intended
+  KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR and is the intended
   path for Circom frontend benchmarks.
 
 The Circom frontend circuits are written over KoalaBear in both cases.
 
 ## Keccak Backend
+
+The Keccak backend is enabled with the `whir-p3-backend` Cargo feature.
 
 - Engine: `KeccakEngine<Ext>`
   - `QuarticBinExtension = BinomialExtensionField<F, 4>`

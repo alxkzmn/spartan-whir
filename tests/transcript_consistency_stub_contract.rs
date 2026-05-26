@@ -1,3 +1,5 @@
+#![cfg(feature = "whir-p3-backend")]
+
 mod common;
 
 use p3_challenger::FieldChallenger;

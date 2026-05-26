@@ -3,7 +3,16 @@ use alloc::vec::Vec;
 use p3_field::{PackedValue, PrimeField32};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
+#[cfg(feature = "whir-p3-backend")]
 use whir_p3::metrics::{add_leaf_hash_call, add_node_hash_call};
+
+// Keccak hash-call counters live in `whir-p3`; keep direct Keccak hashing
+// usable when that backend is not compiled in.
+#[cfg(not(feature = "whir-p3-backend"))]
+fn add_leaf_hash_call() {}
+
+#[cfg(not(feature = "whir-p3-backend"))]
+fn add_node_hash_call() {}
 
 pub const KECCAK_DIGEST_ELEMS: usize = 4;
 const KECCAK_DIGEST_BYTES: usize = 32;

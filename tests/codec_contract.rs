@@ -1,3 +1,5 @@
+#![cfg(feature = "whir-p3-backend")]
+
 use spartan_whir::{effective_digest_bytes, ProofCodecConfig};
 
 #[test]

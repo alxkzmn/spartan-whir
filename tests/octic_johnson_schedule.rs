@@ -1,3 +1,5 @@
+#![cfg(feature = "whir-p3-backend")]
+
 mod common;
 
 use spartan_whir::{

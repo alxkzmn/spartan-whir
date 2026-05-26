@@ -1,3 +1,5 @@
+#![cfg(feature = "whir-p3-backend")]
+
 use p3_challenger::{CanSample, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
 
@@ -225,7 +227,7 @@ fn whir_pcs_rejects_num_variables_mismatch() {
 }
 
 #[test]
-fn whir_pcs_rejects_linear_constraints_phase2() {
+fn whir_pcs_rejects_linear_constraints() {
     let config = test_config(6);
     let poly = sample_poly(config.num_variables);
     let linear_statement = PcsStatementBuilder::<KeccakEngine>::new()

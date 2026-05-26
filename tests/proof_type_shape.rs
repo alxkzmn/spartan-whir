@@ -1,3 +1,5 @@
+#![cfg(feature = "whir-p3-backend")]
+
 use spartan_whir::{
     engine::F, KeccakChallenger, KeccakQuarticEngine, KeccakQuinticEngine, MlePcs, ProvingKey,
     R1csInstance, R1csWitness, SpartanProof, SpartanProtocol, SpartanWhirEngine, SpartanWhirError,

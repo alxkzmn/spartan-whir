@@ -7,7 +7,9 @@ extern crate std;
 mod canonical_challenger;
 #[cfg(feature = "circom")]
 pub mod circom;
+#[cfg(feature = "whir-p3-backend")]
 pub mod codec;
+#[cfg(feature = "whir-p3-backend")]
 mod codec_v1;
 pub mod config;
 pub mod domain_separator;
@@ -17,6 +19,7 @@ pub mod fixtures;
 pub mod hashers;
 mod keccak_challenger;
 pub mod pcs;
+pub mod pcs_config;
 pub mod plonky3_whir_pcs;
 pub mod poly;
 pub mod poseidon;
@@ -28,6 +31,7 @@ pub mod spark;
 pub mod statement;
 pub mod sumcheck;
 pub mod whir_params;
+#[cfg(feature = "whir-p3-backend")]
 pub mod whir_pcs;
 
 pub use canonical_challenger::CanonicalSerializingChallenger32;
@@ -42,6 +46,7 @@ pub use circom::{
     import_witness_values_with_layout as import_circom_witness_values_with_layout, CircomR1cs,
     ImportedWitness,
 };
+#[cfg(feature = "whir-p3-backend")]
 pub use codec::{
     decode_spartan_blob, decode_spartan_blob_v1, effective_digest_bytes, encode_spartan_blob,
     encode_spartan_blob_v1, encode_spartan_blob_v1_with_report, ProofCodecConfig,
@@ -69,6 +74,7 @@ pub use hashers::{
 };
 pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
 pub use pcs::{CommittedPolynomialView, MlePcs, ProtocolPcs};
+pub use pcs_config::{SumcheckStrategy, WhirPcsConfig};
 pub use plonky3_whir_pcs::{
     Plonky3WhirPcs, Plonky3WhirProverData, PoseidonProvingKey, PoseidonSparkSpartanProof,
     PoseidonSpartanProof, PoseidonSpartanProtocol, PoseidonSpartanSnarkConfig,
@@ -81,9 +87,11 @@ pub use poly::{
 pub use poseidon::{setup_poseidon, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig};
 #[cfg(feature = "circom")]
 pub use poseidon::{PoseidonWitnessGenerator, PoseidonWitnessGeneratorError};
+#[cfg(feature = "whir-p3-backend")]
+pub use profiling::profile_spartan_blob_v1;
 pub use profiling::{
-    profile_spartan_blob_v1, trace_proof_size_report, NoopObserver, ProofSizeCounters,
-    ProofSizeReport, ProofSizeSection, ProtocolObserver, ProtocolStage, SectionSize,
+    trace_proof_size_report, NoopObserver, ProofSizeCounters, ProofSizeReport, ProofSizeSection,
+    ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
     ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkReadOpeningProof,
@@ -126,8 +134,9 @@ pub use sumcheck::{
     prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
 pub use whir_params::{WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES};
+#[cfg(feature = "whir-p3-backend")]
 pub use whir_pcs::{
     observe_whir_fs_domain_separator, prepare_committed_opening, verify_finalize,
-    verify_parse_commitment, ParsedWhirCommitment, ProtocolWhirEngine, SumcheckStrategy, WhirPcs,
-    WhirPcsConfig, WhirProverData, WhirProverDataView,
+    verify_parse_commitment, ParsedWhirCommitment, ProtocolWhirEngine, WhirPcs, WhirProverData,
+    WhirProverDataView,
 };

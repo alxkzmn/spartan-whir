@@ -1,5 +1,5 @@
-use crate::engine::ExtField;
-use crate::engine::F;
+#[cfg(feature = "whir-p3-backend")]
+use crate::engine::{ExtField, F};
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
@@ -323,6 +323,7 @@ fn pct_basis_points(bytes: usize, total_bytes: usize) -> u64 {
     }
 }
 
+#[cfg(feature = "whir-p3-backend")]
 pub fn profile_spartan_blob_v1<EF>(
     codec: &crate::ProofCodecConfig,
     pcs_config: &crate::WhirPcsConfig,
