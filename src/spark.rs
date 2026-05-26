@@ -3,6 +3,7 @@ use core::cmp::Ordering;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField32};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     engine::F, evaluate_mle_table, CubicRoundPoly, EqPolynomial, MultilinearPoint, R1csShape,
@@ -14,7 +15,7 @@ use crate::{
 // to WHIR commitments and uses a measured shared-union sparse-table layout when
 // it is smaller than the compatibility fallback.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SparkMatrixSlot {
     A = 0,
     B = 1,
@@ -22,20 +23,20 @@ pub enum SparkMatrixSlot {
     Zero = 3,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SparkLayoutKind {
     Joint,
     SharedUnion,
     PerMatrix,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SparkLayoutDecision {
     SharedUnion,
     PerMatrix,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SparkMemoryAxis {
     Row,
     Col,
@@ -171,16 +172,16 @@ pub struct SparkSolidityGasEstimate {
     pub total_gas_upper_bound: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueRoundPoly<EF>(pub Vec<EF>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueSumcheckProof<EF> {
     pub rounds: Vec<SparkValueRoundPoly<EF>>,
     pub final_evals: SparkValueFinalEvals<EF>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueFinalEvals<EF> {
     pub selector: EF,
     pub val: EF,
@@ -191,27 +192,27 @@ pub struct SparkValueFinalEvals<EF> {
     pub ecol: EF,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkGrandProductTree<EF> {
     pub gamma: EF,
     pub layers: Vec<Vec<EF>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkGrandProductLayerProof<EF> {
     pub rounds: Vec<CubicRoundPoly<EF>>,
     pub left_eval: EF,
     pub right_eval: EF,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkGrandProductProof<EF> {
     pub root: EF,
     pub layers: Vec<SparkGrandProductLayerProof<EF>>,
     pub leaf_eval: EF,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Dotproduct claim batched into the leaf-adjacent layer of a SPARK batched
 /// product proof.
 ///
@@ -223,7 +224,7 @@ pub struct SparkDotProductCircuit<EF> {
     pub weight: Vec<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkBatchedProductLayerProof<EF> {
     pub rounds: Vec<CubicRoundPoly<EF>>,
     pub product_left_evals: Vec<EF>,
@@ -233,14 +234,14 @@ pub struct SparkBatchedProductLayerProof<EF> {
     pub dotproduct_weight_evals: Vec<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkBatchedProductProof<EF> {
     pub product_roots: Vec<EF>,
     pub dotproduct_claims: Vec<EF>,
     pub layers: Vec<SparkBatchedProductLayerProof<EF>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkBatchedProductLeafClaims<EF> {
     /// Evaluation point for the product child-layer claims. Its length is
     /// `log2(N)`, where `N` is the product domain size.
@@ -254,7 +255,7 @@ pub struct SparkBatchedProductLeafClaims<EF> {
     pub dotproduct_weight_evals: Vec<EF>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkMemoryProductClaim<EF> {
     pub init_root: EF,
     pub read_root: EF,
@@ -262,7 +263,7 @@ pub struct SparkMemoryProductClaim<EF> {
     pub audit_root: EF,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkMemoryProductProof<EF> {
     pub beta: EF,
     pub gamma: EF,
@@ -270,7 +271,7 @@ pub struct SparkMemoryProductProof<EF> {
     pub col: SparkMemoryProductClaim<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkAxisGrandProductProof<EF> {
     pub init: SparkGrandProductProof<EF>,
     pub read: SparkGrandProductProof<EF>,
@@ -278,14 +279,14 @@ pub struct SparkAxisGrandProductProof<EF> {
     pub audit: SparkGrandProductProof<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkMemoryGrandProductProof<EF> {
     pub products: SparkMemoryProductProof<EF>,
     pub row: SparkAxisGrandProductProof<EF>,
     pub col: SparkAxisGrandProductProof<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkBatchedMemoryProductsProof<EF> {
     pub products: SparkMemoryProductProof<EF>,
     pub matrix_evals: [EF; 3],
@@ -293,7 +294,7 @@ pub struct SparkBatchedMemoryProductsProof<EF> {
     pub proof_mem: SparkBatchedProductProof<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkBatchedMemoryProductsLeafClaims<EF> {
     pub beta: EF,
     pub gamma: EF,
@@ -304,13 +305,13 @@ pub struct SparkBatchedMemoryProductsLeafClaims<EF> {
     pub mem: SparkBatchedProductLeafClaims<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkGrandProductLeafClaim<EF> {
     pub point: MultilinearPoint<EF>,
     pub term_eval: EF,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkAxisGrandProductLeafClaims<EF> {
     pub init: SparkGrandProductLeafClaim<EF>,
     pub read: SparkGrandProductLeafClaim<EF>,
@@ -318,7 +319,7 @@ pub struct SparkAxisGrandProductLeafClaims<EF> {
     pub audit: SparkGrandProductLeafClaim<EF>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkMemoryGrandProductLeafClaims<EF> {
     pub beta: EF,
     pub gamma: EF,
@@ -326,7 +327,7 @@ pub struct SparkMemoryGrandProductLeafClaims<EF> {
     pub col: SparkAxisGrandProductLeafClaims<EF>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkFixedTableOpeningEvals<EF> {
     pub val_a_low: EF,
     pub val_a_high: EF,
@@ -342,7 +343,7 @@ pub struct SparkFixedTableOpeningEvals<EF> {
     pub col_audit_ts: EF,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkReadTableOpeningEvals<EF> {
     pub erow_low: EF,
     pub erow_high: EF,

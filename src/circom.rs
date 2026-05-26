@@ -6,6 +6,7 @@ use std::{
 };
 
 use p3_field::PrimeCharacteristicRing;
+use serde::{Deserialize, Serialize};
 
 use crate::{engine::F, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix, SpartanWhirError};
 
@@ -14,6 +15,14 @@ const R1CS_MAGIC: &[u8; 4] = b"r1cs";
 const WTNS_MAGIC: &[u8; 4] = b"wtns";
 
 pub type ImportedCircuit = (R1csShape<F>, R1csWitness<F>, Vec<F>);
+pub type ImportedWitness = (R1csWitness<F>, Vec<F>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CircomR1cs {
+    pub shape: R1csShape<F>,
+    pub public_outputs: usize,
+    pub public_inputs: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CircomAdapterError {
@@ -92,17 +101,85 @@ pub fn import_bytes(r1cs: &[u8], wtns: &[u8]) -> Result<ImportedCircuit, CircomA
     import_parsed(r1cs, witness)
 }
 
+pub fn import_r1cs_path(r1cs_path: impl AsRef<Path>) -> Result<CircomR1cs, CircomAdapterError> {
+    let r1cs = fs::read(r1cs_path)?;
+    import_r1cs_bytes(&r1cs)
+}
+
+pub fn import_r1cs_bytes(r1cs: &[u8]) -> Result<CircomR1cs, CircomAdapterError> {
+    build_circom_r1cs(parse_r1cs(r1cs)?)
+}
+
+pub fn import_witness_path(
+    shape: &R1csShape<F>,
+    wtns_path: impl AsRef<Path>,
+) -> Result<ImportedWitness, CircomAdapterError> {
+    let wtns = fs::read(wtns_path)?;
+    import_witness_bytes(shape, &wtns)
+}
+
+pub fn import_witness_bytes(
+    shape: &R1csShape<F>,
+    wtns: &[u8],
+) -> Result<ImportedWitness, CircomAdapterError> {
+    let witness_values = parse_wtns(wtns)?;
+    import_witness_values(shape, witness_values)
+}
+
+pub fn import_witness_bytes_with_layout(
+    validation_shape: &R1csShape<F>,
+    num_vars: usize,
+    num_io: usize,
+    wtns: &[u8],
+) -> Result<ImportedWitness, CircomAdapterError> {
+    let witness_values = parse_wtns(wtns)?;
+    import_witness_values_with_layout(validation_shape, num_vars, num_io, witness_values)
+}
+
+pub fn import_witness_values(
+    shape: &R1csShape<F>,
+    witness_values: Vec<F>,
+) -> Result<ImportedWitness, CircomAdapterError> {
+    import_witness_values_with_layout(shape, shape.num_vars, shape.num_io, witness_values)
+}
+
+pub fn import_witness_values_with_layout(
+    validation_shape: &R1csShape<F>,
+    num_vars: usize,
+    num_io: usize,
+    witness_values: Vec<F>,
+) -> Result<ImportedWitness, CircomAdapterError> {
+    let expected = num_vars
+        .checked_add(num_io)
+        .and_then(|n| n.checked_add(1))
+        .ok_or(CircomAdapterError::InvalidShape)?;
+    if witness_values.len() != expected {
+        return Err(CircomAdapterError::InvalidWitnessLength {
+            expected,
+            actual: witness_values.len(),
+        });
+    }
+    let one_plus_io = num_io
+        .checked_add(1)
+        .ok_or(CircomAdapterError::InvalidShape)?;
+    let public_inputs = witness_values[1..one_plus_io].to_vec();
+    let witness = R1csWitness {
+        w: witness_values[one_plus_io..].to_vec(),
+    };
+    validate_satisfaction(validation_shape, &witness, &public_inputs)?;
+    Ok((witness, public_inputs))
+}
+
 fn import_parsed(
     r1cs: ParsedR1cs,
     witness_values: Vec<F>,
 ) -> Result<ImportedCircuit, CircomAdapterError> {
-    if witness_values.len() != r1cs.header.total_wires {
-        return Err(CircomAdapterError::InvalidWitnessLength {
-            expected: r1cs.header.total_wires,
-            actual: witness_values.len(),
-        });
-    }
+    let circom_r1cs = build_circom_r1cs(r1cs)?;
+    let (witness, public_inputs) = import_witness_values(&circom_r1cs.shape, witness_values)?;
+    Ok((circom_r1cs.shape, witness, public_inputs))
+}
 
+fn build_circom_r1cs(r1cs: ParsedR1cs) -> Result<CircomR1cs, CircomAdapterError> {
     let num_io = r1cs
         .header
         .public_outputs
@@ -125,11 +202,6 @@ fn import_parsed(
     let num_cols = num_vars
         .checked_add(one_plus_io)
         .ok_or(CircomAdapterError::InvalidShape)?;
-
-    let public_inputs = witness_values[1..one_plus_io].to_vec();
-    let witness = R1csWitness {
-        w: witness_values[one_plus_io..].to_vec(),
-    };
 
     let remap = |wire: usize| -> Result<usize, CircomAdapterError> {
         if wire >= r1cs.header.total_wires {
@@ -170,9 +242,12 @@ fn import_parsed(
         b: map_matrix(&r1cs.b)?,
         c: map_matrix(&r1cs.c)?,
     };
-    validate_satisfaction(&shape, &witness, &public_inputs)?;
 
-    Ok((shape, witness, public_inputs))
+    Ok(CircomR1cs {
+        shape,
+        public_outputs: r1cs.header.public_outputs,
+        public_inputs: r1cs.header.public_inputs,
+    })
 }
 
 fn validate_satisfaction(

@@ -2,15 +2,16 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
+use serde::{Deserialize, Serialize};
 
 use crate::{CubicRoundPoly, MultilinearPoint, QuadraticRoundPoly, R1csShape, SpartanWhirError};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OuterSumcheckProof<F> {
     pub rounds: Vec<CubicRoundPoly<F>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InnerSumcheckProof<F> {
     pub rounds: Vec<QuadraticRoundPoly<F>>,
 }

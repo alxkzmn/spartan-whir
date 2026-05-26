@@ -1,16 +1,17 @@
 use crate::SpartanWhirError;
+use serde::{Deserialize, Serialize};
 
 pub const MIN_SECURITY_BITS: u32 = 80;
 pub const DEFAULT_SECURITY_BITS: u32 = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SoundnessAssumption {
     UniqueDecoding,
     JohnsonBound,
     CapacityBound,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecurityConfig {
     pub security_level_bits: u32,
     pub merkle_security_bits: u32,

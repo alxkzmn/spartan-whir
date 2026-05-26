@@ -19,6 +19,7 @@ mod keccak_challenger;
 pub mod pcs;
 pub mod plonky3_whir_pcs;
 pub mod poly;
+pub mod poseidon;
 pub mod profiling;
 pub mod protocol;
 pub mod r1cs;
@@ -31,7 +32,16 @@ pub mod whir_pcs;
 
 pub use canonical_challenger::CanonicalSerializingChallenger32;
 #[cfg(feature = "circom")]
-pub use circom::{import_bytes as import_circom_bytes, import_paths as import_circom_paths};
+pub use circom::{
+    import_bytes as import_circom_bytes, import_paths as import_circom_paths,
+    import_r1cs_bytes as import_circom_r1cs_bytes, import_r1cs_path as import_circom_r1cs_path,
+    import_witness_bytes as import_circom_witness_bytes,
+    import_witness_bytes_with_layout as import_circom_witness_bytes_with_layout,
+    import_witness_path as import_circom_witness_path,
+    import_witness_values as import_circom_witness_values,
+    import_witness_values_with_layout as import_circom_witness_values_with_layout, CircomR1cs,
+    ImportedWitness,
+};
 pub use codec::{
     decode_spartan_blob, decode_spartan_blob_v1, effective_digest_bytes, encode_spartan_blob,
     encode_spartan_blob_v1, encode_spartan_blob_v1_with_report, ProofCodecConfig,
@@ -68,6 +78,9 @@ pub use poly::{
     evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,
     QuadraticRoundPoly,
 };
+pub use poseidon::{setup_poseidon, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig};
+#[cfg(feature = "circom")]
+pub use poseidon::{PoseidonWitnessGenerator, PoseidonWitnessGeneratorError};
 pub use profiling::{
     profile_spartan_blob_v1, trace_proof_size_report, NoopObserver, ProofSizeCounters,
     ProofSizeReport, ProofSizeSection, ProtocolObserver, ProtocolStage, SectionSize,

@@ -1,16 +1,18 @@
 use alloc::vec::Vec;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{R1csShape, SecurityConfig, SoundnessAssumption, WhirParams};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {
     DirectSparse,
     Spark,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainSeparator {
-    pub protocol_id: &'static [u8],
+    pub protocol_id: Vec<u8>,
     pub matrix_closing: MatrixClosingMode,
     pub num_cons: usize,
     pub num_vars: usize,
@@ -42,7 +44,7 @@ impl DomainSeparator {
         matrix_closing: MatrixClosingMode,
     ) -> Self {
         Self {
-            protocol_id: b"spartan-whir-v0",
+            protocol_id: b"spartan-whir-v0".to_vec(),
             matrix_closing,
             num_cons: shape.num_cons,
             num_vars: shape.num_vars,
@@ -56,7 +58,7 @@ impl DomainSeparator {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend_from_slice(self.protocol_id);
+        out.extend_from_slice(&self.protocol_id);
         out.push(matrix_closing_to_byte(self.matrix_closing));
         out.extend_from_slice(&(self.num_cons as u64).to_le_bytes());
         out.extend_from_slice(&(self.num_vars as u64).to_le_bytes());

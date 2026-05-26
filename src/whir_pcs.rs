@@ -7,7 +7,7 @@ use p3_field::{PackedValue, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTree;
 use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use whir_p3::{
     fiat_shamir::domain_separator::DomainSeparator as WhirFsDomainSeparator,
     parameters::{errors::SecurityAssumption as WhirSecurity, FoldingFactor, ProtocolParameters},
@@ -54,6 +54,59 @@ pub struct WhirPcsConfig {
     pub security: SecurityConfig,
     pub whir: WhirParams,
     pub sumcheck_strategy: SumcheckStrategy,
+}
+
+#[derive(Serialize, Deserialize)]
+struct WhirPcsConfigSerde {
+    num_variables: usize,
+    security: SecurityConfig,
+    whir: WhirParams,
+    sumcheck_strategy: u8,
+}
+
+impl Serialize for WhirPcsConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let sumcheck_strategy = match self.sumcheck_strategy {
+            // Keep stable on the wire: 0 = Classic, 1 = Svo.
+            SumcheckStrategy::Classic => 0,
+            SumcheckStrategy::Svo => 1,
+        };
+        WhirPcsConfigSerde {
+            num_variables: self.num_variables,
+            security: self.security,
+            whir: self.whir,
+            sumcheck_strategy,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WhirPcsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let config = WhirPcsConfigSerde::deserialize(deserializer)?;
+        let sumcheck_strategy = match config.sumcheck_strategy {
+            // Keep stable on the wire: 0 = Classic, 1 = Svo.
+            0 => SumcheckStrategy::Classic,
+            1 => SumcheckStrategy::Svo,
+            other => {
+                return Err(serde::de::Error::custom(alloc::format!(
+                    "unsupported sumcheck strategy {other}"
+                )))
+            }
+        };
+        Ok(Self {
+            num_variables: config.num_variables,
+            security: config.security,
+            whir: config.whir,
+            sumcheck_strategy,
+        })
+    }
 }
 
 impl Default for WhirPcsConfig {

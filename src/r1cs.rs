@@ -2,17 +2,18 @@ use alloc::{vec, vec::Vec};
 use core::cmp::max;
 
 use p3_field::{ExtensionField, Field};
+use serde::{Deserialize, Serialize};
 
 use crate::{Evaluations, SpartanWhirError};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparseMatEntry<F> {
     pub row: usize,
     pub col: usize,
     pub val: F,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparseMatrix<F> {
     pub num_rows: usize,
     pub num_cols: usize,
@@ -29,7 +30,7 @@ impl<F> SparseMatrix<F> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct R1csShape<F> {
     pub num_cons: usize,
     pub num_vars: usize,
@@ -39,12 +40,12 @@ pub struct R1csShape<F> {
     pub c: SparseMatrix<F>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct R1csWitness<F> {
     pub w: Vec<F>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct R1csInstance<F, C> {
     pub public_inputs: Vec<F>,
     pub witness_commitment: C,

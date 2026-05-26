@@ -1,15 +1,16 @@
 use alloc::{vec, vec::Vec};
 
 use p3_field::Field;
+use serde::{Deserialize, Serialize};
 
 use crate::SpartanWhirError;
 
 pub type Evaluations<F> = Vec<F>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MultilinearPoint<F>(pub Vec<F>);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EqPolynomial<F> {
     pub point: MultilinearPoint<F>,
 }
@@ -64,7 +65,7 @@ pub fn evaluate_mle_table<EF: Field>(table: &[EF], point: &[EF]) -> Result<EF, S
     Ok(layer[0])
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CubicRoundPoly<F>(pub [F; 3]); // [h(0), h(2), h(3)]
 
 impl<F: Field> CubicRoundPoly<F> {
@@ -102,7 +103,7 @@ impl<F: Field> CubicRoundPoly<F> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuadraticRoundPoly<F>(pub [F; 2]); // [h(0), h(2)]
 
 impl<F: Field> QuadraticRoundPoly<F> {

@@ -26,6 +26,7 @@ use p3_whir::{
         verifier::WhirVerifier,
     },
 };
+use serde::{Deserialize, Serialize};
 
 use crate::profiling::profile_scope;
 use crate::{
@@ -111,12 +112,18 @@ where
     }
 }
 
-pub struct Plonky3WhirProverData<Ext: ExtField> {
+/// Prover-side state retained for Plonky3 WHIR openings.
+///
+/// Serialization includes the Merkle tree contents. The `Rc` sharing used for
+/// cheap in-process clones is not preserved across a serde roundtrip.
+#[derive(Serialize, Deserialize)]
+#[serde(bound(serialize = "Ext: Serialize", deserialize = "Ext: Deserialize<'de>"))]
+pub struct Plonky3WhirProverData<Ext> {
     commitment: PoseidonCommitment,
     merkle_tree: Option<PoseidonMerkleTree>,
     proof: PoseidonWhirProof<Ext>,
     polynomial: Vec<F>,
-    ood_pairs: Vec<(Point<Ext>, Ext)>,
+    ood_pairs: Vec<(Vec<Ext>, Ext)>,
     num_variables: usize,
 }
 
@@ -191,7 +198,7 @@ where
                 let eval = polynomial.eval_base(&point);
                 challenger.observe_algebra_element(eval);
                 proof.initial_ood_answers.push(eval);
-                ood_pairs.push((point, eval));
+                ood_pairs.push((point.as_slice().to_vec(), eval));
             }
         }
 
@@ -270,7 +277,9 @@ where
                 let eval = polynomial.eval_base(&point);
                 challenger.observe_algebra_element(eval);
                 prover_data.proof.initial_ood_answers.push(eval);
-                prover_data.ood_pairs.push((point, eval));
+                prover_data
+                    .ood_pairs
+                    .push((point.as_slice().to_vec(), eval));
             }
         }
         Ok(prover_data)
@@ -484,7 +493,12 @@ where
     }
     let pcs = build_poseidon_pcs::<Ext>(config)?;
     let mut claims = statement_point_claims(statement, config.num_variables)?;
-    claims.extend(prover_data.ood_pairs.iter().cloned());
+    claims.extend(
+        prover_data
+            .ood_pairs
+            .iter()
+            .map(|(point, eval)| (Point::new(point.clone()), *eval)),
+    );
     let layout = SpartanEqLayout {
         polynomial: Poly::new(prover_data.polynomial),
         claims,

@@ -5,6 +5,7 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, Hash};
+use serde::{Deserialize, Serialize};
 
 use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
 use crate::profiling::profile_scope;
@@ -21,6 +22,11 @@ use crate::{
     SpartanWhirError, WhirParams, WhirPcsConfig,
 };
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::F: Serialize, Pcs::Commitment: Serialize, Pcs::ProverData: Serialize, Pcs::Config: Serialize",
+    deserialize = "E::F: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::ProverData: Deserialize<'de>, Pcs::Config: Deserialize<'de>"
+))]
 pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub matrix_closing: MatrixClosingMode,
     pub shape_canonical: R1csShape<E::F>,
@@ -37,6 +43,11 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::F: Serialize, Pcs::Commitment: Serialize, Pcs::Config: Serialize",
+    deserialize = "E::F: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Config: Deserialize<'de>"
+))]
 pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub matrix_closing: MatrixClosingMode,
     pub shape_canonical: R1csShape<E::F>,
@@ -52,6 +63,11 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
 pub struct SpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub outer_sumcheck: OuterSumcheckProof<E::EF>,
     pub outer_claims: (E::EF, E::EF, E::EF),
@@ -60,6 +76,11 @@ pub struct SpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub pcs_proof: Pcs::Proof,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
 pub struct SparkSpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub outer_sumcheck: OuterSumcheckProof<E::EF>,
     pub outer_claims: (E::EF, E::EF, E::EF),
@@ -71,6 +92,11 @@ pub struct SparkSpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub pcs_proof: Pcs::Proof,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
 pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub value_num_variables: usize,
     pub value_column_bits: usize,
@@ -84,6 +110,11 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<E>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
 pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub num_variables: usize,
     pub column_bits: usize,
@@ -98,7 +129,7 @@ pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<E>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpartanSnarkConfig {
     pub matrix_closing: MatrixClosingMode,
     pub security: SecurityConfig,
@@ -106,6 +137,11 @@ pub struct SpartanSnarkConfig {
     pub pcs_config: WhirPcsConfig,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
 pub enum SpartanProofKind<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     Direct(SpartanProof<E, Pcs>),
     Spark(SparkSpartanProof<E, Pcs>),
@@ -129,6 +165,11 @@ struct SparkReadCommitments<C> {
     commitment: C,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Pcs::ProverData: Serialize",
+    deserialize = "Pcs::ProverData: Deserialize<'de>"
+))]
 struct SparkFixedProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     value: Pcs::ProverData,
     audit: Pcs::ProverData,
@@ -150,7 +191,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkFixedCommitments<C = [u64; 4]> {
     pub value: C,
     pub audit: C,

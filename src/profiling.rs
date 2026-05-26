@@ -1,5 +1,6 @@
 use crate::engine::ExtField;
 use crate::engine::F;
+use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
 #[cfg(feature = "circom")]
@@ -11,7 +12,7 @@ use std::{env, thread_local, time::Instant};
 #[cfg(feature = "circom")]
 use tracing::info;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolStage {
     SetupStart,
     SetupEnd,
@@ -28,7 +29,7 @@ pub trait ProtocolObserver {
     fn on_stage(&mut self, _stage: ProtocolStage) {}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct NoopObserver;
 
 impl ProtocolObserver for NoopObserver {}
