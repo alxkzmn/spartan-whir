@@ -7,10 +7,10 @@ use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use spartan_whir::{
     decode_spartan_blob_v1, encode_spartan_blob_v1, encode_spartan_blob_v1_with_report,
     engine::{ExtField, F},
-    observe_whir_fs_domain_separator, profile_spartan_blob_v1, KeccakEngine, MatrixClosingMode,
-    MlePcs, MultilinearPoint, PcsStatementBuilder, PointEvalClaim, ProofCodecConfig,
-    QuarticBinExtension, QuinticExtension, SpartanBlobDecodeContext, SpartanProtocol,
-    SpartanSnarkConfig, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
+    observe_whir_fs_domain_separator, profile_spartan_blob_v1, InvalidConfigReason, KeccakEngine,
+    MatrixClosingMode, MlePcs, MultilinearPoint, PcsStatementBuilder, PointEvalClaim,
+    ProofCodecConfig, QuarticBinExtension, QuinticExtension, SpartanBlobDecodeContext,
+    SpartanProtocol, SpartanSnarkConfig, SpartanWhirError, WhirParams, WhirPcs, WhirPcsConfig,
 };
 use whir_p3::poly::{
     evals::EvaluationsList as WhirEvaluations, multilinear::MultilinearPoint as WhirPoint,
@@ -256,7 +256,16 @@ fn quintic_live_whir_limit_accepts_boundary_and_rejects_above() {
         QuinticExtension,
         4,
     >(&above, &mut above_challenger);
-    assert_eq!(above_result, Err(SpartanWhirError::InvalidConfig));
+    assert_eq!(
+        above_result,
+        Err(SpartanWhirError::InvalidConfig(
+            InvalidConfigReason::FoldedDomainExceedsBaseTwoAdicity {
+                log_folded_domain_size: 25,
+                base_two_adicity: 24,
+                min_first_folding_factor: 2,
+            }
+        ))
+    );
 }
 
 #[test]

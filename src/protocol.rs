@@ -764,11 +764,11 @@ where
         let fixed_prover_data = pk
             .spark_fixed_prover_data
             .clone()
-            .ok_or(SpartanWhirError::InvalidConfig)?;
+            .ok_or(SpartanWhirError::invalid_config())?;
         let expected_fixed_commitments = pk
             .spark_fixed_commitments
             .clone()
-            .ok_or(SpartanWhirError::InvalidConfig)?;
+            .ok_or(SpartanWhirError::invalid_config())?;
         let fixed_prover_data = {
             let _profile = profile_scope("spark_prepare_fixed_openings");
             prepare_spark_fixed_openings::<E, E::EF, Pcs>(
@@ -931,7 +931,7 @@ where
         let expected_fixed_commitments = vk
             .spark_fixed_commitments
             .clone()
-            .ok_or(SpartanWhirError::InvalidConfig)?;
+            .ok_or(SpartanWhirError::invalid_config())?;
         validate_spark_fixed_commitments::<E, E::EF, Pcs>(
             &proof.spark_fixed_openings,
             &expected_fixed_commitments,
@@ -1105,7 +1105,7 @@ where
     config.num_variables = config
         .num_variables
         .checked_add(read_column_bits::<EF>())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     config.validate()?;
     Ok(config)
 }
@@ -1117,7 +1117,7 @@ fn spark_fixed_value_pcs_config(
     config.num_variables = config
         .num_variables
         .checked_add(fixed_value_column_bits())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     config.validate()?;
     Ok(config)
 }
@@ -1130,10 +1130,10 @@ fn spark_fixed_audit_pcs_config(
     let audit_memory_size = row_memory_size
         .max(col_memory_size)
         .checked_next_power_of_two()
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let audit_domain_size = audit_memory_size
         .checked_mul(fixed_audit_column_count())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     spark_table_pcs_config(base, audit_domain_size)
 }
 
@@ -1185,7 +1185,7 @@ fn fixed_value_bundle(
         || !domain_size.is_power_of_two()
         || config.num_variables != domain_size.ilog2() as usize + fixed_value_column_bits()
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let mut packed = vec![F::ZERO; domain_size * fixed_value_column_count()];
     copy_rectangular_base_column(&mut packed, domain_size, 0, &tables.rows)?;
@@ -1203,14 +1203,14 @@ fn fixed_audit_bundle(
     config: &WhirPcsConfig,
 ) -> Result<Vec<F>, SpartanWhirError> {
     if config.num_variables < fixed_audit_column_bits() {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let audit_memory_bits = config.num_variables - fixed_audit_column_bits();
     let audit_memory_size = 1usize
         .checked_shl(audit_memory_bits as u32)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if tables.row_memory_size > audit_memory_size || tables.col_memory_size > audit_memory_size {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let mut packed = vec![F::ZERO; audit_memory_size * fixed_audit_column_count()];
     copy_rectangular_base_column(&mut packed, audit_memory_size, 0, &tables.audit_ts_row)?;
@@ -1226,12 +1226,12 @@ fn copy_rectangular_base_column(
 ) -> Result<(), SpartanWhirError> {
     let start = column
         .checked_mul(domain_size)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let end = start
         .checked_add(values.len())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if domain_size == 0 || values.len() > domain_size || end > packed.len() {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     packed[start..end].copy_from_slice(values);
     Ok(())
@@ -1263,7 +1263,7 @@ where
         || read_tables.ecol.len() != domain_size
         || config.num_variables != domain_size.ilog2() as usize + read_column_bits::<EF>()
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     // Column-major layout: high selector bits choose the coordinate column, and
     // the remaining coordinates are the original sparse-entry point.
@@ -1414,7 +1414,7 @@ where
     let value_num_variables = config
         .num_variables
         .checked_sub(read_column_bits::<EF>())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
@@ -1573,7 +1573,7 @@ where
     let value_num_variables = config
         .num_variables
         .checked_sub(read_column_bits::<EF>())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
@@ -1626,12 +1626,12 @@ where
     D: CommittedPolynomialView<EF>,
 {
     if prover_data.num_variables() != config.num_variables {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let value_num_variables = config
         .num_variables
         .checked_sub(fixed_value_column_bits())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
@@ -1815,12 +1815,12 @@ where
     D: CommittedPolynomialView<EF>,
 {
     if prover_data.num_variables() != config.num_variables {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let audit_memory_bits = config
         .num_variables
         .checked_sub(fixed_audit_column_bits())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let poly_ext: Vec<EF> = prover_data
         .polynomial()
         .iter()
@@ -1873,7 +1873,7 @@ where
     let audit_memory_bits = config
         .num_variables
         .checked_sub(fixed_audit_column_bits())
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let row_point = low_block_memory_point(
         &product_claims.mem.product_point,
         row_memory_size,
@@ -1935,7 +1935,7 @@ where
     D: CommittedPolynomialView<EF>,
 {
     if prover_data.num_variables() != config.num_variables {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let poly_ext: Vec<EF> = prover_data
         .polynomial()
@@ -2043,7 +2043,7 @@ where
     if erow_evals.iter().any(|evals| evals.len() != EF::DIMENSION)
         || ecol_evals.iter().any(|evals| evals.len() != EF::DIMENSION)
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let points = read_opening_points(product_claims)?;
     let mut claims = Vec::with_capacity(6 * EF::DIMENSION);
@@ -2103,7 +2103,7 @@ where
     EF: ExtField,
 {
     if column >= read_column_count::<EF>() {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     rectangular_point(column, read_column_bits::<EF>(), base_point)
 }
@@ -2135,11 +2135,11 @@ where
     EF: ExtField,
 {
     if memory_size == 0 || !memory_size.is_power_of_two() {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let memory_bits = memory_size.ilog2() as usize;
     if memory_bits > target_len || padded_point.0.len() < memory_bits {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let suffix_start = padded_point.0.len() - memory_bits;
     let mut point = vec![EF::ZERO; target_len - memory_bits];
@@ -2184,9 +2184,9 @@ where
 {
     let column_count = 1usize
         .checked_shl(column_bits as u32)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if column >= column_count {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let mut point = Vec::with_capacity(column_bits + base_point.0.len());
     for i in 0..column_bits {
@@ -2259,7 +2259,7 @@ where
         || proof.audit_num_variables != audit_config.num_variables
         || proof.audit_column_bits != fixed_audit_column_bits()
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     Ok(())
 }
@@ -2302,7 +2302,7 @@ where
         || proof.erow_ops_evals.len() != EF::DIMENSION
         || proof.ecol_ops_evals.len() != EF::DIMENSION
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     Ok(())
 }
@@ -2315,7 +2315,7 @@ where
     EF: ExtField,
 {
     if erow_evals.len() != 3 || ecol_evals.len() != 3 {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     Ok(SparkReadTableOpeningEvals {
         erow_low: recombine_coordinate_evals::<EF>(&erow_evals[0])?,
@@ -2348,11 +2348,11 @@ where
     EF: ExtField,
 {
     if evals.len() != EF::DIMENSION {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let mut out = EF::ZERO;
     for (i, &eval) in evals.iter().enumerate() {
-        let basis = EF::ith_basis_element(i).ok_or(SpartanWhirError::InvalidConfig)?;
+        let basis = EF::ith_basis_element(i).ok_or(SpartanWhirError::invalid_config())?;
         out += eval * basis;
     }
     Ok(out)

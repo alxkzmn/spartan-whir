@@ -669,7 +669,7 @@ fn map_whir_p3_folding_schedule(params: &WhirParams) -> Result<FoldingFactor, Sp
         crate::WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => {
             Ok(FoldingFactor::ConstantFromSecondRound(first, rest))
         }
-        crate::WhirFoldingSchedule::PerRound(_) => Err(SpartanWhirError::InvalidConfig),
+        crate::WhirFoldingSchedule::PerRound(_) => Err(SpartanWhirError::invalid_config()),
     }
 }
 

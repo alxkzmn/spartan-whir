@@ -62,7 +62,7 @@ pub use engine::{
     PoseidonNodeCompress, PoseidonOcticEngine, PoseidonQuarticEngine, PoseidonQuinticEngine,
     QuarticBinExtension, QuinticExtension,
 };
-pub use error::SpartanWhirError;
+pub use error::{InvalidConfigReason, SpartanWhirError};
 pub use fixtures::{
     generate_satisfiable_fixture, generate_satisfiable_fixture_for_pow2, SyntheticR1csConfig,
     SyntheticR1csFixture,

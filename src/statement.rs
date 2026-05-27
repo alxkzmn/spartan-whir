@@ -67,7 +67,7 @@ impl<E: SpartanWhirEngine> PcsStatementBuilder<E> {
 
     pub fn finalize(self) -> Result<PcsStatement<E>, SpartanWhirError> {
         if self.point_evals.is_empty() && self.linear_constraints.is_empty() {
-            return Err(SpartanWhirError::InvalidConfig);
+            return Err(SpartanWhirError::invalid_config());
         }
 
         Ok(PcsStatement {

@@ -7,7 +7,7 @@ use spartan_whir::{
 #[test]
 fn finalize_rejects_empty_builder() {
     let result = PcsStatementBuilder::<common::DummyEngine>::new().finalize();
-    assert!(matches!(result, Err(SpartanWhirError::InvalidConfig)));
+    assert!(matches!(result, Err(SpartanWhirError::InvalidConfig(_))));
 }
 
 #[test]

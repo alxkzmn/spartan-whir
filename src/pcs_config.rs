@@ -3,7 +3,7 @@ use alloc::format;
 use p3_field::TwoAdicField;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{engine::F, SecurityConfig, SpartanWhirError, WhirParams};
+use crate::{engine::F, InvalidConfigReason, SecurityConfig, SpartanWhirError, WhirParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SumcheckStrategy {
@@ -96,22 +96,64 @@ impl WhirPcsConfig {
         let folding_schedule = self.whir.effective_folding_schedule();
         let first_folding_factor = folding_schedule.first_round();
 
-        if first_folding_factor == 0
-            || self.whir.rs_domain_initial_reduction_factor == 0
-            || self.whir.rs_domain_initial_reduction_factor > first_folding_factor
-            || !folding_schedule.is_valid_for(self.num_variables)
-        {
-            return Err(SpartanWhirError::InvalidConfig);
+        if first_folding_factor == 0 {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::ZeroFoldingFactor,
+            ));
+        }
+        if self.whir.rs_domain_initial_reduction_factor == 0 {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::ZeroRsDomainInitialReductionFactor,
+            ));
+        }
+        if self.whir.rs_domain_initial_reduction_factor > first_folding_factor {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::RsDomainInitialReductionFactorExceedsFirstFoldingFactor {
+                    rs_domain_initial_reduction_factor: self
+                        .whir
+                        .rs_domain_initial_reduction_factor,
+                    first_folding_factor,
+                },
+            ));
+        }
+        if !folding_schedule.is_valid_for(self.num_variables) {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::InvalidFoldingSchedule {
+                    num_variables: self.num_variables,
+                },
+            ));
         }
 
-        let log_folded_domain_size = self
+        let log_domain_size = self
             .num_variables
             .checked_add(self.whir.starting_log_inv_rate)
-            .and_then(|v| v.checked_sub(first_folding_factor))
-            .ok_or(SpartanWhirError::InvalidConfig)?;
+            .ok_or_else(|| {
+                SpartanWhirError::invalid_config_reason(
+                    InvalidConfigReason::FoldedDomainSizeOverflow {
+                        num_variables: self.num_variables,
+                        starting_log_inv_rate: self.whir.starting_log_inv_rate,
+                    },
+                )
+            })?;
+        let log_folded_domain_size = log_domain_size
+            .checked_sub(first_folding_factor)
+            .ok_or_else(|| {
+                SpartanWhirError::invalid_config_reason(
+                    InvalidConfigReason::FirstFoldingFactorExceedsDomain {
+                        first_folding_factor,
+                        log_domain_size,
+                    },
+                )
+            })?;
 
         if log_folded_domain_size > F::TWO_ADICITY {
-            return Err(SpartanWhirError::InvalidConfig);
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::FoldedDomainExceedsBaseTwoAdicity {
+                    log_folded_domain_size,
+                    base_two_adicity: F::TWO_ADICITY,
+                    min_first_folding_factor: log_domain_size.saturating_sub(F::TWO_ADICITY),
+                },
+            ));
         }
 
         Ok(())

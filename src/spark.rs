@@ -423,7 +423,7 @@ impl SparkVerifierOperationReport {
             .checked_add(whir_opening_execution_gas)
             .and_then(|n| n.checked_add(spark_payload_calldata_gas_upper_bound))
             .and_then(|n| n.checked_add(whir_opening_calldata_gas_upper_bound))
-            .ok_or(SpartanWhirError::InvalidConfig)?;
+            .ok_or(SpartanWhirError::invalid_config())?;
 
         Ok(SparkSolidityGasEstimate {
             whir_opening_count,
@@ -447,23 +447,23 @@ fn spark_verifier_operation_report(
     extension_dimension: usize,
 ) -> Result<SparkVerifierOperationReport, SpartanWhirError> {
     if extension_dimension == 0 {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let proof_time_read_columns = extension_dimension
         .checked_mul(2)
         .and_then(usize::checked_next_power_of_two)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let memory_domain_size = row_memory_size
         .max(col_memory_size)
         .checked_next_power_of_two()
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let proof_ops_layers = log2_power_of_two(value_domain_size);
     let proof_mem_layers = log2_power_of_two(memory_domain_size);
     let proof_ops_sumcheck_rounds = triangular_round_count(proof_ops_layers)?;
     let proof_mem_sumcheck_rounds = triangular_round_count(proof_mem_layers)?;
     let total_product_sumcheck_rounds = proof_ops_sumcheck_rounds
         .checked_add(proof_mem_sumcheck_rounds)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
 
     let proof_ops_product_count: usize = 4;
     let proof_ops_dotproduct_count: usize = 6;
@@ -477,12 +477,12 @@ fn spark_verifier_operation_report(
     let product_layer_eval_ext_elements = proof_ops_product_layer_evals
         .checked_add(proof_ops_dotproduct_leaf_evals)
         .and_then(|n| n.checked_add(proof_mem_product_layer_evals))
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
 
     let product_root_claim_ext_elements = proof_ops_product_count
         .checked_add(proof_ops_dotproduct_count)
         .and_then(|n| n.checked_add(proof_mem_product_count))
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     // beta, gamma, row/column init/read/write/audit roots, and the three
     // matrix evaluation claims currently live in the wrapper proof object.
     let product_wrapper_ext_elements: usize = 2 + 8 + 3;
@@ -490,13 +490,13 @@ fn spark_verifier_operation_report(
         .checked_add(product_layer_eval_ext_elements)
         .and_then(|n| n.checked_add(product_root_claim_ext_elements))
         .and_then(|n| n.checked_add(product_wrapper_ext_elements))
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
 
     let fixed_opening_eval_ext_elements: usize = 12;
     let read_opening_eval_ext_elements = checked_mul(6, extension_dimension)?;
     let opening_eval_ext_elements = fixed_opening_eval_ext_elements
         .checked_add(read_opening_eval_ext_elements)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     let extension_element_bytes = checked_mul(4, extension_dimension)?;
     let duplicate_commitment_bytes: usize = 3 * 32;
     let estimated_product_proof_bytes =
@@ -506,7 +506,7 @@ fn spark_verifier_operation_report(
     let estimated_spark_payload_bytes_excluding_whir = estimated_product_proof_bytes
         .checked_add(estimated_opening_eval_bytes)
         .and_then(|n| n.checked_add(duplicate_commitment_bytes))
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
 
     Ok(SparkVerifierOperationReport {
         layout,
@@ -552,11 +552,12 @@ fn triangular_round_count(depth: usize) -> Result<usize, SpartanWhirError> {
     depth
         .checked_mul(depth.saturating_sub(1))
         .and_then(|n| n.checked_div(2))
-        .ok_or(SpartanWhirError::InvalidConfig)
+        .ok_or(SpartanWhirError::invalid_config())
 }
 
 fn checked_mul(lhs: usize, rhs: usize) -> Result<usize, SpartanWhirError> {
-    lhs.checked_mul(rhs).ok_or(SpartanWhirError::InvalidConfig)
+    lhs.checked_mul(rhs)
+        .ok_or(SpartanWhirError::invalid_config())
 }
 
 impl<EF: Field> SparkValueRoundPoly<EF> {

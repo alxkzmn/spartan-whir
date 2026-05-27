@@ -26,27 +26,27 @@ pub fn generate_satisfiable_fixture(
     cfg: &SyntheticR1csConfig,
 ) -> Result<SyntheticR1csFixture, SpartanWhirError> {
     if cfg.target_log2_witness_poly < 1 || cfg.num_constraints == 0 {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
 
     let target_poly_size = 1usize
         .checked_shl(cfg.target_log2_witness_poly as u32)
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     if cfg.num_io >= target_poly_size {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
 
     let num_cols = target_poly_size
         .checked_add(1)
         .and_then(|n| n.checked_add(cfg.num_io))
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
 
     if cfg.a_terms_per_constraint == 0
         || cfg.b_terms_per_constraint == 0
         || cfg.a_terms_per_constraint > num_cols
         || cfg.b_terms_per_constraint > num_cols
     {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
 
     let mut rng = XorShift64::new(cfg.seed);

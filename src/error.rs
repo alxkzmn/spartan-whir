@@ -1,3 +1,75 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidConfigReason {
+    Generic,
+    ZeroFoldingFactor,
+    ZeroRsDomainInitialReductionFactor,
+    RsDomainInitialReductionFactorExceedsFirstFoldingFactor {
+        rs_domain_initial_reduction_factor: usize,
+        first_folding_factor: usize,
+    },
+    InvalidFoldingSchedule {
+        num_variables: usize,
+    },
+    FoldedDomainSizeOverflow {
+        num_variables: usize,
+        starting_log_inv_rate: usize,
+    },
+    FirstFoldingFactorExceedsDomain {
+        first_folding_factor: usize,
+        log_domain_size: usize,
+    },
+    FoldedDomainExceedsBaseTwoAdicity {
+        log_folded_domain_size: usize,
+        base_two_adicity: usize,
+        min_first_folding_factor: usize,
+    },
+}
+
+impl core::fmt::Display for InvalidConfigReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Generic => write!(f, "unspecified reason"),
+            Self::ZeroFoldingFactor => write!(f, "first folding factor is zero"),
+            Self::ZeroRsDomainInitialReductionFactor => {
+                write!(f, "RS domain initial reduction factor is zero")
+            }
+            Self::RsDomainInitialReductionFactorExceedsFirstFoldingFactor {
+                rs_domain_initial_reduction_factor,
+                first_folding_factor,
+            } => write!(
+                f,
+                "RS domain initial reduction factor {rs_domain_initial_reduction_factor} exceeds first folding factor {first_folding_factor}"
+            ),
+            Self::InvalidFoldingSchedule { num_variables } => write!(
+                f,
+                "folding schedule is invalid for {num_variables} variables"
+            ),
+            Self::FoldedDomainSizeOverflow {
+                num_variables,
+                starting_log_inv_rate,
+            } => write!(
+                f,
+                "domain log size overflows for {num_variables} variables and starting log inverse rate {starting_log_inv_rate}"
+            ),
+            Self::FirstFoldingFactorExceedsDomain {
+                first_folding_factor,
+                log_domain_size,
+            } => write!(
+                f,
+                "first folding factor {first_folding_factor} exceeds domain log size {log_domain_size}"
+            ),
+            Self::FoldedDomainExceedsBaseTwoAdicity {
+                log_folded_domain_size,
+                base_two_adicity,
+                min_first_folding_factor,
+            } => write!(
+                f,
+                "folded domain log size {log_folded_domain_size} exceeds base two-adicity {base_two_adicity}; first folding factor must be at least {min_first_folding_factor}"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpartanWhirError {
     Unimplemented(&'static str),
@@ -14,7 +86,7 @@ pub enum SpartanWhirError {
     ProofKindMismatch,
     UnsupportedMode,
     UnsupportedStatementType,
-    InvalidConfig,
+    InvalidConfig(InvalidConfigReason),
     WhirCommitFailed,
     WhirOpenFailed,
     WhirVerifyFailed,
@@ -34,6 +106,16 @@ pub enum SpartanWhirError {
     NonCanonicalEncoding,
 }
 
+impl SpartanWhirError {
+    pub const fn invalid_config() -> Self {
+        Self::InvalidConfig(InvalidConfigReason::Generic)
+    }
+
+    pub const fn invalid_config_reason(reason: InvalidConfigReason) -> Self {
+        Self::InvalidConfig(reason)
+    }
+}
+
 impl core::fmt::Display for SpartanWhirError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -51,7 +133,7 @@ impl core::fmt::Display for SpartanWhirError {
             Self::ProofKindMismatch => write!(f, "proof kind mismatch"),
             Self::UnsupportedMode => write!(f, "unsupported mode"),
             Self::UnsupportedStatementType => write!(f, "unsupported statement type"),
-            Self::InvalidConfig => write!(f, "invalid configuration"),
+            Self::InvalidConfig(reason) => write!(f, "invalid configuration: {reason}"),
             Self::WhirCommitFailed => write!(f, "WHIR commitment failed"),
             Self::WhirOpenFailed => write!(f, "WHIR opening failed"),
             Self::WhirVerifyFailed => write!(f, "WHIR verification failed"),

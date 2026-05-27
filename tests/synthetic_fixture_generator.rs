@@ -24,7 +24,7 @@ fn generator_rejects_invalid_target_log2() {
         seed: 1,
     };
     let result = generate_satisfiable_fixture(&cfg);
-    assert_eq!(result, Err(SpartanWhirError::InvalidConfig));
+    assert_eq!(result, Err(SpartanWhirError::invalid_config()));
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn generator_rejects_zero_constraints() {
         seed: 1,
     };
     let result = generate_satisfiable_fixture(&cfg);
-    assert_eq!(result, Err(SpartanWhirError::InvalidConfig));
+    assert_eq!(result, Err(SpartanWhirError::invalid_config()));
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn generator_rejects_num_io_ge_target_size() {
         seed: 1,
     };
     let result = generate_satisfiable_fixture(&cfg);
-    assert_eq!(result, Err(SpartanWhirError::InvalidConfig));
+    assert_eq!(result, Err(SpartanWhirError::invalid_config()));
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn generator_rejects_terms_per_constraint_exceed_num_cols() {
         seed: 1,
     };
     let result = generate_satisfiable_fixture(&cfg);
-    assert_eq!(result, Err(SpartanWhirError::InvalidConfig));
+    assert_eq!(result, Err(SpartanWhirError::invalid_config()));
 }
 
 #[test]

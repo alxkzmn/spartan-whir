@@ -131,7 +131,7 @@ fn whir_pcs_legacy_backend_rejects_per_round_schedule() {
 
     let result = whir_commit(&config, &poly, &mut challenger);
 
-    assert!(matches!(result, Err(SpartanWhirError::InvalidConfig)));
+    assert!(matches!(result, Err(SpartanWhirError::InvalidConfig(_))));
 }
 
 #[test]

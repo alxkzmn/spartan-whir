@@ -264,7 +264,7 @@ where
         challenger.observe(prover_data.commitment.clone());
         let polynomial = Poly::new(prover_data.polynomial.clone());
         if prover_data.merkle_tree.is_none() {
-            return Err(SpartanWhirError::InvalidConfig);
+            return Err(SpartanWhirError::invalid_config());
         }
 
         prover_data.proof.initial_ood_answers.clear();
@@ -742,7 +742,7 @@ where
     let mut proof = prover_data.proof;
     let merkle_tree = prover_data
         .merkle_tree
-        .ok_or(SpartanWhirError::InvalidConfig)?;
+        .ok_or(SpartanWhirError::invalid_config())?;
     {
         let _prove_profile = profile_scope("p3_whir_prove");
         pcs.prove(&mut proof, challenger, layout, merkle_tree);
@@ -825,7 +825,7 @@ where
     Ext: ExtField,
 {
     if proof.initial_ood_answers.len() != whir_config.commitment_ood_samples {
-        return Err(SpartanWhirError::InvalidConfig);
+        return Err(SpartanWhirError::invalid_config());
     }
     let mut ood_statement = EqStatement::initialize(num_variables);
     for &eval in &proof.initial_ood_answers {
@@ -919,7 +919,7 @@ pub(crate) fn poseidon_round_log_inv_rates(
     let (num_rounds, _) = folding.compute_number_of_rounds(num_variables);
     if !explicit_round_log_inv_rates.is_empty() {
         if explicit_round_log_inv_rates.len() != num_rounds {
-            return Err(SpartanWhirError::InvalidConfig);
+            return Err(SpartanWhirError::invalid_config());
         }
         return Ok(explicit_round_log_inv_rates.to_vec());
     }
@@ -933,7 +933,7 @@ pub(crate) fn poseidon_round_log_inv_rates(
         };
         let folding_factor = folding.at_round(round);
         if reduction > rate + folding_factor {
-            return Err(SpartanWhirError::InvalidConfig);
+            return Err(SpartanWhirError::invalid_config());
         }
         rate += folding_factor - reduction;
         rates.push(rate);
