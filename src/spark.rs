@@ -2810,7 +2810,7 @@ fn validate_value_domain_field_bound(value_domain_size: usize) -> Result<(), Spa
     Ok(())
 }
 
-fn spark_col_memory_size(shape: &R1csShape<F>) -> Result<usize, SpartanWhirError> {
+pub fn spark_col_memory_size(shape: &R1csShape<F>) -> Result<usize, SpartanWhirError> {
     let width = shape
         .num_vars
         .checked_mul(2)

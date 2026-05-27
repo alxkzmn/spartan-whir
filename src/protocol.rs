@@ -2197,33 +2197,33 @@ where
     Ok(MultilinearPoint(point))
 }
 
-fn read_column_count<EF>() -> usize
+pub fn read_column_count<EF>() -> usize
 where
     EF: ExtField,
 {
     (2 * EF::DIMENSION).next_power_of_two()
 }
 
-fn read_column_bits<EF>() -> usize
+pub fn read_column_bits<EF>() -> usize
 where
     EF: ExtField,
 {
     read_column_count::<EF>().ilog2() as usize
 }
 
-fn fixed_value_column_count() -> usize {
+pub fn fixed_value_column_count() -> usize {
     8
 }
 
-fn fixed_value_column_bits() -> usize {
+pub fn fixed_value_column_bits() -> usize {
     3
 }
 
-fn fixed_audit_column_count() -> usize {
+pub fn fixed_audit_column_count() -> usize {
     2
 }
 
-fn fixed_audit_column_bits() -> usize {
+pub fn fixed_audit_column_bits() -> usize {
     1
 }
 

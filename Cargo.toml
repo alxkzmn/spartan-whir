@@ -50,6 +50,11 @@ name = "poseidon-schedule-heldout"
 path = "src/bin/poseidon-schedule-heldout.rs"
 required-features = ["circom"]
 
+[[bin]]
+name = "spark-sha256-layouts"
+path = "src/bin/spark-sha256-layouts.rs"
+required-features = ["circom"]
+
 [[example]]
 name = "sha256_512b_circom"
 path = "examples/sha256_512b_circom.rs"

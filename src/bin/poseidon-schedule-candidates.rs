@@ -519,6 +519,7 @@ fn row_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
 where
     Ext: ExtensionField<F> + Field + TwoAdicField,
 {
+    let final_round = final_round_estimate(config);
     config
         .round_parameters
         .iter()
@@ -531,7 +532,7 @@ where
         .fold(0, u128::saturating_add)
         .saturating_add(
             final_query_count(config)
-                .saturating_mul(row_width(config.final_round_config().folding_factor))
+                .saturating_mul(row_width(final_round.folding_factor))
                 .saturating_mul(final_payload_degree::<Ext>(config)),
         )
 }
@@ -554,7 +555,7 @@ where
                 .saturating_mul(leaf_bytes.saturating_add(path_bytes))
         })
         .fold(0, u128::saturating_add);
-    let final_round = config.final_round_config();
+    let final_round = final_round_estimate(config);
     let final_poly_bytes = row_width(config.final_sumcheck_rounds)
         .saturating_mul(Ext::DIMENSION as u128)
         .saturating_mul(FIELD_BYTES);
@@ -621,7 +622,7 @@ fn final_query_count<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> 
 where
     Ext: ExtensionField<F> + Field + TwoAdicField,
 {
-    let final_round = config.final_round_config();
+    let final_round = final_round_estimate(config);
     actual_query_count(
         config.final_queries,
         final_round.domain_size,
@@ -637,8 +638,34 @@ fn final_path_depth<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u
 where
     Ext: ExtensionField<F> + Field + TwoAdicField,
 {
-    let final_round = config.final_round_config();
+    let final_round = final_round_estimate(config);
     path_depth(final_round.domain_size, final_round.folding_factor)
+}
+
+struct FinalRoundEstimate {
+    domain_size: usize,
+    folding_factor: usize,
+}
+
+fn final_round_estimate<Ext>(
+    config: &P3WhirConfig<Ext, F, PoseidonChallenger>,
+) -> FinalRoundEstimate
+where
+    Ext: ExtensionField<F> + Field + TwoAdicField,
+{
+    if config.round_parameters.is_empty() {
+        FinalRoundEstimate {
+            domain_size: config.starting_domain_size(),
+            folding_factor: config.folding_factor(0),
+        }
+    } else {
+        let last_round = config.n_rounds() - 1;
+        let last = &config.round_parameters[last_round];
+        FinalRoundEstimate {
+            domain_size: last.domain_size >> config.rs_reduction_factor(last_round),
+            folding_factor: config.folding_factor(config.n_rounds()),
+        }
+    }
 }
 
 fn path_depth(domain_size: usize, folding_factor: usize) -> u128 {
@@ -863,6 +890,16 @@ mod tests {
                 + (1u128 << 6) * 8 * FIELD_BYTES
                 + 3 * POSEIDON_DIGEST_BYTES
         );
+    }
+
+    #[test]
+    fn final_round_estimate_matches_backend_final_round_config() {
+        let config = test_config();
+        let estimate = final_round_estimate(&config);
+        let backend = config.final_round_config();
+
+        assert_eq!(estimate.domain_size, backend.domain_size);
+        assert_eq!(estimate.folding_factor, backend.folding_factor);
     }
 
     #[test]

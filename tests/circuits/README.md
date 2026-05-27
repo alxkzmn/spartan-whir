@@ -48,7 +48,7 @@ Run the size-range benchmark with:
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
   SHA256_BENCH_SIZES=128,256,512,1024,2048 \
-  cargo run --release -p spartan-whir --features circom,whir-p3-backend --example sha256_circom_bench
+  cargo run --release -p spartan-whir --features circom,whir-p3-backend,parallel --example sha256_circom_bench
 ```
 
 The benchmark reports constraints, constraints per SHA block, wires, witness
