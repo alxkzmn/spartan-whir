@@ -48,7 +48,7 @@ Run the size-range benchmark with:
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
   SHA256_BENCH_SIZES=128,256,512,1024,2048 \
-  cargo run --release -p spartan-whir --features circom --example sha256_circom_bench
+  cargo run --release -p spartan-whir --features circom,whir-p3-backend --example sha256_circom_bench
 ```
 
 The benchmark reports constraints, constraints per SHA block, wires, witness
@@ -56,6 +56,13 @@ generation time, import time, direct prove/verify time, Spark prove/verify time,
 and Spark layout stats. It derives the Spark folding factor from the packed
 Spark table size, so larger circuits can cross WHIR domain cliffs without
 manual retuning.
+
+Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the proving path. The
+Spark read-table profile is split into `spark_compute_read_table_row`, which is
+available after `r_x`, and `spark_compute_read_table_col`, which waits for
+`r_y`. The surrounding Spark scopes bracket the read commitment, product
+proofs, fixed-table openings, read-table openings, witness evaluation, and the
+witness WHIR opening.
 
 If GMP is installed outside the default compiler search path, pass the same
 `CC` and `CFLAGS` overrides shown above.

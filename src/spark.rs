@@ -5,6 +5,7 @@ use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField32};
 use serde::{Deserialize, Serialize};
 
+use crate::profiling::profile_scope;
 use crate::{
     engine::F, evaluate_mle_table, CubicRoundPoly, EqPolynomial, MultilinearPoint, R1csShape,
     SparseMatrix, SpartanWhirError,
@@ -1219,10 +1220,15 @@ where
     EF: ExtensionField<F>,
 {
     validate_value_inputs(tables, r_x, r_y)?;
-    Ok(SparkReadTables {
-        erow: spark_read_eq_table(tables.row_memory_size, &tables.rows, &r_x.0)?,
-        ecol: spark_read_eq_table(tables.col_memory_size, &tables.cols, &r_y.0)?,
-    })
+    let erow = {
+        let _profile = profile_scope("spark_compute_read_table_row");
+        spark_read_eq_table(tables.row_memory_size, &tables.rows, &r_x.0)?
+    };
+    let ecol = {
+        let _profile = profile_scope("spark_compute_read_table_col");
+        spark_read_eq_table(tables.col_memory_size, &tables.cols, &r_y.0)?
+    };
+    Ok(SparkReadTables { erow, ecol })
 }
 
 pub fn prove_spark_memory_products<EF, C>(

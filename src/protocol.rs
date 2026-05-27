@@ -532,9 +532,12 @@ where
             )?
         };
 
-        let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
-        let witness_eval = recover_witness_eval(r_y.0[0], eval_z, eval_x)?;
+        let witness_eval = {
+            let _profile = profile_scope("witness_eval");
+            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
+            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            recover_witness_eval(r_y.0[0], eval_z, eval_x)?
+        };
 
         let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
@@ -819,9 +822,12 @@ where
             )?
         };
 
-        let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
-        let witness_eval = recover_witness_eval(r_y.0[0], eval_z, eval_x)?;
+        let witness_eval = {
+            let _profile = profile_scope("witness_eval");
+            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
+            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            recover_witness_eval(r_y.0[0], eval_z, eval_x)?
+        };
 
         let pcs_statement = PcsStatementBuilder::<E>::new()
             .add_point_eval(PointEvalClaim {
