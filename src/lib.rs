@@ -97,9 +97,9 @@ pub use profiling::{
     ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
-    ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkReadOpeningProof,
-    SparkSpartanProof, SpartanProof, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
-    VerifyingKey,
+    ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkPcsConfigs,
+    SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof, SpartanProofKind,
+    SpartanProtocol, SpartanSnarkConfig, VerifyingKey,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MIN_SECURITY_BITS};
@@ -136,7 +136,10 @@ pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, Po
 pub use sumcheck::{
     prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
-pub use whir_params::{WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES};
+pub use whir_params::{
+    recommended_octic_schedule, recommended_octic_whir_params, WhirFoldingSchedule, WhirParams,
+    FINAL_SUMCHECK_MAX_VARIABLES,
+};
 #[cfg(feature = "whir-p3-backend")]
 pub use whir_pcs::{
     observe_whir_fs_domain_separator, prepare_committed_opening, verify_finalize,

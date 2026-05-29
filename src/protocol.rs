@@ -37,6 +37,7 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
     pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    pub spark_pcs_configs: Option<SparkPcsConfigs>,
     spark_fixed_prover_data: Option<SparkFixedProverData<E, Pcs>>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
@@ -58,6 +59,7 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
     pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    pub spark_pcs_configs: Option<SparkPcsConfigs>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -130,11 +132,27 @@ pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkWhirParams {
+    pub fixed_value: WhirParams,
+    pub fixed_audit: WhirParams,
+    pub read: WhirParams,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkPcsConfigs {
+    pub fixed_value: WhirPcsConfig,
+    pub fixed_audit: WhirPcsConfig,
+    pub read: WhirPcsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpartanSnarkConfig {
     pub matrix_closing: MatrixClosingMode,
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
     pub pcs_config: WhirPcsConfig,
+    #[serde(default)]
+    pub spark_whir_params: Option<SparkWhirParams>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -296,12 +314,15 @@ where
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         // Defaults to SPARK setup; call `setup_with_config` with
         // `DirectSparse` to skip SPARK preprocessing.
-        Self::setup_for_mode(
+        Self::setup_with_config(
             shape,
-            security,
-            whir_params,
-            pcs_config,
-            MatrixClosingMode::Spark,
+            &SpartanSnarkConfig {
+                matrix_closing: MatrixClosingMode::Spark,
+                security: *security,
+                whir_params: whir_params.clone(),
+                pcs_config: pcs_config.clone(),
+                spark_whir_params: None,
+            },
         )
     }
 
@@ -309,51 +330,54 @@ where
         shape: &R1csShape<F>,
         config: &SpartanSnarkConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
-        Self::setup_for_mode(
-            shape,
-            &config.security,
-            &config.whir_params,
-            &config.pcs_config,
-            config.matrix_closing,
-        )
+        Self::setup_for_mode(shape, config)
     }
 
     fn setup_for_mode(
         shape: &R1csShape<F>,
-        security: &SecurityConfig,
-        whir_params: &WhirParams,
-        pcs_config: &WhirPcsConfig,
-        matrix_closing: MatrixClosingMode,
+        config: &SpartanSnarkConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         let mut observer = NoopObserver;
         observer.on_stage(ProtocolStage::SetupStart);
 
-        security.validate()?;
+        config.security.validate()?;
         shape.validate()?;
 
         let shape_canonical = shape.pad_regular()?;
         let num_variables = shape_canonical.num_vars.ilog2() as usize;
 
-        let mut canonical_pcs_config = pcs_config.clone();
+        let mut canonical_pcs_config = config.pcs_config.clone();
         canonical_pcs_config.num_variables = num_variables;
-        canonical_pcs_config.security = *security;
-        canonical_pcs_config.whir = whir_params.clone();
+        canonical_pcs_config.security = config.security;
+        canonical_pcs_config.whir = config.whir_params.clone();
         canonical_pcs_config.validate()?;
 
-        let domain_separator = DomainSeparator::new_with_matrix_closing(
-            &shape_canonical,
-            security,
-            whir_params,
-            matrix_closing,
-        );
-        let spark_fixed_setup = match matrix_closing {
+        let transcript_spark_whir_params = match config.matrix_closing {
             MatrixClosingMode::DirectSparse => None,
+            MatrixClosingMode::Spark => config.spark_whir_params.clone(),
+        };
+        let domain_separator = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+            &shape_canonical,
+            &config.security,
+            &config.whir_params,
+            config.matrix_closing,
+            transcript_spark_whir_params,
+        );
+        let (spark_pcs_configs, spark_fixed_setup) = match config.matrix_closing {
+            MatrixClosingMode::DirectSparse => (None, None),
             MatrixClosingMode::Spark => {
                 let _profile = profile_scope("spark_fixed_setup");
-                setup_spark_fixed_commitments::<E, E::EF, Pcs>(
+                let spark_tables = preprocess_spark_tables(&shape_canonical)?;
+                let spark_pcs_configs = spark_pcs_configs_for_tables::<E::EF>(
                     &canonical_pcs_config,
-                    &shape_canonical,
-                )?
+                    &spark_tables,
+                    config.spark_whir_params.as_ref(),
+                )?;
+                let setup = setup_spark_fixed_commitments::<E, E::EF, Pcs>(
+                    &spark_pcs_configs,
+                    &spark_tables,
+                )?;
+                (Some(spark_pcs_configs), setup)
             }
         };
         let (spark_fixed_prover_data, spark_fixed_commitments) = match spark_fixed_setup {
@@ -362,15 +386,16 @@ where
         };
 
         let pk = ProvingKey {
-            matrix_closing,
+            matrix_closing: config.matrix_closing,
             shape_canonical: shape_canonical.clone(),
             num_cons_unpadded: shape.num_cons,
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
-            security: *security,
-            whir_params: whir_params.clone(),
+            security: config.security,
+            whir_params: config.whir_params.clone(),
             pcs_config: canonical_pcs_config.clone(),
             spark_fixed_commitments: spark_fixed_commitments.clone(),
+            spark_pcs_configs: spark_pcs_configs.clone(),
             spark_fixed_prover_data,
             domain_separator: domain_separator.clone(),
             observer: Some(NoopObserver),
@@ -378,15 +403,16 @@ where
         };
 
         let vk = VerifyingKey {
-            matrix_closing,
+            matrix_closing: config.matrix_closing,
             shape_canonical,
             num_cons_unpadded: shape.num_cons,
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
-            security: *security,
-            whir_params: whir_params.clone(),
+            security: config.security,
+            whir_params: config.whir_params.clone(),
             pcs_config: canonical_pcs_config,
             spark_fixed_commitments,
+            spark_pcs_configs,
             domain_separator,
             observer: Some(NoopObserver),
             marker: PhantomData,
@@ -752,15 +778,10 @@ where
             let _profile = profile_scope("spark_preprocess_tables");
             preprocess_spark_tables(&pk.shape_canonical)?
         };
-        let spark_value_pcs_config =
-            spark_table_pcs_config(&pk.pcs_config, spark_tables.value_domain_size)?;
-        let spark_fixed_value_pcs_config = spark_fixed_value_pcs_config(&spark_value_pcs_config)?;
-        let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-            &pk.pcs_config,
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
-        )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
+        let spark_pcs_configs = pk
+            .spark_pcs_configs
+            .clone()
+            .ok_or(SpartanWhirError::invalid_config())?;
         let fixed_prover_data = pk
             .spark_fixed_prover_data
             .clone()
@@ -772,8 +793,8 @@ where
         let fixed_prover_data = {
             let _profile = profile_scope("spark_prepare_fixed_openings");
             prepare_spark_fixed_openings::<E, E::EF, Pcs>(
-                &spark_fixed_value_pcs_config,
-                &spark_fixed_audit_pcs_config,
+                &spark_pcs_configs.fixed_value,
+                &spark_pcs_configs.fixed_audit,
                 fixed_prover_data,
                 challenger,
             )?
@@ -785,7 +806,7 @@ where
         let (read_prover_data, read_commitments) = {
             let _profile = profile_scope("spark_commit_read_tables");
             commit_spark_read_tables::<E, E::EF, Pcs>(
-                &spark_read_pcs_config,
+                &spark_pcs_configs.read,
                 &read_tables,
                 challenger,
             )?
@@ -802,8 +823,8 @@ where
         let spark_fixed_openings = {
             let _profile = profile_scope("spark_open_fixed_tables");
             open_spark_fixed_tables::<E, E::EF, Pcs>(
-                &spark_fixed_value_pcs_config,
-                &spark_fixed_audit_pcs_config,
+                &spark_pcs_configs.fixed_value,
+                &spark_pcs_configs.fixed_audit,
                 fixed_prover_data,
                 expected_fixed_commitments,
                 &spark_tables,
@@ -814,7 +835,7 @@ where
         let spark_read_openings = {
             let _profile = profile_scope("spark_open_read_tables");
             open_spark_read_tables::<E, E::EF, Pcs>(
-                &spark_read_pcs_config,
+                &spark_pcs_configs.read,
                 read_prover_data,
                 read_commitments,
                 &product_claims,
@@ -919,15 +940,10 @@ where
         )?;
 
         let spark_tables = preprocess_spark_tables(&vk.shape_canonical)?;
-        let spark_value_pcs_config =
-            spark_table_pcs_config(&vk.pcs_config, spark_tables.value_domain_size)?;
-        let spark_fixed_value_pcs_config = spark_fixed_value_pcs_config(&spark_value_pcs_config)?;
-        let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-            &vk.pcs_config,
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
-        )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
+        let spark_pcs_configs = vk
+            .spark_pcs_configs
+            .clone()
+            .ok_or(SpartanWhirError::invalid_config())?;
         let expected_fixed_commitments = vk
             .spark_fixed_commitments
             .clone()
@@ -937,13 +953,13 @@ where
             &expected_fixed_commitments,
         )?;
         let parsed_fixed_openings = parse_spark_fixed_openings::<E, E::EF, Pcs>(
-            &spark_fixed_value_pcs_config,
-            &spark_fixed_audit_pcs_config,
+            &spark_pcs_configs.fixed_value,
+            &spark_pcs_configs.fixed_audit,
             &proof.spark_fixed_openings,
             challenger,
         )?;
         let parsed_read_openings = parse_spark_read_openings::<E, E::EF, Pcs>(
-            &spark_read_pcs_config,
+            &spark_pcs_configs.read,
             &proof.spark_read_openings,
             challenger,
         )?;
@@ -953,8 +969,8 @@ where
             challenger,
         )?;
         finalize_spark_fixed_openings::<E, E::EF, Pcs>(
-            &spark_fixed_value_pcs_config,
-            &spark_fixed_audit_pcs_config,
+            &spark_pcs_configs.fixed_value,
+            &spark_pcs_configs.fixed_audit,
             spark_tables.row_memory_size,
             spark_tables.col_memory_size,
             &proof.spark_fixed_openings,
@@ -963,7 +979,7 @@ where
             challenger,
         )?;
         let read_opening_evals = finalize_spark_read_openings::<E, E::EF, Pcs>(
-            &spark_read_pcs_config,
+            &spark_pcs_configs.read,
             &proof.spark_read_openings,
             parsed_read_openings,
             &product_claims,
@@ -1039,8 +1055,8 @@ where
 }
 
 fn setup_spark_fixed_commitments<E, EF, Pcs>(
-    pcs_config: &WhirPcsConfig,
-    shape: &R1csShape<F>,
+    configs: &SparkPcsConfigs,
+    spark_tables: &crate::SparkTables,
 ) -> Result<
     Option<(
         SparkFixedProverData<E, Pcs>,
@@ -1055,34 +1071,48 @@ where
     <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    let spark_tables = preprocess_spark_tables(shape)?;
-    let spark_value_pcs_config = spark_table_pcs_config(pcs_config, spark_tables.value_domain_size);
-    let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-        pcs_config,
-        spark_tables.row_memory_size,
-        spark_tables.col_memory_size,
-    );
-
-    let (Ok(value_config), Ok(audit_config)) =
-        (spark_value_pcs_config, spark_fixed_audit_pcs_config)
-    else {
-        return Ok(None);
-    };
-    let Ok(fixed_value_config) = spark_fixed_value_pcs_config(&value_config) else {
-        return Ok(None);
-    };
-
     let mut spark_setup_challenger = E::challenger();
     let (prover_data, commitments) = commit_spark_fixed_tables::<E, EF, Pcs>(
-        &fixed_value_config,
-        &audit_config,
-        &spark_tables,
+        &configs.fixed_value,
+        &configs.fixed_audit,
+        spark_tables,
         &mut spark_setup_challenger,
     )?;
     Ok(Some((prover_data, commitments)))
 }
 
-fn spark_table_pcs_config(
+fn spark_pcs_configs_for_tables<EF>(
+    base: &WhirPcsConfig,
+    spark_tables: &crate::SparkTables,
+    spark_whir_params: Option<&SparkWhirParams>,
+) -> Result<SparkPcsConfigs, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    let fixed_value_whir = spark_whir_params
+        .map(|params| &params.fixed_value)
+        .unwrap_or(&base.whir);
+    let fixed_audit_whir = spark_whir_params
+        .map(|params| &params.fixed_audit)
+        .unwrap_or(&base.whir);
+    let read_whir = spark_whir_params
+        .map(|params| &params.read)
+        .unwrap_or(&base.whir);
+    let value_shape_config = spark_table_shape_pcs_config(base, spark_tables.value_domain_size)?;
+
+    Ok(SparkPcsConfigs {
+        fixed_value: spark_fixed_value_pcs_config_with_whir(&value_shape_config, fixed_value_whir)?,
+        fixed_audit: spark_fixed_audit_pcs_config_with_whir(
+            base,
+            spark_tables.row_memory_size,
+            spark_tables.col_memory_size,
+            fixed_audit_whir,
+        )?,
+        read: spark_read_pcs_config_with_whir::<EF>(&value_shape_config, read_whir)?,
+    })
+}
+
+fn spark_table_shape_pcs_config(
     base: &WhirPcsConfig,
     domain_size: usize,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
@@ -1091,12 +1121,23 @@ fn spark_table_pcs_config(
     }
     let mut config = base.clone();
     config.num_variables = domain_size.ilog2() as usize;
+    Ok(config)
+}
+
+fn spark_table_pcs_config_with_whir(
+    base: &WhirPcsConfig,
+    domain_size: usize,
+    whir_params: &WhirParams,
+) -> Result<WhirPcsConfig, SpartanWhirError> {
+    let mut config = spark_table_shape_pcs_config(base, domain_size)?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_read_pcs_config<EF>(
+fn spark_read_pcs_config_with_whir<EF>(
     value_config: &WhirPcsConfig,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError>
 where
     EF: ExtField,
@@ -1106,26 +1147,30 @@ where
         .num_variables
         .checked_add(read_column_bits::<EF>())
         .ok_or(SpartanWhirError::invalid_config())?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_fixed_value_pcs_config(
+fn spark_fixed_value_pcs_config_with_whir(
     value_config: &WhirPcsConfig,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
     let mut config = value_config.clone();
     config.num_variables = config
         .num_variables
         .checked_add(fixed_value_column_bits())
         .ok_or(SpartanWhirError::invalid_config())?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_fixed_audit_pcs_config(
+fn spark_fixed_audit_pcs_config_with_whir(
     base: &WhirPcsConfig,
     row_memory_size: usize,
     col_memory_size: usize,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
     let audit_memory_size = row_memory_size
         .max(col_memory_size)
@@ -1134,7 +1179,7 @@ fn spark_fixed_audit_pcs_config(
     let audit_domain_size = audit_memory_size
         .checked_mul(fixed_audit_column_count())
         .ok_or(SpartanWhirError::invalid_config())?;
-    spark_table_pcs_config(base, audit_domain_size)
+    spark_table_pcs_config_with_whir(base, audit_domain_size, whir_params)
 }
 
 fn commit_spark_fixed_tables<E, EF, Pcs>(

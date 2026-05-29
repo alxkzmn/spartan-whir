@@ -341,5 +341,6 @@ fn protocol_config(matrix_closing: MatrixClosingMode) -> SpartanSnarkConfig {
             whir: whir_params,
             sumcheck_strategy: SumcheckStrategy::Svo,
         },
+        spark_whir_params: None,
     }
 }

@@ -57,6 +57,12 @@ and Spark layout stats. It derives the Spark folding factor from the packed
 Spark table size, so larger circuits can cross WHIR domain cliffs without
 manual retuning.
 
+Set `SHA256_BENCH_MODES=spark,spark-independent` to compare the legacy shared
+Spark WHIR schedule against independently selected witness, fixed-value,
+fixed-audit, and read-table schedules. `spark-independent` is the mode to use
+for larger Spark layouts whose read-table commitment crosses the KoalaBear
+two-adicity bound under the legacy shared schedule.
+
 Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the proving path. The
 Spark read-table profile is split into `spark_compute_read_table_row`, which is
 available after `r_x`, and `spark_compute_read_table_col`, which waits for

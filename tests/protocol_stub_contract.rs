@@ -218,6 +218,7 @@ fn setup_keys_with_mode(
             security: common::phase3_security(),
             whir_params: common::phase3_whir_params(),
             pcs_config: common::phase3_pcs_config(),
+            spark_whir_params: None,
         },
     )
     .expect("setup succeeds")
@@ -271,6 +272,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
         pcs_config: common::phase3_pcs_config(),
+        spark_whir_params: None,
     };
     let (direct_pk, direct_vk) =
         SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(&shape, &direct_config)
@@ -302,6 +304,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
         pcs_config: common::phase3_pcs_config(),
+        spark_whir_params: None,
     };
     let (spark_pk, spark_vk) =
         SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(&shape, &spark_config)

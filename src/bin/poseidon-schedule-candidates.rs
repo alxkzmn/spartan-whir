@@ -369,6 +369,7 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> SpartanSnarkConfig {
             whir: whir_params,
             sumcheck_strategy: SumcheckStrategy::Svo,
         },
+        spark_whir_params: None,
     }
 }
 
