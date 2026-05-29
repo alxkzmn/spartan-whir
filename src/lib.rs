@@ -109,6 +109,7 @@ pub use spark::{
     preprocess_joint_with_split_vals_spark_tables, preprocess_per_matrix_spark_tables,
     preprocess_shared_union_spark_tables, preprocess_spark_tables,
     prove_spark_batched_memory_products, prove_spark_batched_memory_products_with_leaf_claims,
+    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims,
     prove_spark_batched_product, prove_spark_grand_product, prove_spark_grand_product_terms,
     prove_spark_memory_grand_products, prove_spark_memory_grand_products_with_leaf_claims,
     prove_spark_memory_products, prove_spark_value_sumcheck, prove_spark_value_sumcheck_with_reads,

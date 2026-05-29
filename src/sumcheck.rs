@@ -2,9 +2,12 @@ use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{CubicRoundPoly, MultilinearPoint, QuadraticRoundPoly, R1csShape, SpartanWhirError};
+
+const SUMCHECK_PARALLEL_ROUND_MIN_PAIRS: usize = 1 << 14;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OuterSumcheckProof<F> {
@@ -26,7 +29,7 @@ pub fn prove_outer<F, EF, C>(
 ) -> Result<(OuterSumcheckProof<EF>, MultilinearPoint<EF>, (EF, EF, EF)), SpartanWhirError>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + Send + Sync,
     C: FieldChallenger<F>,
 {
     shape.validate()?;
@@ -42,34 +45,20 @@ where
 
     for _ in 0..tau.0.len() {
         let half = eq.len() / 2;
-        let mut h0 = EF::ZERO;
-        let mut h2 = EF::ZERO;
-        let mut h3 = EF::ZERO;
-
-        for i in 0..half {
-            let eq0 = eq[i];
-            let eq1 = eq[i + half];
-            let a0 = az_tab[i];
-            let a1 = az_tab[i + half];
-            let b0 = bz_tab[i];
-            let b1 = bz_tab[i + half];
-            let c0 = cz_tab[i];
-            let c1 = cz_tab[i + half];
-
-            let eq2 = eq1.double() - eq0;
-            let a2 = a1.double() - a0;
-            let b2 = b1.double() - b0;
-            let c2 = c1.double() - c0;
-
-            let eq3 = eq2 + (eq1 - eq0);
-            let a3 = a2 + (a1 - a0);
-            let b3 = b2 + (b1 - b0);
-            let c3 = c2 + (c1 - c0);
-
-            h0 += eq0 * (a0 * b0 - c0);
-            h2 += eq2 * (a2 * b2 - c2);
-            h3 += eq3 * (a3 * b3 - c3);
-        }
+        let (h0, h2, h3) = if should_parallelize_sumcheck_round(half) {
+            (0..half)
+                .into_par_iter()
+                .map(|i| outer_round_partial(i, half, &eq, &az_tab, &bz_tab, &cz_tab))
+                .par_fold_reduce(
+                    || (EF::ZERO, EF::ZERO, EF::ZERO),
+                    add_cubic_accumulators,
+                    add_cubic_accumulators,
+                )
+        } else {
+            (0..half)
+                .map(|i| outer_round_partial(i, half, &eq, &az_tab, &bz_tab, &cz_tab))
+                .fold((EF::ZERO, EF::ZERO, EF::ZERO), add_cubic_accumulators)
+        };
 
         let round_poly = CubicRoundPoly([h0, h2, h3]);
         challenger.observe_algebra_slice(&round_poly.0);
@@ -151,21 +140,20 @@ where
 
     for _ in 0..num_rounds {
         let half = abc_tab.len() / 2;
-        let mut h0 = EF::ZERO;
-        let mut h2 = EF::ZERO;
-
-        for i in 0..half {
-            let a0 = abc_tab[i];
-            let a1 = abc_tab[i + half];
-            let z0 = z_tab[i];
-            let z1 = z_tab[i + half];
-
-            let a2 = a1.double() - a0;
-            let z2 = z1.double() - z0;
-
-            h0 += a0 * z0;
-            h2 += a2 * z2;
-        }
+        let (h0, h2) = if should_parallelize_sumcheck_round(half) {
+            (0..half)
+                .into_par_iter()
+                .map(|i| inner_round_partial(i, half, &abc_tab, &z_tab))
+                .par_fold_reduce(
+                    || (EF::ZERO, EF::ZERO),
+                    add_quadratic_accumulators,
+                    add_quadratic_accumulators,
+                )
+        } else {
+            (0..half)
+                .map(|i| inner_round_partial(i, half, &abc_tab, &z_tab))
+                .fold((EF::ZERO, EF::ZERO), add_quadratic_accumulators)
+        };
 
         let round_poly = QuadraticRoundPoly([h0, h2]);
         challenger.observe_algebra_slice(&round_poly.0);
@@ -239,7 +227,74 @@ where
     Ok(())
 }
 
-fn bind_half<F: Field, EF: ExtensionField<F>>(
+fn outer_round_partial<EF>(
+    i: usize,
+    half: usize,
+    eq: &[EF],
+    az_tab: &[EF],
+    bz_tab: &[EF],
+    cz_tab: &[EF],
+) -> (EF, EF, EF)
+where
+    EF: Field,
+{
+    let eq0 = eq[i];
+    let eq1 = eq[i + half];
+    let a0 = az_tab[i];
+    let a1 = az_tab[i + half];
+    let b0 = bz_tab[i];
+    let b1 = bz_tab[i + half];
+    let c0 = cz_tab[i];
+    let c1 = cz_tab[i + half];
+
+    let eq2 = eq1.double() - eq0;
+    let a2 = a1.double() - a0;
+    let b2 = b1.double() - b0;
+    let c2 = c1.double() - c0;
+
+    let eq3 = eq2 + (eq1 - eq0);
+    let a3 = a2 + (a1 - a0);
+    let b3 = b2 + (b1 - b0);
+    let c3 = c2 + (c1 - c0);
+
+    (
+        eq0 * (a0 * b0 - c0),
+        eq2 * (a2 * b2 - c2),
+        eq3 * (a3 * b3 - c3),
+    )
+}
+
+fn inner_round_partial<EF>(i: usize, half: usize, abc_tab: &[EF], z_tab: &[EF]) -> (EF, EF)
+where
+    EF: Field,
+{
+    let a0 = abc_tab[i];
+    let a1 = abc_tab[i + half];
+    let z0 = z_tab[i];
+    let z1 = z_tab[i + half];
+
+    let a2 = a1.double() - a0;
+    let z2 = z1.double() - z0;
+
+    (a0 * z0, a2 * z2)
+}
+
+fn add_cubic_accumulators<EF: Field>(
+    (a0, a2, a3): (EF, EF, EF),
+    (b0, b2, b3): (EF, EF, EF),
+) -> (EF, EF, EF) {
+    (a0 + b0, a2 + b2, a3 + b3)
+}
+
+fn add_quadratic_accumulators<EF: Field>((a0, a2): (EF, EF), (b0, b2): (EF, EF)) -> (EF, EF) {
+    (a0 + b0, a2 + b2)
+}
+
+fn should_parallelize_sumcheck_round(pair_count: usize) -> bool {
+    cfg!(feature = "parallel") && pair_count >= SUMCHECK_PARALLEL_ROUND_MIN_PAIRS
+}
+
+fn bind_half<F: Field, EF: ExtensionField<F> + Send + Sync>(
     table: &mut Vec<EF>,
     r: EF,
 ) -> Result<(), SpartanWhirError> {
@@ -248,10 +303,17 @@ fn bind_half<F: Field, EF: ExtensionField<F>>(
     }
 
     let half = table.len() / 2;
-    for i in 0..half {
-        let lo = table[i];
-        let hi = table[i + half];
-        table[i] = lo + r * (hi - lo);
+    {
+        let (lo, hi) = table.split_at_mut(half);
+        if should_parallelize_sumcheck_round(half) {
+            lo.par_iter_mut()
+                .zip(hi.par_iter())
+                .for_each(|(lo, &hi)| *lo += r * (hi - *lo));
+        } else {
+            for (lo, &hi) in lo.iter_mut().zip(hi.iter()) {
+                *lo += r * (hi - *lo);
+            }
+        }
     }
     table.truncate(half);
     Ok(())

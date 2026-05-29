@@ -11,8 +11,8 @@ use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
 use crate::profiling::profile_scope;
 use crate::{
     compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
-    prove_outer, prove_spark_batched_memory_products_with_leaf_claims, verify_inner, verify_outer,
-    verify_spark_batched_memory_leaf_claims_with_openings,
+    prove_outer, prove_spark_batched_memory_products_with_read_tables_and_leaf_claims,
+    verify_inner, verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
     EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver,
     OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolPcs,
@@ -813,10 +813,11 @@ where
         };
         let (spark_products, product_claims) = {
             let _profile = profile_scope("spark_memory_products");
-            prove_spark_batched_memory_products_with_leaf_claims(
+            prove_spark_batched_memory_products_with_read_tables_and_leaf_claims(
                 &spark_tables,
                 &r_x,
                 &r_y,
+                &read_tables,
                 challenger,
             )?
         };
