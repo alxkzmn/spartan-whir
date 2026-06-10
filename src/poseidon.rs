@@ -67,8 +67,9 @@ where
 {
     /// Set up a Poseidon Spartan proving/verifying key pair.
     ///
-    /// Spark proving keys include fixed-table prover data, so their serialized
-    /// form is expected to be materially larger than direct-mode keys.
+    /// Spark proving keys include fixed-table prover data and cached Spark
+    /// preprocessing tables, so their serialized form is expected to be
+    /// materially larger than direct-mode keys.
     pub fn setup(
         shape: R1csShape<F>,
         config: PoseidonSetupConfig,

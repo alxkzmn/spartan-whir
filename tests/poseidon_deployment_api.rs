@@ -110,7 +110,7 @@ fn poseidon_spark_proving_key_is_serializable() {
     );
     assert!(
         direct_pk_bytes.len() < pk_bytes.len(),
-        "Spark proving key should carry fixed prover data"
+        "Spark proving key should carry fixed prover data and cached Spark tables"
     );
     let pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("spark proving key deserializes");

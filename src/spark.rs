@@ -86,7 +86,7 @@ pub struct SparkLayoutComparison {
     pub decision: SparkLayoutDecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkTables {
     pub layout: SparkLayoutKind,
     pub row_memory_size: usize,
@@ -1416,18 +1416,33 @@ where
     let beta = challenger.sample_algebra_element::<EF>();
     let gamma = challenger.sample_algebra_element::<EF>();
 
-    let (row_values, col_values) =
-        spark_memory_values_for_axes(tables, r_x, r_y, &read_tables, beta)?;
-    let ops_terms = spark_ops_product_terms(&row_values, &col_values, gamma)?;
-    let value_dotproducts = spark_value_dotproducts(tables, &read_tables)?;
+    let (row_values, col_values) = {
+        let _profile = profile_scope("spark_memory_product_values");
+        spark_memory_values_for_axes(tables, r_x, r_y, &read_tables, beta)?
+    };
+    let ops_terms = {
+        let _profile = profile_scope("spark_ops_product_terms");
+        spark_ops_product_terms(&row_values, &col_values, gamma)?
+    };
+    let value_dotproducts = {
+        let _profile = profile_scope("spark_value_dotproducts");
+        spark_value_dotproducts(tables, &read_tables)?
+    };
     let mem_domain_size = tables.row_memory_size.max(tables.col_memory_size);
-    let mem_terms = spark_mem_product_terms(&row_values, &col_values, gamma, mem_domain_size)?;
+    let mem_terms = {
+        let _profile = profile_scope("spark_mem_product_terms");
+        spark_mem_product_terms(&row_values, &col_values, gamma, mem_domain_size)?
+    };
 
-    let (proof_ops, ops_claims) =
-        prove_spark_batched_product_owned(ops_terms, value_dotproducts, challenger)?;
+    let (proof_ops, ops_claims) = {
+        let _profile = profile_scope("spark_prove_ops_products");
+        prove_spark_batched_product_owned(ops_terms, value_dotproducts, challenger)?
+    };
     let matrix_evals = matrix_evals_from_split_dotproduct_claims(&proof_ops.dotproduct_claims)?;
-    let (proof_mem, mem_claims) =
-        prove_spark_batched_product_owned(mem_terms, Vec::new(), challenger)?;
+    let (proof_mem, mem_claims) = {
+        let _profile = profile_scope("spark_prove_mem_products");
+        prove_spark_batched_product_owned(mem_terms, Vec::new(), challenger)?
+    };
     let products = SparkMemoryProductProof {
         beta,
         gamma,
@@ -2065,23 +2080,32 @@ where
     }
     validate_dotproducts_for_batched_product(&dotproducts, domain_size)?;
 
-    let trees = product_terms
-        .into_iter()
-        .map(product_tree_from_terms_owned)
-        .collect::<Result<Vec<_>, _>>()?;
-    let product_roots = trees
-        .iter()
-        .map(|tree| {
-            tree.last()
-                .and_then(|layer| layer.first())
-                .copied()
-                .ok_or(SpartanWhirError::InvalidPolynomialLength)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let dotproduct_claims = dotproducts
-        .iter()
-        .map(evaluate_dotproduct)
-        .collect::<Result<Vec<_>, _>>()?;
+    let trees = {
+        let _profile = profile_scope("spark_batched_product_trees");
+        product_terms
+            .into_iter()
+            .map(product_tree_from_terms_owned)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let product_roots = {
+        let _profile = profile_scope("spark_batched_product_roots");
+        trees
+            .iter()
+            .map(|tree| {
+                tree.last()
+                    .and_then(|layer| layer.first())
+                    .copied()
+                    .ok_or(SpartanWhirError::InvalidPolynomialLength)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let dotproduct_claims = {
+        let _profile = profile_scope("spark_batched_dotproduct_claims");
+        dotproducts
+            .iter()
+            .map(evaluate_dotproduct)
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     let mut claims_to_verify = product_roots.clone();
     let mut parent_point = Vec::new();
@@ -2095,6 +2119,7 @@ where
         dotproduct_weight_evals: Vec::new(),
     };
 
+    let _profile = profile_scope("spark_batched_product_layers");
     for child_layer_index in (0..trees[0].len() - 1).rev() {
         let include_dotproducts = child_layer_index == 0 && !dotproducts.is_empty();
         if include_dotproducts {
@@ -2329,21 +2354,28 @@ fn validate_dotproducts_for_batched_product<EF>(
 
 fn evaluate_dotproduct<EF>(dotproduct: &SparkDotProductCircuit<EF>) -> Result<EF, SpartanWhirError>
 where
-    EF: Field,
+    EF: Field + Send + Sync,
 {
     if dotproduct.left.len() != dotproduct.right.len()
         || dotproduct.right.len() != dotproduct.weight.len()
     {
         return Err(SpartanWhirError::InvalidPolynomialLength);
     }
-    Ok(dotproduct
-        .left
-        .iter()
-        .zip(&dotproduct.right)
-        .zip(&dotproduct.weight)
-        .fold(EF::ZERO, |acc, ((&left, &right), &weight)| {
-            acc + left * right * weight
-        }))
+    if should_parallelize_spark_round(dotproduct.left.len()) {
+        Ok((0..dotproduct.left.len())
+            .into_par_iter()
+            .map(|i| dotproduct.left[i] * dotproduct.right[i] * dotproduct.weight[i])
+            .par_fold_reduce(|| EF::ZERO, |acc, value| acc + value, |a, b| a + b))
+    } else {
+        Ok(dotproduct
+            .left
+            .iter()
+            .zip(&dotproduct.right)
+            .zip(&dotproduct.weight)
+            .fold(EF::ZERO, |acc, ((&left, &right), &weight)| {
+                acc + left * right * weight
+            }))
+    }
 }
 
 fn sample_batched_product_coefficients<EF, C>(claims: &[EF], challenger: &mut C) -> Vec<EF>
@@ -2385,6 +2417,33 @@ fn bind_all_value_tables<EF>(tables: &mut [Vec<EF>], challenge: EF) -> Result<()
 where
     EF: Field + Send + Sync,
 {
+    if tables.is_empty() {
+        return Ok(());
+    }
+
+    let mut total_pair_count = 0usize;
+    let mut largest_pair_count = 0usize;
+    for table in tables.iter() {
+        if table.len() < 2 || !table.len().is_multiple_of(2) {
+            return Err(SpartanWhirError::InvalidRoundPolynomial);
+        }
+        let pair_count = table.len() / 2;
+        total_pair_count = total_pair_count
+            .checked_add(pair_count)
+            .ok_or(SpartanWhirError::InvalidRoundPolynomial)?;
+        largest_pair_count = largest_pair_count.max(pair_count);
+    }
+
+    if cfg!(feature = "parallel")
+        && tables.len() > 1
+        && total_pair_count >= SPARK_PARALLEL_ROUND_MIN_PAIRS
+        && largest_pair_count < SPARK_PARALLEL_ROUND_MIN_PAIRS
+    {
+        return tables
+            .par_iter_mut()
+            .try_for_each(|table| bind_value_table(table, challenge));
+    }
+
     for table in tables {
         bind_value_table(table, challenge)?;
     }

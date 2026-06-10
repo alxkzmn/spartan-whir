@@ -575,7 +575,37 @@ fn protocol_spark_tampered_read_opening_commitment_fails() {
     )
     .expect("spark prove succeeds");
 
-    proof.spark_read_openings.commitment[0] ^= 1;
+    proof.spark_read_openings.erow_commitment[0] ^= 1;
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify_spark(
+        &vk,
+        &instance,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(verified, Err(SpartanWhirError::CommitmentMismatch));
+}
+
+#[test]
+fn protocol_spark_tampered_ecol_read_opening_commitment_fails() {
+    let shape = regular_shape_two_constraints();
+    let (pk, vk) = setup_keys(&shape);
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
+
+    let witness = spartan_whir::R1csWitness {
+        w: vec![F::from_u32(7), F::ZERO],
+    };
+    let public_inputs = common::koala_public_inputs(7);
+
+    let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_spark(
+        &pk,
+        &public_inputs,
+        &witness,
+        &mut prover_challenger,
+    )
+    .expect("spark prove succeeds");
+
+    proof.spark_read_openings.ecol_commitment[0] ^= 1;
     let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify_spark(
         &vk,
         &instance,
@@ -606,6 +636,36 @@ fn protocol_spark_tampered_read_opening_eval_fails() {
     .expect("spark prove succeeds");
 
     proof.spark_read_openings.erow_low_evals[0] += EF::ONE;
+    let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify_spark(
+        &vk,
+        &instance,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(verified, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn protocol_spark_tampered_ecol_read_opening_eval_fails() {
+    let shape = regular_shape_two_constraints();
+    let (pk, vk) = setup_keys(&shape);
+    let mut prover_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::keccak_challenger();
+
+    let witness = spartan_whir::R1csWitness {
+        w: vec![F::from_u32(7), F::ZERO],
+    };
+    let public_inputs = common::koala_public_inputs(7);
+
+    let (instance, mut proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_spark(
+        &pk,
+        &public_inputs,
+        &witness,
+        &mut prover_challenger,
+    )
+    .expect("spark prove succeeds");
+
+    proof.spark_read_openings.ecol_low_evals[0] += EF::ONE;
     let verified = SpartanProtocol::<KeccakEngine, WhirPcs>::verify_spark(
         &vk,
         &instance,

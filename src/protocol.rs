@@ -39,6 +39,8 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
     pub spark_pcs_configs: Option<SparkPcsConfigs>,
     spark_fixed_prover_data: Option<SparkFixedProverData<E, Pcs>>,
+    #[serde(default)]
+    spark_tables: Option<crate::SparkTables>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -120,14 +122,16 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub num_variables: usize,
     pub column_bits: usize,
-    pub commitment: Pcs::Commitment,
+    pub erow_commitment: Pcs::Commitment,
+    pub ecol_commitment: Pcs::Commitment,
     pub erow_low_evals: Vec<E::EF>,
     pub erow_high_evals: Vec<E::EF>,
     pub ecol_low_evals: Vec<E::EF>,
     pub ecol_high_evals: Vec<E::EF>,
     pub erow_ops_evals: Vec<E::EF>,
     pub ecol_ops_evals: Vec<E::EF>,
-    pub proof: Pcs::Proof,
+    pub erow_proof: Pcs::Proof,
+    pub ecol_proof: Pcs::Proof,
     marker: PhantomData<E>,
 }
 
@@ -175,12 +179,14 @@ impl<E: SpartanWhirEngine, Pcs: MlePcs<E>> SpartanProofKind<E, Pcs> {
 }
 
 struct SparkReadProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
-    data: Pcs::ProverData,
+    erow: Pcs::ProverData,
+    ecol: Pcs::ProverData,
     marker: PhantomData<E>,
 }
 
 struct SparkReadCommitments<C> {
-    commitment: C,
+    erow: C,
+    ecol: C,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -220,7 +226,8 @@ where
     E: SpartanWhirEngine,
     Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
 {
-    commitment: Pcs::ParsedCommitment,
+    erow: Pcs::ParsedCommitment,
+    ecol: Pcs::ParsedCommitment,
 }
 
 struct ParsedSparkFixedOpenings<E, Pcs>
@@ -363,8 +370,8 @@ where
             config.matrix_closing,
             transcript_spark_whir_params,
         );
-        let (spark_pcs_configs, spark_fixed_setup) = match config.matrix_closing {
-            MatrixClosingMode::DirectSparse => (None, None),
+        let (spark_pcs_configs, spark_fixed_setup, spark_tables) = match config.matrix_closing {
+            MatrixClosingMode::DirectSparse => (None, None, None),
             MatrixClosingMode::Spark => {
                 let _profile = profile_scope("spark_fixed_setup");
                 let spark_tables = preprocess_spark_tables(&shape_canonical)?;
@@ -377,7 +384,7 @@ where
                     &spark_pcs_configs,
                     &spark_tables,
                 )?;
-                (Some(spark_pcs_configs), setup)
+                (Some(spark_pcs_configs), setup, Some(spark_tables))
             }
         };
         let (spark_fixed_prover_data, spark_fixed_commitments) = match spark_fixed_setup {
@@ -397,6 +404,7 @@ where
             spark_fixed_commitments: spark_fixed_commitments.clone(),
             spark_pcs_configs: spark_pcs_configs.clone(),
             spark_fixed_prover_data,
+            spark_tables,
             domain_separator: domain_separator.clone(),
             observer: Some(NoopObserver),
             marker: PhantomData,
@@ -774,9 +782,14 @@ where
             )?
         };
 
-        let spark_tables = {
-            let _profile = profile_scope("spark_preprocess_tables");
-            preprocess_spark_tables(&pk.shape_canonical)?
+        let computed_spark_tables;
+        let spark_tables = match pk.spark_tables.as_ref() {
+            Some(tables) => tables,
+            None => {
+                let _profile = profile_scope("spark_preprocess_tables");
+                computed_spark_tables = preprocess_spark_tables(&pk.shape_canonical)?;
+                &computed_spark_tables
+            }
         };
         let spark_pcs_configs = pk
             .spark_pcs_configs
@@ -1312,25 +1325,32 @@ where
         return Err(SpartanWhirError::invalid_config());
     }
     // Column-major layout: high selector bits choose the coordinate column, and
-    // the remaining coordinates are the original sparse-entry point.
-    let mut packed = vec![F::ZERO; domain_size * read_column_count::<EF>()];
+    // the remaining coordinates are the original sparse-entry point. The row
+    // and column read vectors are committed separately so each read opening has
+    // one fewer selector bit than the old combined erow|ecol table.
+    let mut packed_erow = vec![F::ZERO; domain_size * read_column_count::<EF>()];
     for (column_index, column) in erow_columns.iter().enumerate() {
-        packed[column_index * domain_size..(column_index + 1) * domain_size]
+        packed_erow[column_index * domain_size..(column_index + 1) * domain_size]
             .copy_from_slice(column);
     }
-    for (coord_index, column) in ecol_columns.iter().enumerate() {
-        let column_index = EF::DIMENSION + coord_index;
-        packed[column_index * domain_size..(column_index + 1) * domain_size]
+    let mut packed_ecol = vec![F::ZERO; domain_size * read_column_count::<EF>()];
+    for (column_index, column) in ecol_columns.iter().enumerate() {
+        packed_ecol[column_index * domain_size..(column_index + 1) * domain_size]
             .copy_from_slice(column);
     }
-    let (commitment, data) = <Pcs as MlePcs<E>>::commit(config, &packed, challenger)?;
+    let (erow_commitment, erow) = <Pcs as MlePcs<E>>::commit(config, &packed_erow, challenger)?;
+    let (ecol_commitment, ecol) = <Pcs as MlePcs<E>>::commit(config, &packed_ecol, challenger)?;
 
     Ok((
         SparkReadProverData {
-            data,
+            erow,
+            ecol,
             marker: PhantomData,
         },
-        SparkReadCommitments { commitment },
+        SparkReadCommitments {
+            erow: erow_commitment,
+            ecol: ecol_commitment,
+        },
     ))
 }
 
@@ -1464,8 +1484,12 @@ where
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let (claims, erow_evals, ecol_evals) =
-        read_opening_claims_from_prover_data(config, &prover_data.data, product_claims)?;
+    let (erow_claims, ecol_claims, erow_evals, ecol_evals) = read_opening_claims_from_prover_data(
+        config,
+        &prover_data.erow,
+        &prover_data.ecol,
+        product_claims,
+    )?;
     let read_evals = split_read_coordinate_evals::<EF>(&erow_evals, &ecol_evals)?;
     let expected_left = [
         read_evals.erow_low,
@@ -1489,20 +1513,26 @@ where
     {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    let statement = point_eval_statement::<E, EF>(&claims)?;
-    let proof = <Pcs as MlePcs<E>>::open(config, prover_data.data, &statement, challenger)?;
+    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
+    let erow_proof =
+        <Pcs as MlePcs<E>>::open(config, prover_data.erow, &erow_statement, challenger)?;
+    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
+    let ecol_proof =
+        <Pcs as MlePcs<E>>::open(config, prover_data.ecol, &ecol_statement, challenger)?;
 
     Ok(SparkReadOpeningProof {
         num_variables: config.num_variables,
         column_bits: read_column_bits::<EF>(),
-        commitment: commitments.commitment,
+        erow_commitment: commitments.erow,
+        ecol_commitment: commitments.ecol,
         erow_low_evals: erow_evals[0].clone(),
         erow_high_evals: erow_evals[1].clone(),
         ecol_low_evals: ecol_evals[0].clone(),
         ecol_high_evals: ecol_evals[1].clone(),
         erow_ops_evals: erow_evals[2].clone(),
         ecol_ops_evals: ecol_evals[2].clone(),
-        proof,
+        erow_proof,
+        ecol_proof,
         marker: PhantomData,
     })
 }
@@ -1549,10 +1579,16 @@ where
 {
     validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
     Ok(ParsedSparkReadOpenings {
-        commitment: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+        erow: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
             config,
-            &proof.commitment,
-            &proof.proof,
+            &proof.erow_commitment,
+            &proof.erow_proof,
+            challenger,
+        )?,
+        ecol: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+            config,
+            &proof.ecol_commitment,
+            &proof.ecol_proof,
             challenger,
         )?,
     })
@@ -1633,13 +1669,22 @@ where
         proof.ecol_high_evals.as_slice(),
         proof.ecol_ops_evals.as_slice(),
     ];
-    let claims = read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
-    let statement = point_eval_statement::<E, EF>(&claims)?;
+    let (erow_claims, ecol_claims) =
+        read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
+    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
     <Pcs as ProtocolPcs<E>>::verify_finalize(
         config,
-        &parsed.commitment,
-        &statement,
-        &proof.proof,
+        &parsed.erow,
+        &erow_statement,
+        &proof.erow_proof,
+        challenger,
+    )?;
+    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
+    <Pcs as ProtocolPcs<E>>::verify_finalize(
+        config,
+        &parsed.ecol,
+        &ecol_statement,
+        &proof.ecol_proof,
         challenger,
     )?;
     split_read_coordinate_evals(
@@ -1681,78 +1726,74 @@ where
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&value| EF::from(value))
-        .collect();
+    let polynomial = prover_data.polynomial();
     let (dot_low_point, dot_high_point) = dotproduct_full_domain_points(&product_claims.ops)?;
     let mut claims = Vec::with_capacity(10);
     let row_addr = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         0,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let col_addr = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         1,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let val_a_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         2,
         &dot_low_point,
         &mut claims,
     )?;
     let val_a_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         2,
         &dot_high_point,
         &mut claims,
     )?;
     let val_b_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         3,
         &dot_low_point,
         &mut claims,
     )?;
     let val_b_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         3,
         &dot_high_point,
         &mut claims,
     )?;
     let val_c_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         4,
         &dot_low_point,
         &mut claims,
     )?;
     let val_c_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         4,
         &dot_high_point,
         &mut claims,
     )?;
     let row_read_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         5,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let col_read_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         6,
         &product_claims.ops.product_point,
@@ -1867,11 +1908,7 @@ where
         .num_variables
         .checked_sub(fixed_audit_column_bits())
         .ok_or(SpartanWhirError::invalid_config())?;
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&value| EF::from(value))
-        .collect();
+    let polynomial = prover_data.polynomial();
     let row_point = low_block_memory_point(
         &product_claims.mem.product_point,
         row_memory_size,
@@ -1884,14 +1921,14 @@ where
     )?;
     let mut claims = Vec::with_capacity(2);
     let row_audit_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_audit_column_bits(),
         0,
         &row_point,
         &mut claims,
     )?;
     let col_audit_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_audit_column_bits(),
         1,
         &col_point,
@@ -1966,10 +2003,12 @@ type ReadCoordinateEvals<EF> = [Vec<EF>; 3];
 
 fn read_opening_claims_from_prover_data<EF, D>(
     config: &WhirPcsConfig,
-    prover_data: &D,
+    erow_prover_data: &D,
+    ecol_prover_data: &D,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
 ) -> Result<
     (
+        Vec<(MultilinearPoint<EF>, EF)>,
         Vec<(MultilinearPoint<EF>, EF)>,
         ReadCoordinateEvals<EF>,
         ReadCoordinateEvals<EF>,
@@ -1980,16 +2019,16 @@ where
     EF: ExtField,
     D: CommittedPolynomialView<EF>,
 {
-    if prover_data.num_variables() != config.num_variables {
+    if erow_prover_data.num_variables() != config.num_variables
+        || ecol_prover_data.num_variables() != config.num_variables
+    {
         return Err(SpartanWhirError::invalid_config());
     }
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&v| EF::from(v))
-        .collect();
+    let erow_polynomial = erow_prover_data.polynomial();
+    let ecol_polynomial = ecol_prover_data.polynomial();
     let points = read_opening_points(product_claims)?;
-    let mut claims = Vec::with_capacity(6 * EF::DIMENSION);
+    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
+    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
     let mut erow_evals = [
         Vec::with_capacity(EF::DIMENSION),
         Vec::with_capacity(EF::DIMENSION),
@@ -2003,53 +2042,52 @@ where
 
     for column in 0..EF::DIMENSION {
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_low,
             &mut erow_evals[0],
-            &mut claims,
+            &mut erow_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_high,
             &mut erow_evals[1],
-            &mut claims,
+            &mut erow_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_ops,
             &mut erow_evals[2],
-            &mut claims,
+            &mut erow_claims,
         )?;
     }
-    for coordinate in 0..EF::DIMENSION {
-        let column = EF::DIMENSION + coordinate;
+    for column in 0..EF::DIMENSION {
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_low,
             &mut ecol_evals[0],
-            &mut claims,
+            &mut ecol_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_high,
             &mut ecol_evals[1],
-            &mut claims,
+            &mut ecol_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_ops,
             &mut ecol_evals[2],
-            &mut claims,
+            &mut ecol_claims,
         )?;
     }
 
-    Ok((claims, erow_evals, ecol_evals))
+    Ok((erow_claims, ecol_claims, erow_evals, ecol_evals))
 }
 
 struct SparkReadOpeningPoints<EF> {
@@ -2082,7 +2120,13 @@ fn read_opening_claims_from_evals<EF>(
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
     erow_evals: &[&[EF]; 3],
     ecol_evals: &[&[EF]; 3],
-) -> Result<Vec<(MultilinearPoint<EF>, EF)>, SpartanWhirError>
+) -> Result<
+    (
+        Vec<(MultilinearPoint<EF>, EF)>,
+        Vec<(MultilinearPoint<EF>, EF)>,
+    ),
+    SpartanWhirError,
+>
 where
     EF: ExtField,
 {
@@ -2092,41 +2136,41 @@ where
         return Err(SpartanWhirError::invalid_config());
     }
     let points = read_opening_points(product_claims)?;
-    let mut claims = Vec::with_capacity(6 * EF::DIMENSION);
+    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
     for column in 0..EF::DIMENSION {
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_low)?,
             erow_evals[0][column],
         ));
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_high)?,
             erow_evals[1][column],
         ));
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_ops)?,
             erow_evals[2][column],
         ));
     }
+    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
     for coordinate in 0..EF::DIMENSION {
-        let column = EF::DIMENSION + coordinate;
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_low)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_low)?,
             ecol_evals[0][coordinate],
         ));
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_high)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_high)?,
             ecol_evals[1][coordinate],
         ));
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_ops)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_ops)?,
             ecol_evals[2][coordinate],
         ));
     }
-    Ok(claims)
+    Ok((erow_claims, ecol_claims))
 }
 
 fn push_read_opening_claim<EF>(
-    poly_ext: &[EF],
+    polynomial: &[F],
     column: usize,
     base_point: &MultilinearPoint<EF>,
     evals: &mut Vec<EF>,
@@ -2136,7 +2180,13 @@ where
     EF: ExtField,
 {
     let point = read_rectangular_point::<EF>(column, base_point)?;
-    let value = push_opening_claim_at_point(poly_ext, point, claims)?;
+    let value = evaluate_base_rectangular_opening_claim(
+        polynomial,
+        read_column_bits::<EF>(),
+        column,
+        base_point,
+    )?;
+    claims.push((point, value));
     evals.push(value);
     Ok(())
 }
@@ -2194,7 +2244,7 @@ where
 }
 
 fn push_rectangular_opening_claim<EF>(
-    poly_ext: &[EF],
+    polynomial: &[F],
     column_bits: usize,
     column: usize,
     base_point: &MultilinearPoint<EF>,
@@ -2204,20 +2254,87 @@ where
     EF: ExtField,
 {
     let point = rectangular_point(column, column_bits, base_point)?;
-    push_opening_claim_at_point(poly_ext, point, claims)
+    let value =
+        evaluate_base_rectangular_opening_claim(polynomial, column_bits, column, base_point)?;
+    claims.push((point, value));
+    Ok(value)
 }
 
-fn push_opening_claim_at_point<EF>(
-    poly_ext: &[EF],
-    point: MultilinearPoint<EF>,
-    claims: &mut Vec<(MultilinearPoint<EF>, EF)>,
+fn evaluate_base_rectangular_opening_claim<EF>(
+    polynomial: &[F],
+    column_bits: usize,
+    column: usize,
+    base_point: &MultilinearPoint<EF>,
 ) -> Result<EF, SpartanWhirError>
 where
     EF: ExtField,
 {
-    let value = evaluate_mle_table(poly_ext, &point.0)?;
-    claims.push((point, value));
-    Ok(value)
+    let column_count = 1usize
+        .checked_shl(column_bits as u32)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    let domain_size = 1usize
+        .checked_shl(base_point.0.len() as u32)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    if column >= column_count
+        || polynomial.len()
+            != domain_size
+                .checked_mul(column_count)
+                .ok_or(SpartanWhirError::invalid_config())?
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let start = column
+        .checked_mul(domain_size)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    let end = start
+        .checked_add(domain_size)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    evaluate_base_mle_table_as_extension(&polynomial[start..end], &base_point.0)
+}
+
+fn evaluate_base_mle_table_as_extension<EF>(
+    table: &[F],
+    point: &[EF],
+) -> Result<EF, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    if table.is_empty() || !table.len().is_power_of_two() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    let expected_len = 1usize
+        .checked_shl(point.len() as u32)
+        .ok_or(SpartanWhirError::InvalidRoundPolynomial)?;
+    if table.len() != expected_len {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    if point.is_empty() {
+        return Ok(EF::from(table[0]));
+    }
+
+    let first_challenge = point[0];
+    let first_half = table.len() / 2;
+    let mut layer = Vec::with_capacity(first_half);
+    for i in 0..first_half {
+        let lo = table[i];
+        let hi = table[i + first_half];
+        layer.push(EF::from(lo) + first_challenge * (hi - lo));
+    }
+
+    let mut active = layer.len();
+    for &r_i in &point[1..] {
+        let half = active / 2;
+        for i in 0..half {
+            let lo = layer[i];
+            let hi = layer[i + half];
+            layer[i] = lo + r_i * (hi - lo);
+        }
+        active = half;
+    }
+
+    Ok(layer[0])
 }
 
 fn rectangular_point<EF>(
@@ -2247,7 +2364,7 @@ pub fn read_column_count<EF>() -> usize
 where
     EF: ExtField,
 {
-    (2 * EF::DIMENSION).next_power_of_two()
+    EF::DIMENSION.next_power_of_two()
 }
 
 pub fn read_column_bits<EF>() -> usize
