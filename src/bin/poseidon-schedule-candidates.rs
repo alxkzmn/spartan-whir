@@ -1,7 +1,8 @@
 use std::{env, panic, process};
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
+use p3_field::{extension::BinomialExtensionField, ExtensionField, Field, TwoAdicField};
 use p3_whir::parameters::{
     FoldingFactor, ProtocolParameters, SecurityAssumption as P3SecurityAssumption,
     WhirConfig as P3WhirConfig,
@@ -23,10 +24,30 @@ const POW_BITS_CANDIDATES: &[usize] = &[0, 4, 8, 12, 16, 20, 22];
 const FIELD_BYTES: u128 = 4;
 const POSEIDON_DIGEST_BYTES: u128 = 32;
 
-type QuinticExtension = spartan_whir::QuinticExtension;
+type KoalaBearQuinticExtension = spartan_whir::QuinticExtension;
+type BabyBearQuarticExtension = BinomialExtensionField<BabyBear, 4>;
+type BabyBearQuinticExtension = BinomialExtensionField<BabyBear, 5>;
+type BabyBearOcticExtension = BinomialExtensionField<BabyBear, 8>;
+type BabyBearPoseidonChallenger = DuplexChallenger<BabyBear, Poseidon2BabyBear<16>, 16, 8>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldProfile {
+    KoalaBear,
+    BabyBear,
+}
+
+impl FieldProfile {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::KoalaBear => "koalabear",
+            Self::BabyBear => "babybear",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Args {
+    field: FieldProfile,
     num_variables: usize,
     security_bits: usize,
     merkle_security_bits: usize,
@@ -42,6 +63,7 @@ struct Args {
 struct CandidateDump {
     schema_version: u32,
     matrix_closing: MatrixClosingMode,
+    base_field: &'static str,
     num_variables: usize,
     target_security_bits: usize,
     soundness: SoundnessAssumption,
@@ -52,8 +74,11 @@ struct CandidateDump {
 #[derive(Debug, Serialize)]
 struct CandidateRow {
     label: String,
+    base_field: &'static str,
+    base_two_adicity: usize,
     extension: &'static str,
     extension_degree: usize,
+    extension_two_adicity: usize,
     field_bits: usize,
     valid: bool,
     rejection_reason: Option<String>,
@@ -125,6 +150,7 @@ fn main() {
                                     round_log_inv_rates: Vec::new(),
                                 };
                                 push_invalid_rate_candidates(
+                                    &args,
                                     &mut candidates,
                                     whir_params,
                                     format!("unable to derive round log inverse rates: {reason}"),
@@ -148,8 +174,9 @@ fn main() {
     }
 
     let dump = CandidateDump {
-        schema_version: 1,
+        schema_version: 2,
         matrix_closing: MatrixClosingMode::DirectSparse,
+        base_field: args.field.label(),
         num_variables: args.num_variables,
         target_security_bits: args.security_bits,
         soundness: SoundnessAssumption::JohnsonBound,
@@ -161,41 +188,86 @@ fn main() {
 }
 
 fn push_invalid_rate_candidates(
+    args: &Args,
     out: &mut Vec<CandidateRow>,
     whir_params: WhirParams,
     reason: String,
 ) {
-    push_invalid_rate_candidate::<QuarticBinExtension>(
-        out,
-        whir_params.clone(),
-        "quartic",
-        4,
-        reason.clone(),
-    );
-    push_invalid_rate_candidate::<QuinticExtension>(
-        out,
-        whir_params.clone(),
-        "quintic",
-        5,
-        reason.clone(),
-    );
-    push_invalid_rate_candidate::<OcticBinExtension>(out, whir_params, "octic", 8, reason);
+    match args.field {
+        FieldProfile::KoalaBear => {
+            push_invalid_rate_candidate::<F, QuarticBinExtension>(
+                out,
+                whir_params.clone(),
+                args.field.label(),
+                "quartic",
+                4,
+                reason.clone(),
+            );
+            push_invalid_rate_candidate::<F, KoalaBearQuinticExtension>(
+                out,
+                whir_params.clone(),
+                args.field.label(),
+                "quintic",
+                5,
+                reason.clone(),
+            );
+            push_invalid_rate_candidate::<F, OcticBinExtension>(
+                out,
+                whir_params,
+                args.field.label(),
+                "octic",
+                8,
+                reason,
+            );
+        }
+        FieldProfile::BabyBear => {
+            push_invalid_rate_candidate::<BabyBear, BabyBearQuarticExtension>(
+                out,
+                whir_params.clone(),
+                args.field.label(),
+                "quartic",
+                4,
+                reason.clone(),
+            );
+            push_invalid_rate_candidate::<BabyBear, BabyBearQuinticExtension>(
+                out,
+                whir_params.clone(),
+                args.field.label(),
+                "quintic",
+                5,
+                reason.clone(),
+            );
+            push_invalid_rate_candidate::<BabyBear, BabyBearOcticExtension>(
+                out,
+                whir_params,
+                args.field.label(),
+                "octic",
+                8,
+                reason,
+            );
+        }
+    }
 }
 
-fn push_invalid_rate_candidate<Ext>(
+fn push_invalid_rate_candidate<Base, Ext>(
     out: &mut Vec<CandidateRow>,
     whir_params: WhirParams,
+    base_field: &'static str,
     extension: &'static str,
     extension_degree: usize,
     reason: String,
 ) where
-    Ext: Field,
+    Base: TwoAdicField,
+    Ext: Field + TwoAdicField,
 {
     let label = schedule_label(extension, &whir_params);
     out.push(invalid_row(
         label,
+        base_field,
+        Base::TWO_ADICITY,
         extension,
         extension_degree,
+        Ext::TWO_ADICITY,
         Ext::bits(),
         whir_params,
         reason,
@@ -203,20 +275,66 @@ fn push_invalid_rate_candidate<Ext>(
 }
 
 fn push_candidates(args: &Args, out: &mut Vec<CandidateRow>, whir_params: WhirParams) {
-    derive_for_extension::<QuarticBinExtension>(args, out, whir_params.clone(), "quartic", 4);
-    derive_for_extension::<QuinticExtension>(args, out, whir_params.clone(), "quintic", 5);
-    derive_for_extension::<OcticBinExtension>(args, out, whir_params, "octic", 8);
+    match args.field {
+        FieldProfile::KoalaBear => {
+            derive_for_extension::<F, QuarticBinExtension, PoseidonChallenger>(
+                args,
+                out,
+                whir_params.clone(),
+                "quartic",
+                4,
+            );
+            derive_for_extension::<F, KoalaBearQuinticExtension, PoseidonChallenger>(
+                args,
+                out,
+                whir_params.clone(),
+                "quintic",
+                5,
+            );
+            derive_for_extension::<F, OcticBinExtension, PoseidonChallenger>(
+                args,
+                out,
+                whir_params,
+                "octic",
+                8,
+            );
+        }
+        FieldProfile::BabyBear => {
+            derive_for_extension::<BabyBear, BabyBearQuarticExtension, BabyBearPoseidonChallenger>(
+                args,
+                out,
+                whir_params.clone(),
+                "quartic",
+                4,
+            );
+            derive_for_extension::<BabyBear, BabyBearQuinticExtension, BabyBearPoseidonChallenger>(
+                args,
+                out,
+                whir_params.clone(),
+                "quintic",
+                5,
+            );
+            derive_for_extension::<BabyBear, BabyBearOcticExtension, BabyBearPoseidonChallenger>(
+                args,
+                out,
+                whir_params,
+                "octic",
+                8,
+            );
+        }
+    }
 }
 
-fn derive_for_extension<Ext>(
+fn derive_for_extension<Base, Ext, Challenger>(
     args: &Args,
     out: &mut Vec<CandidateRow>,
     whir_params: WhirParams,
     extension: &'static str,
     extension_degree: usize,
 ) where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
-    PoseidonChallenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let label = schedule_label(extension, &whir_params);
     let result = catch_unwind_silent(|| {
@@ -228,7 +346,7 @@ fn derive_for_extension<Ext>(
             security_level: args.security_bits,
             pow_bits: whir_params.pow_bits as usize,
         };
-        P3WhirConfig::<Ext, F, PoseidonChallenger>::new(args.num_variables, protocol_params)
+        P3WhirConfig::<Ext, Base, Challenger>::new(args.num_variables, protocol_params)
     });
 
     let config = match result {
@@ -237,8 +355,11 @@ fn derive_for_extension<Ext>(
             if args.include_invalid {
                 out.push(invalid_row(
                     label,
+                    args.field.label(),
+                    Base::TWO_ADICITY,
                     extension,
                     extension_degree,
+                    Ext::TWO_ADICITY,
                     Ext::bits(),
                     whir_params,
                     format!("backend rejected candidate: {reason}"),
@@ -248,8 +369,8 @@ fn derive_for_extension<Ext>(
         }
     };
 
-    let achieved = achieved_security_bits::<Ext>(&config);
-    let max_pow = max_derived_pow_bits(&config);
+    let achieved = achieved_security_bits::<Base, Ext, Challenger>(&config);
+    let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config);
     let valid = achieved >= args.security_bits as f64 && max_pow <= args.max_pow_bits;
     if !valid && !args.include_invalid {
         return;
@@ -272,18 +393,21 @@ fn derive_for_extension<Ext>(
             folding_pow_bits: round.folding_pow_bits,
         })
         .collect::<Vec<_>>();
-    let pow_work_units = pow_work_units(&config);
-    let dft_work = dft_work(&config);
-    let merkle_work = merkle_work(&config);
-    let merkle_path_work = merkle_path_work(&config);
-    let row_work = row_work(&config);
-    let sumcheck_work = sumcheck_work(&config);
-    let proof_size_bytes_estimate = proof_size_bytes_estimate(&config);
+    let pow_work_units = pow_work_units::<Base, Ext, Challenger>(&config);
+    let dft_work = dft_work::<Base, Ext, Challenger>(&config);
+    let merkle_work = merkle_work::<Base, Ext, Challenger>(&config);
+    let merkle_path_work = merkle_path_work::<Base, Ext, Challenger>(&config);
+    let row_work = row_work::<Base, Ext, Challenger>(&config);
+    let sumcheck_work = sumcheck_work::<Base, Ext, Challenger>(&config);
+    let proof_size_bytes_estimate = proof_size_bytes_estimate::<Base, Ext, Challenger>(&config);
 
     out.push(CandidateRow {
         label,
+        base_field: args.field.label(),
+        base_two_adicity: Base::TWO_ADICITY,
         extension,
         extension_degree,
+        extension_two_adicity: Ext::TWO_ADICITY,
         field_bits: Ext::bits(),
         valid,
         rejection_reason: (!valid).then(|| {
@@ -319,16 +443,22 @@ fn derive_for_extension<Ext>(
 
 fn invalid_row(
     label: String,
+    base_field: &'static str,
+    base_two_adicity: usize,
     extension: &'static str,
     extension_degree: usize,
+    extension_two_adicity: usize,
     field_bits: usize,
     whir_params: WhirParams,
     reason: impl Into<String>,
 ) -> CandidateRow {
     CandidateRow {
         label,
+        base_field,
+        base_two_adicity,
         extension,
         extension_degree,
+        extension_two_adicity,
         field_bits,
         valid: false,
         rejection_reason: Some(reason.into()),
@@ -373,9 +503,12 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> SpartanSnarkConfig {
     }
 }
 
-fn achieved_security_bits<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> f64
+fn achieved_security_bits<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> f64
 where
-    Ext: ExtensionField<F> + Field,
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
 {
     let soundness = config.params.soundness_type;
     let field_bits = Ext::bits();
@@ -445,9 +578,12 @@ fn folding_security(
         + pow_bits as f64
 }
 
-fn max_derived_pow_bits<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> usize
+fn max_derived_pow_bits<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> usize
 where
-    Ext: ExtensionField<F> + Field,
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
 {
     config.round_parameters.iter().fold(
         config
@@ -458,9 +594,10 @@ where
     )
 }
 
-fn pow_work_units<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn pow_work_units<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field,
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
 {
     let mut bits = vec![
         config.starting_folding_pow_bits,
@@ -477,9 +614,10 @@ where
         .fold(0u128, u128::saturating_add)
 }
 
-fn dft_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn dft_work<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field,
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
 {
     let initial = 1u128 << (config.num_variables + config.params.starting_log_inv_rate);
     config.round_parameters.iter().fold(initial, |acc, round| {
@@ -487,9 +625,11 @@ where
     })
 }
 
-fn merkle_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn merkle_work<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let initial = config.starting_domain_size() as u128;
     (0..config.n_rounds())
@@ -501,9 +641,11 @@ where
         .fold(initial, u128::saturating_add)
 }
 
-fn merkle_path_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn merkle_path_work<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     config
         .round_parameters
@@ -516,9 +658,11 @@ where
         .saturating_add(final_query_count(config).saturating_mul(final_path_depth(config)))
 }
 
-fn row_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn row_work<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let final_round = final_round_estimate(config);
     config
@@ -528,19 +672,23 @@ where
         .map(|(round_index, round)| {
             actual_query_count(round.num_queries, round.domain_size, round.folding_factor)
                 .saturating_mul(row_width(round.folding_factor))
-                .saturating_mul(query_payload_degree::<Ext>(round_index))
+                .saturating_mul(query_payload_degree::<Base, Ext>(round_index))
         })
         .fold(0, u128::saturating_add)
         .saturating_add(
             final_query_count(config)
                 .saturating_mul(row_width(final_round.folding_factor))
-                .saturating_mul(final_payload_degree::<Ext>(config)),
+                .saturating_mul(final_payload_degree::<Base, Ext, Challenger>(config)),
         )
 }
 
-fn proof_size_bytes_estimate<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn proof_size_bytes_estimate<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let query_bytes = config
         .round_parameters
@@ -548,7 +696,7 @@ where
         .enumerate()
         .map(|(round_index, round)| {
             let leaf_bytes = row_width(round.folding_factor)
-                .saturating_mul(query_payload_degree::<Ext>(round_index))
+                .saturating_mul(query_payload_degree::<Base, Ext>(round_index))
                 .saturating_mul(FIELD_BYTES);
             let path_bytes = path_depth(round.domain_size, round.folding_factor)
                 .saturating_mul(POSEIDON_DIGEST_BYTES);
@@ -561,7 +709,7 @@ where
         .saturating_mul(Ext::DIMENSION as u128)
         .saturating_mul(FIELD_BYTES);
     let final_leaf_bytes = row_width(final_round.folding_factor)
-        .saturating_mul(final_payload_degree::<Ext>(config))
+        .saturating_mul(final_payload_degree::<Base, Ext, Challenger>(config))
         .saturating_mul(FIELD_BYTES);
     let final_path_bytes = path_depth(final_round.domain_size, final_round.folding_factor)
         .saturating_mul(POSEIDON_DIGEST_BYTES);
@@ -576,9 +724,10 @@ where
         .saturating_add(commitment_bytes)
 }
 
-fn sumcheck_work<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn sumcheck_work<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field,
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
 {
     let initial = (config.num_variables as u128) * (1u128 << config.num_variables);
     let whir_rounds = config
@@ -597,9 +746,10 @@ fn row_width(folding_factor: usize) -> u128 {
         .unwrap_or(u128::MAX)
 }
 
-fn query_payload_degree<Ext>(round_index: usize) -> u128
+fn query_payload_degree<Base, Ext>(round_index: usize) -> u128
 where
-    Ext: ExtensionField<F>,
+    Base: Field,
+    Ext: ExtensionField<Base>,
 {
     if round_index == 0 {
         1
@@ -608,9 +758,11 @@ where
     }
 }
 
-fn final_payload_degree<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn final_payload_degree<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     if config.n_rounds() == 0 {
         1
@@ -619,9 +771,11 @@ where
     }
 }
 
-fn final_query_count<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn final_query_count<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let final_round = final_round_estimate(config);
     actual_query_count(
@@ -635,9 +789,11 @@ fn actual_query_count(num_queries: usize, domain_size: usize, folding_factor: us
     num_queries.min(folded_row_count(domain_size, folding_factor)) as u128
 }
 
-fn final_path_depth<Ext>(config: &P3WhirConfig<Ext, F, PoseidonChallenger>) -> u128
+fn final_path_depth<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let final_round = final_round_estimate(config);
     path_depth(final_round.domain_size, final_round.folding_factor)
@@ -648,11 +804,13 @@ struct FinalRoundEstimate {
     folding_factor: usize,
 }
 
-fn final_round_estimate<Ext>(
-    config: &P3WhirConfig<Ext, F, PoseidonChallenger>,
+fn final_round_estimate<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
 ) -> FinalRoundEstimate
 where
-    Ext: ExtensionField<F> + Field + TwoAdicField,
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     if config.round_parameters.is_empty() {
         FinalRoundEstimate {
@@ -912,6 +1070,7 @@ mod tests {
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
+        field: FieldProfile::KoalaBear,
         num_variables: 0,
         security_bits: DEFAULT_SECURITY_BITS,
         merkle_security_bits: DEFAULT_SECURITY_BITS,
@@ -925,6 +1084,7 @@ fn parse_args() -> Result<Args, String> {
     let mut iter = env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--field" => args.field = parse_field_profile(&mut iter, &arg)?,
             "--num-variables" => args.num_variables = parse_next(&mut iter, &arg)?,
             "--security-bits" => args.security_bits = parse_next(&mut iter, &arg)?,
             "--merkle-security-bits" => args.merkle_security_bits = parse_next(&mut iter, &arg)?,
@@ -958,9 +1118,26 @@ fn parse_next(iter: &mut impl Iterator<Item = String>, name: &str) -> Result<usi
         .map_err(|_| format!("{name} must be a non-negative integer"))
 }
 
+fn parse_field_profile(
+    iter: &mut impl Iterator<Item = String>,
+    name: &str,
+) -> Result<FieldProfile, String> {
+    match iter
+        .next()
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .as_str()
+    {
+        "koalabear" | "koala-bear" => Ok(FieldProfile::KoalaBear),
+        "babybear" | "baby-bear" => Ok(FieldProfile::BabyBear),
+        other => Err(format!(
+            "{name} must be one of koalabear, koala-bear, babybear, baby-bear; got {other}"
+        )),
+    }
+}
+
 fn usage() {
     eprintln!(
-        "usage: poseidon-schedule-candidates --num-variables N [--security-bits 128] [--max-pow-bits 22] [--include-invalid]"
+        "usage: poseidon-schedule-candidates --num-variables N [--field koalabear|babybear] [--security-bits 128] [--max-pow-bits 22] [--include-invalid]"
     );
 }
 

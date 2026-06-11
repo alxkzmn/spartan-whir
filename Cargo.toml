@@ -15,6 +15,7 @@ p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591
 p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
 p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }

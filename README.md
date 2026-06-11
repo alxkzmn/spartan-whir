@@ -138,6 +138,7 @@ cargo run --release -p spartan-whir --features parallel \
 ```bash
 cargo run -q -p spartan-whir --bin poseidon-schedule-candidates -- \
   --num-variables 19 \
+  --field koalabear \
   --security-bits 128 \
   --max-pow-bits 22 \
   > /tmp/poseidon-candidates.json
@@ -187,7 +188,9 @@ python3 scripts/poseidon_schedule_add_heldout.py \
   (`quartic`, `quintic`, `octic`).
 - `poseidon-schedule-candidates` writes the backend-derived schedule rows,
   achieved security, derived PoW bits, WHIR round data, work units, and the
-  candidate `PoseidonSetupConfig`.
+  candidate `PoseidonSetupConfig`. The `--field` flag selects the field profile
+  used for scheduler constants and two-adicity checks; currently supported
+  values are `koalabear` and `babybear`.
 - `poseidon_schedule_scorer.py` writes a ranked report with projected time,
   per-component `cost_breakdown`, validation status, and one selected config.
 - `poseidon-schedule-heldout` writes proof-only heldout rows for the selected
@@ -215,7 +218,26 @@ projected_time = fixed_overhead + dft + merkle + merkle_path + row_opening + sum
 The report marks recommendations as untrusted until heldout rows for the target
 circuit and extension are within the configured error tolerance. The model is
 intended for schedule selection. Full-proof benchmarks remain the deployment
-check.
+decision point.
+
+#### Field Profile Caveat
+
+The `--field babybear` scheduler mode is useful for testing whether a higher
+base-field two-adicity changes schedule validity or ranking, but it should not
+be read as a full BabyBear prover benchmark. The current WHIR backend keeps the
+post-first-fold domain inside the base field's two-adic subgroup, so the
+relevant validity bound is `num_variables + starting_log_inv_rate -
+first_folding_factor <= F::TWO_ADICITY`.
+
+For the SHA-256 benchmark commitment sizes swept so far (`18..27` variables),
+BabyBear's higher base two-adicity makes additional low-first-fold candidates
+valid, but the scorer still selects the same octic schedules as KoalaBear. That
+only rules out a schedule-selection advantage for the current benchmark sizes.
+It does not rule out an advantage on larger commitments, where KoalaBear reaches
+the `first_folding_factor <= 8` cliff at `32` variables with
+`starting_log_inv_rate = 1`, while BabyBear pushes that cliff to `35` variables.
+Any claim about BabyBear arithmetic or Poseidon speed still needs a full
+field-specific prover benchmark.
 
 Heldout recalibration updates the sumcheck coefficient only for extensions that
 appear in the measured rows. A calibration validated with octic heldouts does
