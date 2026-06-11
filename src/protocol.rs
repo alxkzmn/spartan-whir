@@ -9,7 +9,9 @@ use p3_symmetric::{CryptographicHasher, Hash};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
+use crate::error::InvalidConfigReason;
 use crate::profiling::profile_scope;
+use crate::r1cs::DirectBindLayout;
 use crate::{
     compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
     prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
@@ -45,6 +47,8 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     spark_fixed_prover_data: Option<SparkFixedProverData<E, Pcs>>,
     #[serde(default)]
     spark_tables: Option<crate::SparkTables>,
+    #[serde(skip)]
+    direct_bind_layout: Option<DirectBindLayout>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -69,6 +73,20 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
+}
+
+impl<E, Pcs> ProvingKey<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+{
+    pub fn prepare_for_proving(&mut self) -> Result<(), SpartanWhirError> {
+        self.direct_bind_layout = match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => Some(self.shape_canonical.direct_bind_layout()?),
+            MatrixClosingMode::Spark => None,
+        };
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -395,8 +413,7 @@ where
             Some((prover_data, commitments)) => (Some(prover_data), Some(commitments)),
             None => (None, None),
         };
-
-        let pk = ProvingKey {
+        let mut pk = ProvingKey {
             matrix_closing: config.matrix_closing,
             shape_canonical: shape_canonical.clone(),
             num_cons_unpadded: shape.num_cons,
@@ -409,10 +426,12 @@ where
             spark_pcs_configs: spark_pcs_configs.clone(),
             spark_fixed_prover_data,
             spark_tables,
+            direct_bind_layout: None,
             domain_separator: domain_separator.clone(),
             observer: Some(NoopObserver),
             marker: PhantomData,
         };
+        pk.prepare_for_proving()?;
 
         let vk = VerifyingKey {
             matrix_closing: config.matrix_closing,
@@ -559,7 +578,13 @@ where
         };
         let poly_abc: Vec<E::EF> = {
             let _profile = profile_scope("bind_row_vars_joint");
-            pk.shape_canonical.bind_row_vars_joint::<E::EF>(&t_x, r)?
+            let layout = pk.direct_bind_layout.as_ref().ok_or_else(|| {
+                SpartanWhirError::invalid_config_reason(
+                    InvalidConfigReason::MissingDerivedProverData,
+                )
+            })?;
+            pk.shape_canonical
+                .bind_row_vars_joint_with_layout::<E::EF>(layout, &t_x, r)?
         };
         let (inner_sumcheck, r_y, eval_z) = {
             let _profile = profile_scope("inner_sumcheck");

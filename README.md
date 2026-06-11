@@ -35,6 +35,27 @@ before proving; `prove_from_witness_generator_checked` is available when
 debugging a linked witness generator and a row-level validation error is useful.
 The path has no JSON file, `.wtns` file, subprocess, or witness re-import.
 
+#### Proving Key Setup and Loading
+
+A proving key returned by `setup_poseidon`, `PoseidonProvingKey::setup`, or
+`SpartanProtocol::setup_with_config` is ready to prove. Setup builds derived
+prover data, including the direct-mode row-binding layout used by
+`MatrixClosingMode::DirectSparse`.
+
+Serialized proving keys do not include every derived cache. After deserializing
+a proving key, call `prepare_for_proving()` before proving:
+
+```rust
+let mut pk: PoseidonProvingKey<OcticBinExtension> =
+    bincode::deserialize(&pk_bytes)?;
+pk.prepare_for_proving()?;
+let proof = pk.prove(witness, public_inputs)?;
+```
+
+`prove` treats missing derived prover data as an invalid configuration instead
+of falling back to a slower path. `Spark` proving keys may use the same
+preparation call so load paths stay uniform.
+
 ## Keccak Backend
 
 The Keccak backend is enabled with the `whir-p3-backend` Cargo feature.

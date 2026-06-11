@@ -23,6 +23,7 @@ pub enum InvalidConfigReason {
         base_two_adicity: usize,
         min_first_folding_factor: usize,
     },
+    MissingDerivedProverData,
 }
 
 impl core::fmt::Display for InvalidConfigReason {
@@ -66,6 +67,7 @@ impl core::fmt::Display for InvalidConfigReason {
                 f,
                 "folded domain log size {log_folded_domain_size} exceeds base two-adicity {base_two_adicity}; first folding factor must be at least {min_first_folding_factor}"
             ),
+            Self::MissingDerivedProverData => write!(f, "derived prover data is missing"),
         }
     }
 }
