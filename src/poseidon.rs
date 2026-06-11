@@ -369,11 +369,11 @@ mod witness_generator {
             generator.generate_witness(input, self.num_vars_unpadded, self.num_io)
         }
 
-        /// Generate a witness and prove it without a full R1CS satisfaction preflight.
+        /// Generate a witness and prove it without a full R1CS satisfaction check.
         ///
-        /// The prover's hot path already evaluates the R1CS matrices as part of
-        /// the Spartan protocol. Use `prove_from_witness_generator_checked` when
-        /// the caller wants an explicit row-level witness-generator sanity check.
+        /// The prover evaluates the R1CS matrices as part of the Spartan
+        /// protocol. Use `prove_from_witness_generator_checked` when the caller
+        /// wants an explicit R1CS satisfaction check.
         pub fn prove_from_witness_generator(
             &self,
             generator: &PoseidonWitnessGenerator,

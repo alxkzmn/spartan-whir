@@ -659,8 +659,24 @@ where
     };
     // Current spartan-whir does not enable WHIR's univariate-skip path. If that changes,
     // skip width must remain <= Ext::TWO_ADICITY (24 for KoalaBear quintic).
-    let whir_config = PcsConfig::<E, Ext>::new(config.num_variables, protocol_params.clone());
+    let mut whir_config = PcsConfig::<E, Ext>::new(config.num_variables, protocol_params.clone());
+    cap_whir_pow_bits::<E, Ext>(&mut whir_config);
     Ok((protocol_params, whir_config))
+}
+
+fn cap_whir_pow_bits<E, Ext>(config: &mut PcsConfig<E, Ext>)
+where
+    Ext: ExtField,
+    E: SpartanWhirEngine,
+{
+    let max_pow_bits = config.max_pow_bits;
+    config.starting_folding_pow_bits = config.starting_folding_pow_bits.min(max_pow_bits);
+    config.final_pow_bits = config.final_pow_bits.min(max_pow_bits);
+    config.final_folding_pow_bits = config.final_folding_pow_bits.min(max_pow_bits);
+    for round in &mut config.round_parameters {
+        round.pow_bits = round.pow_bits.min(max_pow_bits);
+        round.folding_pow_bits = round.folding_pow_bits.min(max_pow_bits);
+    }
 }
 
 fn map_whir_p3_folding_schedule(params: &WhirParams) -> Result<FoldingFactor, SpartanWhirError> {

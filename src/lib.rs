@@ -135,7 +135,8 @@ pub use spark::{
 };
 pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, PointEvalClaim};
 pub use sumcheck::{
-    prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
+    prove_inner, prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
+    prove_outer_split_eq_owned, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
 pub use whir_params::{
     recommended_octic_schedule, recommended_octic_whir_params, WhirFoldingSchedule, WhirParams,

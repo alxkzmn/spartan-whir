@@ -2,9 +2,14 @@ use alloc::{vec, vec::Vec};
 use core::cmp::max;
 
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{Evaluations, SpartanWhirError};
+
+const R1CS_PARALLEL_MATRIX_MIN_NNZ: usize = 1 << 14;
+const R1CS_PARALLEL_BIND_MIN_NNZ: usize = 1 << 15;
+const R1CS_PARALLEL_BIND_MAX_SHARDS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparseMatEntry<F> {
@@ -137,6 +142,46 @@ impl<F: Field> R1csShape<F> {
         &self,
         z: &[F],
     ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError> {
+        self.validate_matrix_vector_input(z)?;
+        let az = multiply_sparse_matrix_vector(&self.a, z)?;
+        let bz = multiply_sparse_matrix_vector(&self.b, z)?;
+        let cz = multiply_sparse_matrix_vector(&self.c, z)?;
+        Ok((az, bz, cz))
+    }
+
+    pub fn multiply_vec_parallel(
+        &self,
+        z: &[F],
+    ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError>
+    where
+        F: Send + Sync,
+    {
+        self.validate_matrix_vector_input(z)?;
+
+        let total_nnz = self
+            .a
+            .nnz()
+            .checked_add(self.b.nnz())
+            .and_then(|n| n.checked_add(self.c.nnz()))
+            .ok_or(SpartanWhirError::InvalidR1csShape)?;
+
+        if !(cfg!(feature = "parallel") && total_nnz >= R1CS_PARALLEL_MATRIX_MIN_NNZ) {
+            return self.multiply_vec(z);
+        }
+
+        let (az, (bz, cz)) = join(
+            || multiply_sparse_matrix_vector(&self.a, z),
+            || {
+                join(
+                    || multiply_sparse_matrix_vector(&self.b, z),
+                    || multiply_sparse_matrix_vector(&self.c, z),
+                )
+            },
+        );
+        Ok((az?, bz?, cz?))
+    }
+
+    fn validate_matrix_vector_input(&self, z: &[F]) -> Result<(), SpartanWhirError> {
         self.validate()?;
 
         let expected_len = self
@@ -148,10 +193,7 @@ impl<F: Field> R1csShape<F> {
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        let az = multiply_sparse_matrix_vector(&self.a, z)?;
-        let bz = multiply_sparse_matrix_vector(&self.b, z)?;
-        let cz = multiply_sparse_matrix_vector(&self.c, z)?;
-        Ok((az, bz, cz))
+        Ok(())
     }
 
     pub fn witness_to_mle(&self, witness: &[F]) -> Result<Evaluations<F>, SpartanWhirError> {
@@ -195,6 +237,36 @@ impl<F: Field> R1csShape<F> {
         accumulate_bound_rows(&self.c, eq_rx, &mut c_evals)?;
 
         Ok((a_evals, b_evals, c_evals))
+    }
+
+    pub fn bind_row_vars_joint<EF>(&self, eq_rx: &[EF], r: EF) -> Result<Vec<EF>, SpartanWhirError>
+    where
+        F: Send + Sync,
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        self.validate()?;
+
+        if eq_rx.len() != self.num_cons {
+            return Err(SpartanWhirError::InvalidWitnessLength);
+        }
+
+        let width = self
+            .num_vars
+            .checked_mul(2)
+            .ok_or(SpartanWhirError::InvalidR1csShape)?;
+
+        let mut out = vec![EF::ZERO; width];
+        let r_squared = r * r;
+        let (eq_b, eq_c) = join(
+            || scale_eq_table(eq_rx, r),
+            || scale_eq_table(eq_rx, r_squared),
+        );
+
+        accumulate_bound_rows_for_joint(&self.a, eq_rx, &mut out)?;
+        accumulate_bound_rows_for_joint(&self.b, &eq_b, &mut out)?;
+        accumulate_bound_rows_for_joint(&self.c, &eq_c, &mut out)?;
+
+        Ok(out)
     }
 
     pub fn evaluate_with_tables<EF>(
@@ -268,8 +340,71 @@ where
     }
 
     for entry in &mat.entries {
-        out[entry.col] += eq_rx[entry.row] * EF::from(entry.val);
+        if entry.val.is_one() {
+            out[entry.col] += eq_rx[entry.row];
+        } else {
+            out[entry.col] += eq_rx[entry.row] * entry.val;
+        }
     }
+    Ok(())
+}
+
+fn scale_eq_table<EF>(eq_rx: &[EF], scale: EF) -> Vec<EF>
+where
+    EF: Field + Send + Sync,
+{
+    if cfg!(feature = "parallel") && eq_rx.len() >= R1CS_PARALLEL_BIND_MIN_NNZ {
+        eq_rx.par_iter().map(|&v| scale * v).collect()
+    } else {
+        eq_rx.iter().map(|&v| scale * v).collect()
+    }
+}
+
+fn accumulate_bound_rows_for_joint<F, EF>(
+    mat: &SparseMatrix<F>,
+    eq_rx: &[EF],
+    out: &mut [EF],
+) -> Result<(), SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if out.len() < mat.num_cols {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    if !(cfg!(feature = "parallel") && mat.entries.len() >= R1CS_PARALLEL_BIND_MIN_NNZ) {
+        return accumulate_bound_rows(mat, eq_rx, out);
+    }
+
+    let shard_count = current_num_threads()
+        .min(R1CS_PARALLEL_BIND_MAX_SHARDS)
+        .min(mat.entries.len())
+        .max(1);
+    let chunk_len = mat.entries.len().div_ceil(shard_count);
+    let out_len = out.len();
+    let partials: Vec<Vec<EF>> = mat
+        .entries
+        .par_chunks(chunk_len)
+        .map(|entries| {
+            let mut local = vec![EF::ZERO; out_len];
+            for entry in entries {
+                if entry.val.is_one() {
+                    local[entry.col] += eq_rx[entry.row];
+                } else {
+                    local[entry.col] += eq_rx[entry.row] * entry.val;
+                }
+            }
+            local
+        })
+        .collect();
+
+    for partial in partials {
+        for (dst, value) in out.iter_mut().zip(partial) {
+            *dst += value;
+        }
+    }
+
     Ok(())
 }
 

@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash};
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +12,9 @@ use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
 use crate::profiling::profile_scope;
 use crate::{
     compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
-    prove_outer, prove_spark_batched_memory_products_with_read_tables_and_leaf_claims,
-    verify_inner, verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
+    prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
+    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
+    verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
     EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver,
     OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolPcs,
@@ -21,6 +23,8 @@ use crate::{
     SparkFixedTableOpeningEvals, SparkReadTableOpeningEvals, SparkReadTables, SpartanWhirEngine,
     SpartanWhirError, WhirParams, WhirPcsConfig,
 };
+
+const PROTOCOL_PARALLEL_MAP_MIN_LEN: usize = 1 << 14;
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
@@ -526,11 +530,8 @@ where
 
         let (az_f, bz_f, cz_f) = {
             let _profile = profile_scope("r1cs_multiply_vec");
-            pk.shape_canonical.multiply_vec(&z_short)?
+            pk.shape_canonical.multiply_vec_parallel(&z_short)?
         };
-        let az: Vec<E::EF> = az_f.iter().map(|&v| E::EF::from(v)).collect();
-        let bz: Vec<E::EF> = bz_f.iter().map(|&v| E::EF::from(v)).collect();
-        let cz: Vec<E::EF> = cz_f.iter().map(|&v| E::EF::from(v)).collect();
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
         let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
@@ -538,30 +539,35 @@ where
 
         let (outer_sumcheck, r_x, outer_claims) = {
             let _profile = profile_scope("outer_sumcheck");
-            prove_outer::<F, E::EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?
+            prove_outer_split_eq_base_first_owned::<F, E::EF, _>(
+                &pk.shape_canonical,
+                az_f,
+                bz_f,
+                cz_f,
+                &tau_point,
+                challenger,
+            )?
         };
 
         challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
         let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
-        let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?;
-        let poly_abc: Vec<E::EF> = evals_a
-            .iter()
-            .zip(evals_b.iter())
-            .zip(evals_c.iter())
-            .map(|((&a, &b), &c)| a + r * b + r * r * c)
-            .collect();
-        let z_lifted: Vec<E::EF> = z_full.iter().map(|&v| E::EF::from(v)).collect();
-
+        let t_x = {
+            let _profile = profile_scope("eq_evals_from_point");
+            EqPolynomial::evals_from_point_parallel(&r_x.0)
+        };
+        let poly_abc: Vec<E::EF> = {
+            let _profile = profile_scope("bind_row_vars_joint");
+            pk.shape_canonical.bind_row_vars_joint::<E::EF>(&t_x, r)?
+        };
         let (inner_sumcheck, r_y, eval_z) = {
             let _profile = profile_scope("inner_sumcheck");
-            prove_inner::<F, E::EF, _>(
+            prove_inner_base_first::<F, E::EF, _>(
                 &pk.shape_canonical,
                 claim_inner_joint,
                 &poly_abc,
-                &z_lifted,
+                &z_full,
                 challenger,
             )?
         };
@@ -2534,10 +2540,19 @@ fn public_half_as_extension<Ext>(num_vars: usize, public_inputs: &[F]) -> Vec<Ex
 where
     Ext: ExtField,
 {
-    build_public_half(num_vars, public_inputs)
-        .into_iter()
-        .map(Ext::from)
-        .collect()
+    let public_half = build_public_half(num_vars, public_inputs);
+    lift_base_slice(&public_half)
+}
+
+fn lift_base_slice<Ext>(values: &[F]) -> Vec<Ext>
+where
+    Ext: ExtField,
+{
+    if cfg!(feature = "parallel") && values.len() >= PROTOCOL_PARALLEL_MAP_MIN_LEN {
+        values.par_iter().map(|&value| Ext::from(value)).collect()
+    } else {
+        values.iter().map(|&value| Ext::from(value)).collect()
+    }
 }
 
 fn build_matrix_z(witness: &[F], public_inputs: &[F]) -> Vec<F> {

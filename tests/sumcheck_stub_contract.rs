@@ -3,7 +3,8 @@ mod common;
 use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
-    engine::F, evaluate_mle_table, prove_inner, prove_outer, verify_inner, verify_outer,
+    engine::F, evaluate_mle_table, prove_inner, prove_inner_base_first, prove_outer,
+    prove_outer_split_eq_base_first_owned, prove_outer_split_eq_owned, verify_inner, verify_outer,
     CubicRoundPoly, EqPolynomial, MultilinearPoint, QuadraticRoundPoly, QuarticBinExtension as EF,
     SpartanWhirError,
 };
@@ -54,6 +55,86 @@ fn outer_sumcheck_roundtrip_and_tamper_detection() {
 }
 
 #[test]
+fn outer_sumcheck_split_eq_matches_full_eq_table() {
+    let shape = common::koala_shape_single_constraint(2);
+    let z = vec![F::from_u32(9), F::ONE, F::from_u32(9)];
+    let (az_f, bz_f, cz_f) = shape.multiply_vec(&z).expect("multiply succeeds");
+    let az: Vec<EF> = az_f.iter().copied().map(EF::from).collect();
+    let bz: Vec<EF> = bz_f.iter().copied().map(EF::from).collect();
+    let cz: Vec<EF> = cz_f.iter().copied().map(EF::from).collect();
+    let tau = MultilinearPoint(vec![EF::from(F::from_u32(7))]);
+
+    let mut full_eq_challenger = spartan_whir::keccak_challenger();
+    let full_eq_result =
+        prove_outer::<F, EF, _>(&shape, &az, &bz, &cz, &tau, &mut full_eq_challenger)
+            .expect("full eq prove succeeds");
+
+    let mut split_eq_challenger = spartan_whir::keccak_challenger();
+    let split_eq_result =
+        prove_outer_split_eq_owned::<F, EF, _>(&shape, az, bz, cz, &tau, &mut split_eq_challenger)
+            .expect("split eq prove succeeds");
+
+    assert_eq!(split_eq_result, full_eq_result);
+
+    let mut base_first_challenger = spartan_whir::keccak_challenger();
+    let base_first_result = prove_outer_split_eq_base_first_owned::<F, EF, _>(
+        &shape,
+        az_f,
+        bz_f,
+        cz_f,
+        &tau,
+        &mut base_first_challenger,
+    )
+    .expect("base first prove succeeds");
+
+    assert_eq!(base_first_result, full_eq_result);
+}
+
+#[test]
+fn outer_sumcheck_base_first_matches_full_eq_table_for_multiple_rounds() {
+    // 64 constraints = 6 rounds, so first_half = 3 and rounds 1..3 exercise the
+    // SplitEqSumcheck first-half (eq_left x eq_right) branch in both the
+    // base-first and extension-field paths.
+    let shape = common::koala_shape_single_constraint(64);
+    let z = vec![F::from_u32(9), F::ONE, F::from_u32(9)];
+    let (az_f, bz_f, cz_f) = shape.multiply_vec(&z).expect("multiply succeeds");
+    let az: Vec<EF> = az_f.iter().copied().map(EF::from).collect();
+    let bz: Vec<EF> = bz_f.iter().copied().map(EF::from).collect();
+    let cz: Vec<EF> = cz_f.iter().copied().map(EF::from).collect();
+    let tau = MultilinearPoint(
+        [7u32, 11, 13, 17, 19, 23]
+            .iter()
+            .map(|&v| EF::from(F::from_u32(v)))
+            .collect(),
+    );
+
+    let mut full_eq_challenger = spartan_whir::keccak_challenger();
+    let full_eq_result =
+        prove_outer::<F, EF, _>(&shape, &az, &bz, &cz, &tau, &mut full_eq_challenger)
+            .expect("full eq prove succeeds");
+
+    let mut split_eq_challenger = spartan_whir::keccak_challenger();
+    let split_eq_result =
+        prove_outer_split_eq_owned::<F, EF, _>(&shape, az, bz, cz, &tau, &mut split_eq_challenger)
+            .expect("split eq prove succeeds");
+
+    assert_eq!(split_eq_result, full_eq_result);
+
+    let mut base_first_challenger = spartan_whir::keccak_challenger();
+    let base_first_result = prove_outer_split_eq_base_first_owned::<F, EF, _>(
+        &shape,
+        az_f,
+        bz_f,
+        cz_f,
+        &tau,
+        &mut base_first_challenger,
+    )
+    .expect("base first prove succeeds");
+
+    assert_eq!(base_first_result, full_eq_result);
+}
+
+#[test]
 fn inner_sumcheck_roundtrip_and_round_count_guard() {
     let shape = common::koala_shape_single_constraint(2);
     let poly_abc = vec![
@@ -62,12 +143,13 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
         EF::from(F::from_u32(3)),
         EF::from(F::from_u32(4)),
     ];
-    let z = vec![
-        EF::from(F::from_u32(5)),
-        EF::from(F::from_u32(6)),
-        EF::from(F::from_u32(7)),
-        EF::from(F::from_u32(8)),
+    let z_base = vec![
+        F::from_u32(5),
+        F::from_u32(6),
+        F::from_u32(7),
+        F::from_u32(8),
     ];
+    let z: Vec<EF> = z_base.iter().map(|&value| EF::from(value)).collect();
     let initial_claim = poly_abc
         .iter()
         .zip(z.iter())
@@ -77,6 +159,16 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
     let (proof, r_y, _eval_z) =
         prove_inner::<F, EF, _>(&shape, initial_claim, &poly_abc, &z, &mut prover_challenger)
             .expect("inner prove succeeds");
+    let mut base_first_challenger = spartan_whir::keccak_challenger();
+    let base_first_result = prove_inner_base_first::<F, EF, _>(
+        &shape,
+        initial_claim,
+        &poly_abc,
+        &z_base,
+        &mut base_first_challenger,
+    )
+    .expect("base-first inner prove succeeds");
+    assert_eq!(base_first_result, (proof.clone(), r_y.clone(), _eval_z));
     assert_eq!(proof.rounds.len(), 2);
     assert_eq!(r_y.0.len(), 2);
 

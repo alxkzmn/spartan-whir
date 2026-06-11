@@ -141,3 +141,32 @@ fn bind_row_vars_and_evaluate_with_tables_are_consistent() {
     assert_eq!(eval_b, dot(&bound_b));
     assert_eq!(eval_c, dot(&bound_c));
 }
+
+#[test]
+fn bind_row_vars_joint_matches_separate_tables() {
+    let shape = common::koala_shape_single_constraint(2)
+        .pad_regular()
+        .expect("padding succeeds");
+
+    let r_x = vec![spartan_whir::QuarticBinExtension::from(F::from_u32(3))];
+    let t_x = spartan_whir::EqPolynomial::evals_from_point(&r_x);
+
+    for r in [
+        spartan_whir::QuarticBinExtension::ZERO,
+        spartan_whir::QuarticBinExtension::ONE,
+        spartan_whir::QuarticBinExtension::from(F::from_u32(7)),
+    ] {
+        let (bound_a, bound_b, bound_c) = shape.bind_row_vars(&t_x).expect("bind succeeds");
+        let expected: Vec<_> = bound_a
+            .iter()
+            .zip(bound_b.iter())
+            .zip(bound_c.iter())
+            .map(|((&a, &b), &c)| a + r * b + r * r * c)
+            .collect();
+        let actual = shape
+            .bind_row_vars_joint(&t_x, r)
+            .expect("joint bind succeeds");
+
+        assert_eq!(actual, expected);
+    }
+}
