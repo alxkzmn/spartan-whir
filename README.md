@@ -30,8 +30,10 @@ witness and public-value buffers directly as canonical KoalaBear `u32` values.
 
 Public values are ordered as `public_outputs || public_inputs`, matching the
 Circom R1CS wire layout. The witness buffer contains witness columns only.
-Rust validates R1CS satisfaction before proving. The path has no JSON file,
-`.wtns` file, subprocess, or witness re-import.
+The default proving path does not run a separate full R1CS satisfaction pass
+before proving; `prove_from_witness_generator_checked` is available when
+debugging a linked witness generator and a row-level validation error is useful.
+The path has no JSON file, `.wtns` file, subprocess, or witness re-import.
 
 ## Keccak Backend
 
@@ -114,8 +116,11 @@ stay within 24.
 The Poseidon Plonky3-WHIR prover has a manual schedule-scoring workflow for
 `MatrixClosingMode::DirectSparse` with Johnson-bound soundness. The scorer does
 not run during setup. A user generates candidate schedules, scores them with a
-calibration file, optionally validates the top rows with full proofs, and then
-passes the selected `PoseidonSetupConfig` into `setup_poseidon`.
+calibration file, optionally validates the top rows with proof-only heldout
+measurements, and then passes the selected `PoseidonSetupConfig` into
+`setup_poseidon`. Deployment prover benchmarks should use the linked native
+witness-generator path and report `witness_and_prove_ms`; `.wtns` inputs in this
+workflow are only for schedule-model calibration.
 
 #### Workflow
 
@@ -149,7 +154,7 @@ python3 scripts/poseidon_schedule_scorer.py \
   --out-config /tmp/poseidon-config.json
 ```
 
-4. Measure full-proof heldout rows for the actual circuit:
+4. Measure proof-only heldout rows for schedule-model calibration:
 
 ```bash
 RUSTFLAGS="-C target-cpu=native" \
@@ -185,7 +190,7 @@ python3 scripts/poseidon_schedule_add_heldout.py \
   candidate `PoseidonSetupConfig`.
 - `poseidon_schedule_scorer.py` writes a ranked report with projected time,
   per-component `cost_breakdown`, validation status, and one selected config.
-- `poseidon-schedule-heldout` writes measured full-proof rows for the selected
+- `poseidon-schedule-heldout` writes proof-only heldout rows for the selected
   circuit. With `--include-strata`, it samples across the accepted ranking
   instead of measuring only the first `--max-rows` rows.
 - `poseidon_schedule_add_heldout.py` merges heldout rows into the calibration

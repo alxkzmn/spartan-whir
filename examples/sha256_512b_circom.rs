@@ -113,7 +113,7 @@ fn prove_and_verify(
         setup_start.elapsed().as_millis()
     );
 
-    let prove_start = Instant::now();
+    let prove_only_start = Instant::now();
     let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
         &pk,
@@ -123,7 +123,10 @@ fn prove_and_verify(
         &mut prover_challenger,
     )
     .map_err(|err| format!("{label} prove failed: {err}"))?;
-    println!("prove: elapsed_ms={}", prove_start.elapsed().as_millis());
+    println!(
+        "prove_imported_witness_smoke: elapsed_ms={}",
+        prove_only_start.elapsed().as_millis()
+    );
 
     let verify_start = Instant::now();
     let mut verifier_challenger = spartan_whir::keccak_challenger();

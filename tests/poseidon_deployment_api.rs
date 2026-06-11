@@ -206,7 +206,7 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 
     let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
-    let (pk, _vk) = setup_poseidon::<QuarticBinExtension>(
+    let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
         circom.shape,
         config(MatrixClosingMode::DirectSparse),
     )
@@ -220,8 +220,17 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
         tiny_free_circuit,
     )
     .expect("linked generator loads circuit");
+
+    let proof = pk
+        .prove_from_witness_generator(&bad, b"\x05")
+        .expect("fast path proves without explicit satisfaction validation");
+    assert!(
+        vk.verify(&proof).is_err(),
+        "unsatisfied fast-path proof must not verify"
+    );
+
     assert!(matches!(
-        pk.prove_from_witness_generator(&bad, b"\x05"),
+        pk.prove_from_witness_generator_checked(&bad, b"\x05"),
         Err(PoseidonWitnessGeneratorError::Circom(
             CircomAdapterError::UnsatisfiedConstraint { .. }
         ))

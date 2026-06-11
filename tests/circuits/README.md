@@ -24,8 +24,8 @@ is the 65,536-constraint witness-performance circuit used by
 `sha256_128b.circom`, `sha256_256b.circom`, `sha256_512b.circom`,
 `sha256_1024b.circom`, and `sha256_2048b.circom` are real fixed-size SHA-256
 frontend circuits. They use the `koalabear-sha256/Sha256Bytes(N_BYTES)` wrapper
-around the adapted SHA-256 bit circuit. Run the 512-byte compile, witness
-generation, import, prove, and verify flow with:
+around the adapted SHA-256 bit circuit. Run the 512-byte compile, `.wtns`
+import, prove, and verify smoke flow with:
 
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
@@ -39,9 +39,10 @@ When the example generates artifacts itself, it removes the previous
 as-is.
 
 The example proves and verifies the same imported SHA-256 instance twice:
-direct sparse matrix evaluation first, then Spark. Spark uses a folding factor
-of 2 because the 512-byte SHA circuit's packed Spark fixed/read tables need a
-larger WHIR polynomial than the witness commitment.
+direct sparse matrix evaluation first, then Spark. Its prove timer is a
+pre-imported-witness smoke check, not the deployment benchmark. Spark uses a
+folding factor of 2 because the 512-byte SHA circuit's packed Spark fixed/read
+tables need a larger WHIR polynomial than the witness commitment.
 
 Run the size-range benchmark with:
 
@@ -51,11 +52,12 @@ CIRCOM_BIN=../circom/target/debug/circom \
   cargo run --release -p spartan-whir --features circom,whir-p3-backend,parallel --example sha256_circom_bench
 ```
 
-The benchmark reports constraints, constraints per SHA block, wires, witness
-generation time, import time, direct prove/verify time, Spark prove/verify time,
-and Spark layout stats. It derives the Spark folding factor from the packed
-Spark table size, so larger circuits can cross WHIR domain cliffs without
-manual retuning.
+The benchmark reports constraints, constraints per SHA block, wires,
+`witness_and_prove_ms`, verify time, and Spark layout stats.
+`witness_and_prove_ms` starts at the linked native witness generator and ends at
+proof output; this is the only deployment-shaped prover timing for these
+circuits. It derives the Spark folding factor from the packed Spark table size,
+so larger circuits can cross WHIR domain cliffs without manual retuning.
 
 Set `SHA256_BENCH_MODES=spark,spark-independent` to compare the legacy shared
 Spark WHIR schedule against independently selected witness, fixed-value,
@@ -63,12 +65,12 @@ fixed-audit, and read-table schedules. `spark-independent` is the mode to use
 for larger Spark layouts whose read-table commitment crosses the KoalaBear
 two-adicity bound under the legacy shared schedule.
 
-Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the proving path. The
-Spark read-table profile is split into `spark_compute_read_table_row`, which is
-available after `r_x`, and `spark_compute_read_table_col`, which waits for
-`r_y`. The surrounding Spark scopes bracket the read commitment, product
-proofs, fixed-table openings, read-table openings, witness evaluation, and the
-witness WHIR opening.
+Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the
+`witness_and_prove` path. The Spark read-table profile is split into
+`spark_compute_read_table_row`, which is available after `r_x`, and
+`spark_compute_read_table_col`, which waits for `r_y`. The surrounding Spark
+scopes bracket the read commitment, product proofs, fixed-table openings,
+read-table openings, witness evaluation, and the witness WHIR opening.
 
 If GMP is installed outside the default compiler search path, pass the same
 `CC` and `CFLAGS` overrides shown above.

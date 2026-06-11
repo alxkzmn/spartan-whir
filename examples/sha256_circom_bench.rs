@@ -366,8 +366,8 @@ fn prove_and_verify_poseidon_plonky3(
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
     let (witness, public_inputs) =
         generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::poseidon_challenger();
@@ -380,7 +380,7 @@ fn prove_and_verify_poseidon_plonky3(
     )
     .map_err(|err| format!("{label} Poseidon Plonky3 prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -391,7 +391,7 @@ fn prove_and_verify_poseidon_plonky3(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: poseidon-plonky3-whir mode: {label} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: poseidon-plonky3-whir mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
@@ -412,8 +412,8 @@ fn prove_and_verify_poseidon(
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
     let (witness, public_inputs) =
         generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::poseidon_challenger();
@@ -426,7 +426,7 @@ fn prove_and_verify_poseidon(
     )
     .map_err(|err| format!("{label} prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -442,7 +442,7 @@ fn prove_and_verify_poseidon(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: poseidon mode: {label} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: poseidon mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
@@ -463,8 +463,8 @@ fn prove_and_verify_keccak(
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
     let (witness, public_inputs) =
         generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
     let mut prover_challenger = spartan_whir::keccak_challenger();
@@ -477,7 +477,7 @@ fn prove_and_verify_keccak(
     )
     .map_err(|err| format!("{label} prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -493,7 +493,7 @@ fn prove_and_verify_keccak(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: keccak mode: {label} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: keccak mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
