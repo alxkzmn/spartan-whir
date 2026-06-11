@@ -4,7 +4,6 @@ use core::marker::PhantomData;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
-use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash};
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +12,8 @@ use crate::error::InvalidConfigReason;
 use crate::profiling::profile_scope;
 use crate::r1cs::DirectBindLayout;
 use crate::{
-    compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
-    prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
+    compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_inner_base_first,
+    prove_outer, prove_outer_split_eq_base_first_owned,
     prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
     verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
@@ -25,8 +24,6 @@ use crate::{
     SparkFixedTableOpeningEvals, SparkReadTableOpeningEvals, SparkReadTables, SpartanWhirEngine,
     SpartanWhirError, WhirParams, WhirPcsConfig,
 };
-
-const PROTOCOL_PARALLEL_MAP_MIN_LEN: usize = 1 << 14;
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
@@ -599,8 +596,8 @@ where
 
         let witness_eval = {
             let _profile = profile_scope("witness_eval");
-            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            let eval_x =
+                evaluate_public_half(pk.shape_canonical.num_vars, public_inputs, &r_y.0[1..])?;
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
@@ -696,9 +693,11 @@ where
             .shape_canonical
             .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
 
-        let eval_x_table =
-            public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+        let eval_x = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &r_y.0[1..],
+        )?;
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let expected_inner = (eval_a + r * eval_b + r * r * eval_c) * eval_z;
         if inner_final_claim != expected_inner {
@@ -890,8 +889,8 @@ where
 
         let witness_eval = {
             let _profile = profile_scope("witness_eval");
-            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            let eval_x =
+                evaluate_public_half(pk.shape_canonical.num_vars, public_inputs, &r_y.0[1..])?;
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
@@ -1040,9 +1039,11 @@ where
             &r_y,
         )?;
 
-        let eval_x_table =
-            public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+        let eval_x = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &r_y.0[1..],
+        )?;
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let spark_matrix_eval = matrix_eval_rlc(product_claims.matrix_evals, r);
         if inner_final_claim != spark_matrix_eval * eval_z {
@@ -2561,23 +2562,41 @@ fn build_public_half(num_vars: usize, public_inputs: &[F]) -> Vec<F> {
     out
 }
 
-fn public_half_as_extension<Ext>(num_vars: usize, public_inputs: &[F]) -> Vec<Ext>
+fn evaluate_public_half<EF>(
+    num_vars: usize,
+    public_inputs: &[F],
+    point: &[EF],
+) -> Result<EF, SpartanWhirError>
 where
-    Ext: ExtField,
+    EF: ExtField,
 {
-    let public_half = build_public_half(num_vars, public_inputs);
-    lift_base_slice(&public_half)
-}
-
-fn lift_base_slice<Ext>(values: &[F]) -> Vec<Ext>
-where
-    Ext: ExtField,
-{
-    if cfg!(feature = "parallel") && values.len() >= PROTOCOL_PARALLEL_MAP_MIN_LEN {
-        values.par_iter().map(|&value| Ext::from(value)).collect()
-    } else {
-        values.iter().map(|&value| Ext::from(value)).collect()
+    if num_vars == 0 || !num_vars.is_power_of_two() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
+    if point.len() != num_vars.ilog2() as usize {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    if public_inputs.len() >= num_vars {
+        return Err(SpartanWhirError::InvalidPublicInputLength);
+    }
+
+    let active_len = public_inputs
+        .len()
+        .checked_add(1)
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or(SpartanWhirError::InvalidPublicInputLength)?;
+    let active_vars = active_len.ilog2() as usize;
+    let fixed_zero_vars = point.len() - active_vars;
+    let fixed_zero_weight = point[..fixed_zero_vars]
+        .iter()
+        .fold(EF::ONE, |acc, &r| acc * (EF::ONE - r));
+
+    let mut table = vec![EF::ZERO; active_len];
+    table[0] = EF::ONE;
+    for (i, &value) in public_inputs.iter().enumerate() {
+        table[i + 1] = EF::from(value);
+    }
+    Ok(fixed_zero_weight * crate::evaluate_mle_table(&table, &point[fixed_zero_vars..])?)
 }
 
 fn build_matrix_z(witness: &[F], public_inputs: &[F]) -> Vec<F> {
@@ -2607,7 +2626,7 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 
 #[cfg(test)]
 mod tests {
-    use super::recover_witness_eval;
+    use super::{build_public_half, evaluate_public_half, recover_witness_eval};
     use crate::{engine::F, QuarticBinExtension};
     use p3_field::PrimeCharacteristicRing;
 
@@ -2630,5 +2649,57 @@ mod tests {
 
         let recomposed = (QuarticBinExtension::ONE - r0) * got + r0 * eval_x;
         assert_eq!(recomposed, eval_z);
+    }
+
+    #[test]
+    fn evaluate_public_half_matches_full_table() {
+        let public_inputs = vec![F::from_u32(3), F::ZERO, F::from_u32(5), F::from_u32(7)];
+        let point = vec![
+            QuarticBinExtension::from(F::from_u32(2)),
+            QuarticBinExtension::from(F::from_u32(4)),
+            QuarticBinExtension::from(F::from_u32(6)),
+        ];
+        let full_table = build_public_half(8, &public_inputs)
+            .into_iter()
+            .map(QuarticBinExtension::from)
+            .collect::<Vec<_>>();
+        let expected = crate::evaluate_mle_table(&full_table, &point).unwrap();
+
+        let got = evaluate_public_half(8, &public_inputs, &point).unwrap();
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn evaluate_public_half_sparse_matches_full_table() {
+        let public_inputs = vec![F::from_u32(3), F::ZERO];
+        let point = vec![
+            QuarticBinExtension::from(F::from_u32(2)),
+            QuarticBinExtension::from(F::from_u32(4)),
+            QuarticBinExtension::from(F::from_u32(6)),
+            QuarticBinExtension::from(F::from_u32(8)),
+        ];
+        let full_table = build_public_half(16, &public_inputs)
+            .into_iter()
+            .map(QuarticBinExtension::from)
+            .collect::<Vec<_>>();
+        let expected = crate::evaluate_mle_table(&full_table, &point).unwrap();
+
+        let got = evaluate_public_half(16, &public_inputs, &point).unwrap();
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn evaluate_public_half_rejects_invalid_inputs() {
+        let point = vec![QuarticBinExtension::from(F::from_u32(2))];
+        assert_eq!(
+            evaluate_public_half(3, &[], &point),
+            Err(crate::SpartanWhirError::InvalidRoundPolynomial)
+        );
+        assert_eq!(
+            evaluate_public_half(2, &[F::ONE, F::ONE], &point),
+            Err(crate::SpartanWhirError::InvalidPublicInputLength)
+        );
     }
 }
