@@ -10,10 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
 use crate::error::InvalidConfigReason;
 use crate::profiling::profile_scope;
-use crate::r1cs::DirectBindLayout;
+use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
+use crate::sumcheck::{
+    prove_inner_base_first_unchecked, prove_outer_split_eq_base_first_owned_unchecked,
+};
 use crate::{
-    compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_inner_base_first,
-    prove_outer, prove_outer_split_eq_base_first_owned,
+    compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_outer,
     prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
     verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
@@ -46,6 +48,8 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     spark_tables: Option<crate::SparkTables>,
     #[serde(skip)]
     direct_bind_layout: Option<DirectBindLayout>,
+    #[serde(skip)]
+    direct_multiply_layout: Option<DirectMultiplyLayout>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -78,10 +82,16 @@ where
     Pcs: MlePcs<E>,
 {
     pub fn prepare_for_proving(&mut self) -> Result<(), SpartanWhirError> {
-        self.direct_bind_layout = match self.matrix_closing {
-            MatrixClosingMode::DirectSparse => Some(self.shape_canonical.direct_bind_layout()?),
-            MatrixClosingMode::Spark => None,
-        };
+        match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => {
+                self.direct_bind_layout = Some(self.shape_canonical.direct_bind_layout()?);
+                self.direct_multiply_layout = Some(self.shape_canonical.direct_multiply_layout()?);
+            }
+            MatrixClosingMode::Spark => {
+                self.direct_bind_layout = None;
+                self.direct_multiply_layout = None;
+            }
+        }
         Ok(())
     }
 }
@@ -424,6 +434,7 @@ where
             spark_fixed_prover_data,
             spark_tables,
             direct_bind_layout: None,
+            direct_multiply_layout: None,
             domain_separator: domain_separator.clone(),
             observer: Some(NoopObserver),
             marker: PhantomData,
@@ -520,13 +531,21 @@ where
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        {
+            let _profile = profile_scope("observe_spartan_context");
+            observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        }
 
-        let mut witness_padded = witness.w.clone();
-        witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+        let witness_padded = {
+            let _profile = profile_scope("pad_witness");
+            let mut witness_padded = witness.w.clone();
+            witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+            witness_padded
+        };
         let witness_mle = {
             let _profile = profile_scope("witness_to_mle");
-            pk.shape_canonical.witness_to_mle(&witness_padded)?
+            pk.shape_canonical
+                .witness_to_mle_unchecked(&witness_padded)?
         };
 
         observer.on_stage(ProtocolStage::PcsCommit);
@@ -534,28 +553,47 @@ where
             let _profile = profile_scope("witness_pcs_commit");
             <Pcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_mle, challenger)?
         };
-        let instance = R1csInstance {
-            public_inputs: public_inputs.to_vec(),
-            witness_commitment,
+        let instance = {
+            let _profile = profile_scope("build_instance");
+            R1csInstance {
+                public_inputs: public_inputs.to_vec(),
+                witness_commitment,
+            }
         };
 
         let z_witness_half = witness_padded;
-        let z_public_half = build_public_half(pk.shape_canonical.num_vars, public_inputs);
-        let z_full = [z_witness_half.clone(), z_public_half.clone()].concat();
-        let z_short = build_matrix_z(&z_witness_half, public_inputs);
+        let z_public_half = {
+            let _profile = profile_scope("build_public_half");
+            build_public_half(pk.shape_canonical.num_vars, public_inputs)
+        };
+        let z_full = {
+            let _profile = profile_scope("build_z_full");
+            [z_witness_half.clone(), z_public_half.clone()].concat()
+        };
+        let z_short = {
+            let _profile = profile_scope("build_matrix_z");
+            build_matrix_z(&z_witness_half, public_inputs)
+        };
 
         let (az_f, bz_f, cz_f) = {
             let _profile = profile_scope("r1cs_multiply_vec");
-            pk.shape_canonical.multiply_vec_parallel(&z_short)?
+            let layout = pk.direct_multiply_layout.as_ref().ok_or_else(|| {
+                SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+            })?;
+            pk.shape_canonical
+                .multiply_vec_parallel_with_layout_unchecked(layout, &z_short)?
         };
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
+        let tau = {
+            let _profile = profile_scope("sample_outer_tau");
+            sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x)
+        };
         let tau_point = MultilinearPoint(tau.clone());
 
         let (outer_sumcheck, r_x, outer_claims) = {
             let _profile = profile_scope("outer_sumcheck");
-            prove_outer_split_eq_base_first_owned::<F, E::EF, _>(
+            prove_outer_split_eq_base_first_owned_unchecked::<F, E::EF, _>(
                 &pk.shape_canonical,
                 az_f,
                 bz_f,
@@ -565,8 +603,11 @@ where
             )?
         };
 
-        challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
-        let r = challenger.sample_algebra_element::<E::EF>();
+        let r = {
+            let _profile = profile_scope("sample_inner_joint");
+            challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
+            challenger.sample_algebra_element::<E::EF>()
+        };
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
         let t_x = {
@@ -581,12 +622,11 @@ where
                 )
             })?;
             pk.shape_canonical
-                .bind_row_vars_joint_with_layout::<E::EF>(layout, &t_x, r)?
+                .bind_row_vars_joint_with_layout_unchecked::<E::EF>(layout, &t_x, r)?
         };
         let (inner_sumcheck, r_y, eval_z) = {
             let _profile = profile_scope("inner_sumcheck");
-            prove_inner_base_first::<F, E::EF, _>(
-                &pk.shape_canonical,
+            prove_inner_base_first_unchecked::<F, E::EF, _>(
                 claim_inner_joint,
                 &poly_abc,
                 &z_full,
@@ -601,12 +641,15 @@ where
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
-        let pcs_statement = PcsStatementBuilder::<E>::new()
-            .add_point_eval(PointEvalClaim {
-                point: MultilinearPoint(r_y.0[1..].to_vec()),
-                value: witness_eval,
-            })
-            .finalize()?;
+        let pcs_statement = {
+            let _profile = profile_scope("build_pcs_statement");
+            PcsStatementBuilder::<E>::new()
+                .add_point_eval(PointEvalClaim {
+                    point: MultilinearPoint(r_y.0[1..].to_vec()),
+                    value: witness_eval,
+                })
+                .finalize()?
+        };
 
         observer.on_stage(ProtocolStage::PcsOpen);
         let pcs_proof = {

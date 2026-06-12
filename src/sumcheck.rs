@@ -79,6 +79,22 @@ where
     C: FieldChallenger<F>,
 {
     shape.validate()?;
+    prove_outer_split_eq_base_first_owned_unchecked(shape, az, bz, cz, tau, challenger)
+}
+
+pub(crate) fn prove_outer_split_eq_base_first_owned_unchecked<F, EF, C>(
+    shape: &R1csShape<F>,
+    az: Vec<F>,
+    bz: Vec<F>,
+    cz: Vec<F>,
+    tau: &MultilinearPoint<EF>,
+    challenger: &mut C,
+) -> Result<(OuterSumcheckProof<EF>, MultilinearPoint<EF>, (EF, EF, EF)), SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+    C: FieldChallenger<F>,
+{
     validate_outer_base_inputs(shape, &az, &bz, &cz, tau)?;
 
     prove_outer_split_eq_base_first_with_tables(shape, az, bz, cz, tau, challenger)
@@ -232,7 +248,10 @@ where
     let mut r_x = Vec::with_capacity(tau.0.len());
     let mut claim = EF::ZERO;
 
-    let (h0, h2, h3) = eq.evaluation_points_base_first(&az_tab, &bz_tab, &cz_tab);
+    let (h0, h2, h3) = {
+        let _profile = crate::profiling::profile_detail_scope("outer_round_coefficients_base");
+        eq.evaluation_points_base_first(&az_tab, &bz_tab, &cz_tab)
+    };
     let round_poly = CubicRoundPoly([h0, h2, h3]);
     challenger.observe_algebra_slice(&round_poly.0);
     let r_i = challenger.sample_algebra_element::<EF>();
@@ -241,13 +260,19 @@ where
     rounds.push(round_poly);
     r_x.push(r_i);
 
-    let mut az_tab = bind_half_base_to_extension(&az_tab, r_i)?;
-    let mut bz_tab = bind_half_base_to_extension(&bz_tab, r_i)?;
-    let mut cz_tab = bind_half_base_to_extension(&cz_tab, r_i)?;
-    eq.bind(r_i);
+    let (mut az_tab, mut bz_tab, mut cz_tab) = {
+        let _profile = crate::profiling::profile_detail_scope("outer_round_bind_base");
+        let (az_tab, bz_tab, cz_tab) =
+            bind_three_halves_base_to_extension(&az_tab, &bz_tab, &cz_tab, r_i)?;
+        eq.bind(r_i);
+        (az_tab, bz_tab, cz_tab)
+    };
 
     for round_idx in 1..tau.0.len() {
-        let (h0, h2, h3) = eq.evaluation_points(round_idx, &az_tab, &bz_tab, &cz_tab);
+        let (h0, h2, h3) = {
+            let _profile = crate::profiling::profile_detail_scope("outer_round_coefficients_ext");
+            eq.evaluation_points(round_idx, &az_tab, &bz_tab, &cz_tab)
+        };
 
         let round_poly = CubicRoundPoly([h0, h2, h3]);
         challenger.observe_algebra_slice(&round_poly.0);
@@ -257,10 +282,11 @@ where
         rounds.push(round_poly);
         r_x.push(r_i);
 
-        bind_half(&mut az_tab, r_i)?;
-        bind_half(&mut bz_tab, r_i)?;
-        bind_half(&mut cz_tab, r_i)?;
-        eq.bind(r_i);
+        {
+            let _profile = crate::profiling::profile_detail_scope("outer_round_bind_ext");
+            bind_three_halves(&mut az_tab, &mut bz_tab, &mut cz_tab, r_i)?;
+            eq.bind(r_i);
+        }
     }
 
     if az_tab.len() != 1 || bz_tab.len() != 1 || cz_tab.len() != 1 {
@@ -366,6 +392,20 @@ where
     C: FieldChallenger<F>,
 {
     shape.validate()?;
+    prove_inner_base_first_unchecked(initial_claim, poly_abc, z, challenger)
+}
+
+pub(crate) fn prove_inner_base_first_unchecked<F, EF, C>(
+    initial_claim: EF,
+    poly_abc: &[EF],
+    z: &[F],
+    challenger: &mut C,
+) -> Result<(InnerSumcheckProof<EF>, MultilinearPoint<EF>, EF), SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+    C: FieldChallenger<F>,
+{
     if poly_abc.len() != z.len() || poly_abc.is_empty() || !poly_abc.len().is_power_of_two() {
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
@@ -385,7 +425,10 @@ where
         ));
     }
 
-    let (h0, h2) = inner_round_coefficients_base::<F, EF>(&z[..], &abc_tab, claim);
+    let (h0, h2) = {
+        let _profile = crate::profiling::profile_detail_scope("inner_round_coefficients_base");
+        inner_round_coefficients_base::<F, EF>(&z[..], &abc_tab, claim)
+    };
     let round_poly = QuadraticRoundPoly([h0, h2]);
     challenger.observe_algebra_slice(&round_poly.0);
     let r_i = challenger.sample_algebra_element::<EF>();
@@ -394,11 +437,16 @@ where
     rounds.push(round_poly);
     r_y.push(r_i);
 
-    bind_half(&mut abc_tab, r_i)?;
-    let mut z_tab = bind_half_base_to_extension(z, r_i)?;
+    let mut z_tab = {
+        let _profile = crate::profiling::profile_detail_scope("inner_round_bind_base");
+        bind_half_extension_and_base_to_extension(&mut abc_tab, z, r_i)?
+    };
 
     for _ in 1..num_rounds {
-        let (h0, h2) = inner_round_coefficients::<F, EF>(&z_tab, &abc_tab, claim);
+        let (h0, h2) = {
+            let _profile = crate::profiling::profile_detail_scope("inner_round_coefficients_ext");
+            inner_round_coefficients::<F, EF>(&z_tab, &abc_tab, claim)
+        };
 
         let round_poly = QuadraticRoundPoly([h0, h2]);
         challenger.observe_algebra_slice(&round_poly.0);
@@ -408,8 +456,10 @@ where
         rounds.push(round_poly);
         r_y.push(r_i);
 
-        bind_half(&mut abc_tab, r_i)?;
-        bind_half(&mut z_tab, r_i)?;
+        {
+            let _profile = crate::profiling::profile_detail_scope("inner_round_bind_ext");
+            bind_two_halves(&mut abc_tab, &mut z_tab, r_i)?;
+        }
     }
 
     if z_tab.len() != 1 {
@@ -932,29 +982,190 @@ fn bind_half<F: Field, EF: ExtensionField<F> + Send + Sync>(
     Ok(())
 }
 
-fn bind_half_base_to_extension<F, EF>(table: &[F], r: EF) -> Result<Vec<EF>, SpartanWhirError>
+fn bind_three_halves<EF>(
+    a: &mut Vec<EF>,
+    b: &mut Vec<EF>,
+    c: &mut Vec<EF>,
+    r: EF,
+) -> Result<(), SpartanWhirError>
+where
+    EF: Field + Send + Sync,
+{
+    if a.len() < 2 || !a.len().is_multiple_of(2) || b.len() != a.len() || c.len() != a.len() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let half = a.len() / 2;
+    {
+        let (a_lo, a_hi) = a.split_at_mut(half);
+        let (b_lo, b_hi) = b.split_at_mut(half);
+        let (c_lo, c_hi) = c.split_at_mut(half);
+
+        if should_parallelize_sumcheck_round(half) {
+            a_lo.par_iter_mut()
+                .zip(a_hi.par_iter())
+                .zip(b_lo.par_iter_mut())
+                .zip(b_hi.par_iter())
+                .zip(c_lo.par_iter_mut())
+                .zip(c_hi.par_iter())
+                .for_each(|(((((a_lo, &a_hi), b_lo), &b_hi), c_lo), &c_hi)| {
+                    *a_lo += r * (a_hi - *a_lo);
+                    *b_lo += r * (b_hi - *b_lo);
+                    *c_lo += r * (c_hi - *c_lo);
+                });
+        } else {
+            for (((a_lo, &a_hi), (b_lo, &b_hi)), (c_lo, &c_hi)) in a_lo
+                .iter_mut()
+                .zip(a_hi.iter())
+                .zip(b_lo.iter_mut().zip(b_hi.iter()))
+                .zip(c_lo.iter_mut().zip(c_hi.iter()))
+            {
+                *a_lo += r * (a_hi - *a_lo);
+                *b_lo += r * (b_hi - *b_lo);
+                *c_lo += r * (c_hi - *c_lo);
+            }
+        }
+    }
+    a.truncate(half);
+    b.truncate(half);
+    c.truncate(half);
+    Ok(())
+}
+
+fn bind_two_halves<EF>(a: &mut Vec<EF>, b: &mut Vec<EF>, r: EF) -> Result<(), SpartanWhirError>
+where
+    EF: Field + Send + Sync,
+{
+    if a.len() < 2 || !a.len().is_multiple_of(2) || b.len() != a.len() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let half = a.len() / 2;
+    {
+        let (a_lo, a_hi) = a.split_at_mut(half);
+        let (b_lo, b_hi) = b.split_at_mut(half);
+
+        if should_parallelize_sumcheck_round(half) {
+            a_lo.par_iter_mut()
+                .zip(a_hi.par_iter())
+                .zip(b_lo.par_iter_mut())
+                .zip(b_hi.par_iter())
+                .for_each(|(((a_lo, &a_hi), b_lo), &b_hi)| {
+                    *a_lo += r * (a_hi - *a_lo);
+                    *b_lo += r * (b_hi - *b_lo);
+                });
+        } else {
+            for ((a_lo, &a_hi), (b_lo, &b_hi)) in a_lo
+                .iter_mut()
+                .zip(a_hi.iter())
+                .zip(b_lo.iter_mut().zip(b_hi.iter()))
+            {
+                *a_lo += r * (a_hi - *a_lo);
+                *b_lo += r * (b_hi - *b_lo);
+            }
+        }
+    }
+    a.truncate(half);
+    b.truncate(half);
+    Ok(())
+}
+
+fn bind_three_halves_base_to_extension<F, EF>(
+    a: &[F],
+    b: &[F],
+    c: &[F],
+    r: EF,
+) -> Result<(Vec<EF>, Vec<EF>, Vec<EF>), SpartanWhirError>
 where
     F: Field + Send + Sync,
     EF: ExtensionField<F> + Send + Sync,
 {
-    if table.len() < 2 || !table.len().is_multiple_of(2) {
+    if a.len() < 2 || !a.len().is_multiple_of(2) || b.len() != a.len() || c.len() != a.len() {
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
 
-    let half = table.len() / 2;
-    let bind_pair = |i: usize| {
-        let lo = table[i];
-        let delta = table[i + half] - lo;
-        if delta.is_zero() {
-            EF::from(lo)
-        } else {
-            EF::from(lo) + r * delta
-        }
-    };
+    let half = a.len() / 2;
+    let mut a_out = vec![EF::ZERO; half];
+    let mut b_out = vec![EF::ZERO; half];
+    let mut c_out = vec![EF::ZERO; half];
 
     if should_parallelize_sumcheck_round(half) {
-        Ok((0..half).into_par_iter().map(bind_pair).collect())
+        a_out
+            .par_iter_mut()
+            .zip(b_out.par_iter_mut())
+            .zip(c_out.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, ((a_out, b_out), c_out))| {
+                *a_out = bind_base_pair_to_extension(a, i, half, r);
+                *b_out = bind_base_pair_to_extension(b, i, half, r);
+                *c_out = bind_base_pair_to_extension(c, i, half, r);
+            });
     } else {
-        Ok((0..half).map(bind_pair).collect())
+        for i in 0..half {
+            a_out[i] = bind_base_pair_to_extension(a, i, half, r);
+            b_out[i] = bind_base_pair_to_extension(b, i, half, r);
+            c_out[i] = bind_base_pair_to_extension(c, i, half, r);
+        }
+    }
+
+    Ok((a_out, b_out, c_out))
+}
+
+fn bind_half_extension_and_base_to_extension<F, EF>(
+    extension_table: &mut Vec<EF>,
+    base_table: &[F],
+    r: EF,
+) -> Result<Vec<EF>, SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if extension_table.len() < 2
+        || !extension_table.len().is_multiple_of(2)
+        || base_table.len() != extension_table.len()
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let half = extension_table.len() / 2;
+    let mut base_out = vec![EF::ZERO; half];
+    {
+        let (lo, hi) = extension_table.split_at_mut(half);
+        if should_parallelize_sumcheck_round(half) {
+            lo.par_iter_mut()
+                .zip(hi.par_iter())
+                .zip(base_out.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, ((lo, &hi), base_out))| {
+                    *lo += r * (hi - *lo);
+                    *base_out = bind_base_pair_to_extension(base_table, i, half, r);
+                });
+        } else {
+            for (i, ((lo, &hi), base_out)) in lo
+                .iter_mut()
+                .zip(hi.iter())
+                .zip(base_out.iter_mut())
+                .enumerate()
+            {
+                *lo += r * (hi - *lo);
+                *base_out = bind_base_pair_to_extension(base_table, i, half, r);
+            }
+        }
+    }
+    extension_table.truncate(half);
+    Ok(base_out)
+}
+
+fn bind_base_pair_to_extension<F, EF>(table: &[F], i: usize, half: usize, r: EF) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let lo = table[i];
+    let delta = table[i + half] - lo;
+    if delta.is_zero() {
+        EF::from(lo)
+    } else {
+        EF::from(lo) + r * delta
     }
 }

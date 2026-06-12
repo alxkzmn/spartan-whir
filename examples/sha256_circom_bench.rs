@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use libloading::Library;
@@ -36,6 +36,7 @@ struct ArtifactPaths {
     linked_library: PathBuf,
     circuit_data: Vec<u8>,
     run_name: String,
+    reused: bool,
 }
 
 struct LoadedWitnessGenerator {
@@ -60,6 +61,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("engines: {:?}", engines);
     println!("modes: {:?}", modes);
     println!("repeats: {repeats}");
+    if reuse_circom_artifacts() {
+        println!("reuse_circom_artifacts: enabled");
+    }
     if spartan_whir::profiling::profile_enabled() {
         println!("profile: enabled");
     }
@@ -102,8 +106,18 @@ fn run_size(
     let compile_start = Instant::now();
     let artifacts = generate_circom_artifacts(manifest_dir, &circuit, &size_workdir, size)?;
     let compile_elapsed = compile_start.elapsed();
-    println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
-    spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
+    if artifacts.reused {
+        println!("reuse_circom_artifacts: true");
+        println!("compile_and_build_ms: 0");
+        spartan_whir::profiling::record_profile_phase(
+            "circom_compile_build",
+            Duration::from_secs(0),
+        );
+        spartan_whir::profiling::record_profile_phase("circom_artifact_load", compile_elapsed);
+    } else {
+        println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
+        spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
+    }
 
     let import_start = Instant::now();
     let circom = import_r1cs_path(&artifacts.r1cs)?;
@@ -214,6 +228,13 @@ fn generate_circom_artifacts(
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("../circom/target/debug/circom"));
     fs::create_dir_all(workdir)?;
+
+    if reuse_circom_artifacts() {
+        if let Some(artifacts) = load_existing_circom_artifacts(workdir, size)? {
+            return Ok(artifacts);
+        }
+    }
+
     clear_previous_outputs(workdir, size)?;
 
     run(Command::new(&circom_bin)
@@ -235,7 +256,44 @@ fn generate_circom_artifacts(
         linked_library,
         circuit_data,
         run_name: format!("sha256_{size}b"),
+        reused: false,
     })
+}
+
+fn load_existing_circom_artifacts(
+    workdir: &Path,
+    size: usize,
+) -> Result<Option<ArtifactPaths>, Box<dyn Error>> {
+    let r1cs = workdir.join(format!("sha256_{size}b.r1cs"));
+    let linked_library = workdir.join(dynamic_library_name(size));
+    let circuit_data_path = workdir
+        .join(format!("sha256_{size}b_cpp"))
+        .join(format!("sha256_{size}b.dat"));
+
+    if !(r1cs.exists() && linked_library.exists() && circuit_data_path.exists()) {
+        return Ok(None);
+    }
+
+    Ok(Some(ArtifactPaths {
+        r1cs,
+        linked_library,
+        circuit_data: fs::read(circuit_data_path)?,
+        run_name: format!("sha256_{size}b"),
+        reused: true,
+    }))
+}
+
+fn reuse_circom_artifacts() -> bool {
+    env_flag("SHA256_BENCH_REUSE_ARTIFACTS")
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var_os(name)
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+        })
 }
 
 fn clear_previous_outputs(workdir: &Path, size: usize) -> Result<(), Box<dyn Error>> {
@@ -368,8 +426,10 @@ fn prove_and_verify_poseidon_plonky3(
 
     let witness_and_prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = Protocol::prove_with_mode(
         &pk,
@@ -414,8 +474,10 @@ fn prove_and_verify_poseidon(
 
     let witness_and_prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::prove_with_mode(
         &pk,
@@ -465,8 +527,10 @@ fn prove_and_verify_keccak(
 
     let witness_and_prove_start = Instant::now();
     let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::prove_with_mode(
         &pk,

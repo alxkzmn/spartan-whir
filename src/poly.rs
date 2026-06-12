@@ -44,36 +44,33 @@ impl<EF: Field> EqPolynomial<EF> {
 
 impl<EF: Field + Send + Sync> EqPolynomial<EF> {
     pub fn evals_from_point_parallel(point: &[EF]) -> Vec<EF> {
-        let mut evals = vec![EF::ONE];
+        let final_len = 1usize << point.len();
+        let mut evals = vec![EF::ZERO; final_len];
+        evals[0] = EF::ONE;
+        let mut active = 1usize;
+
         for &r_i in point.iter().rev() {
-            let half = evals.len();
-            let mut next = vec![EF::ZERO; half * 2];
-            let (lo, hi) = next.split_at_mut(half);
+            let (lo, rest) = evals.split_at_mut(active);
+            let hi = &mut rest[..active];
             let one_minus_r_i = EF::ONE - r_i;
 
-            if cfg!(feature = "parallel") && half >= EQ_EVALS_PARALLEL_MIN_LEN {
-                join(
-                    || {
-                        lo.par_iter_mut()
-                            .zip(evals.par_iter())
-                            .for_each(|(out, &v)| *out = v * one_minus_r_i);
-                    },
-                    || {
-                        hi.par_iter_mut()
-                            .zip(evals.par_iter())
-                            .for_each(|(out, &v)| *out = v * r_i);
-                    },
-                );
+            if cfg!(feature = "parallel") && active >= EQ_EVALS_PARALLEL_MIN_LEN {
+                lo.par_iter_mut()
+                    .zip(hi.par_iter_mut())
+                    .for_each(|(lo, hi)| {
+                        let v = *lo;
+                        *lo = v * one_minus_r_i;
+                        *hi = v * r_i;
+                    });
             } else {
-                for (out, &v) in lo.iter_mut().zip(evals.iter()) {
-                    *out = v * one_minus_r_i;
-                }
-                for (out, &v) in hi.iter_mut().zip(evals.iter()) {
-                    *out = v * r_i;
+                for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
+                    let v = *lo;
+                    *lo = v * one_minus_r_i;
+                    *hi = v * r_i;
                 }
             }
 
-            evals = next;
+            active *= 2;
         }
         evals
     }

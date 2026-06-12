@@ -60,8 +60,22 @@ pub(crate) struct DirectBindLayout {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DirectMultiplyLayout {
+    a: RowMatrixLayout,
+    b: RowMatrixLayout,
+    c: RowMatrixLayout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ColumnBindMatrixLayout {
     entry_indices_by_col: Vec<usize>,
+    col_starts: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowMatrixLayout {
+    entry_indices_by_row: Vec<usize>,
+    row_starts: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +86,8 @@ pub struct R1csInstance<F, C> {
 
 impl<F> R1csShape<F> {
     pub fn validate(&self) -> Result<(), SpartanWhirError> {
+        let _profile = crate::profiling::profile_scope("r1cs_shape_validate");
+
         if self.num_cons == 0 {
             return Err(SpartanWhirError::InvalidR1csShape);
         }
@@ -151,8 +167,15 @@ impl<F> R1csShape<F> {
     }
 
     pub(crate) fn direct_bind_layout(&self) -> Result<DirectBindLayout, SpartanWhirError> {
+        let _profile = crate::profiling::profile_scope("direct_bind_layout");
         self.validate()?;
         DirectBindLayout::new(self)
+    }
+
+    pub(crate) fn direct_multiply_layout(&self) -> Result<DirectMultiplyLayout, SpartanWhirError> {
+        let _profile = crate::profiling::profile_scope("direct_multiply_layout");
+        self.validate()?;
+        DirectMultiplyLayout::new(self)
     }
 }
 
@@ -161,7 +184,15 @@ impl<F: Field> R1csShape<F> {
         &self,
         z: &[F],
     ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError> {
-        self.validate_matrix_vector_input(z)?;
+        self.validate()?;
+        self.multiply_vec_unchecked(z)
+    }
+
+    pub(crate) fn multiply_vec_unchecked(
+        &self,
+        z: &[F],
+    ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError> {
+        self.validate_matrix_vector_input_len(z)?;
         let az = multiply_sparse_matrix_vector(&self.a, z)?;
         let bz = multiply_sparse_matrix_vector(&self.b, z)?;
         let cz = multiply_sparse_matrix_vector(&self.c, z)?;
@@ -175,7 +206,18 @@ impl<F: Field> R1csShape<F> {
     where
         F: Send + Sync,
     {
-        self.validate_matrix_vector_input(z)?;
+        self.validate()?;
+        self.multiply_vec_parallel_unchecked(z)
+    }
+
+    pub(crate) fn multiply_vec_parallel_unchecked(
+        &self,
+        z: &[F],
+    ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError>
+    where
+        F: Send + Sync,
+    {
+        self.validate_matrix_vector_input_len(z)?;
 
         let total_nnz = self
             .a
@@ -185,7 +227,7 @@ impl<F: Field> R1csShape<F> {
             .ok_or(SpartanWhirError::InvalidR1csShape)?;
 
         if !(cfg!(feature = "parallel") && total_nnz >= R1CS_PARALLEL_MATRIX_MIN_NNZ) {
-            return self.multiply_vec(z);
+            return self.multiply_vec_unchecked(z);
         }
 
         let (az, (bz, cz)) = join(
@@ -200,9 +242,40 @@ impl<F: Field> R1csShape<F> {
         Ok((az?, bz?, cz?))
     }
 
-    fn validate_matrix_vector_input(&self, z: &[F]) -> Result<(), SpartanWhirError> {
-        self.validate()?;
+    pub(crate) fn multiply_vec_parallel_with_layout_unchecked(
+        &self,
+        layout: &DirectMultiplyLayout,
+        z: &[F],
+    ) -> Result<(Evaluations<F>, Evaluations<F>, Evaluations<F>), SpartanWhirError>
+    where
+        F: Send + Sync,
+    {
+        self.validate_matrix_vector_input_len(z)?;
 
+        let total_nnz = self
+            .a
+            .nnz()
+            .checked_add(self.b.nnz())
+            .and_then(|n| n.checked_add(self.c.nnz()))
+            .ok_or(SpartanWhirError::InvalidR1csShape)?;
+
+        if !(cfg!(feature = "parallel") && total_nnz >= R1CS_PARALLEL_MATRIX_MIN_NNZ) {
+            return self.multiply_vec_unchecked(z);
+        }
+
+        let (az, (bz, cz)) = join(
+            || multiply_sparse_matrix_vector_by_row(&self.a, &layout.a, z),
+            || {
+                join(
+                    || multiply_sparse_matrix_vector_by_row(&self.b, &layout.b, z),
+                    || multiply_sparse_matrix_vector_by_row(&self.c, &layout.c, z),
+                )
+            },
+        );
+        Ok((az?, bz?, cz?))
+    }
+
+    fn validate_matrix_vector_input_len(&self, z: &[F]) -> Result<(), SpartanWhirError> {
         let expected_len = self
             .num_vars
             .checked_add(self.num_io)
@@ -217,7 +290,13 @@ impl<F: Field> R1csShape<F> {
 
     pub fn witness_to_mle(&self, witness: &[F]) -> Result<Evaluations<F>, SpartanWhirError> {
         self.validate()?;
+        self.witness_to_mle_unchecked(witness)
+    }
 
+    pub(crate) fn witness_to_mle_unchecked(
+        &self,
+        witness: &[F],
+    ) -> Result<Evaluations<F>, SpartanWhirError> {
         if witness.len() > self.num_vars {
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
@@ -288,7 +367,7 @@ impl<F: Field> R1csShape<F> {
         Ok(out)
     }
 
-    pub(crate) fn bind_row_vars_joint_with_layout<EF>(
+    pub(crate) fn bind_row_vars_joint_with_layout_unchecked<EF>(
         &self,
         layout: &DirectBindLayout,
         eq_rx: &[EF],
@@ -298,8 +377,6 @@ impl<F: Field> R1csShape<F> {
         F: Send + Sync,
         EF: ExtensionField<F> + Send + Sync,
     {
-        self.validate()?;
-
         if eq_rx.len() != self.num_cons {
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
@@ -314,12 +391,20 @@ impl<F: Field> R1csShape<F> {
 
         let mut out = vec![EF::ZERO; width];
         let r_squared = r * r;
-        let (eq_b, eq_c) = join(
-            || scale_eq_table(eq_rx, r),
-            || scale_eq_table(eq_rx, r_squared),
-        );
+        let (eq_b, eq_c) = {
+            let _profile = crate::profiling::profile_scope("bind_row_scale_eq");
+            join(
+                || scale_eq_table(eq_rx, r),
+                || scale_eq_table(eq_rx, r_squared),
+            )
+        };
 
-        accumulate_bound_rows_for_joint_column_layout(self, layout, eq_rx, &eq_b, &eq_c, &mut out)?;
+        {
+            let _profile = crate::profiling::profile_scope("bind_row_accumulate");
+            accumulate_bound_rows_for_joint_column_layout(
+                self, layout, eq_rx, &eq_b, &eq_c, &mut out,
+            )?;
+        }
 
         Ok(out)
     }
@@ -374,17 +459,53 @@ impl DirectBindLayout {
     }
 }
 
+impl DirectMultiplyLayout {
+    fn new<F>(shape: &R1csShape<F>) -> Result<Self, SpartanWhirError> {
+        let layout = Self {
+            a: RowMatrixLayout::new(&shape.a),
+            b: RowMatrixLayout::new(&shape.b),
+            c: RowMatrixLayout::new(&shape.c),
+        };
+        layout.validate_for(shape)?;
+        Ok(layout)
+    }
+
+    fn validate_for<F>(&self, shape: &R1csShape<F>) -> Result<(), SpartanWhirError> {
+        self.a.validate_for(&shape.a)?;
+        self.b.validate_for(&shape.b)?;
+        self.c.validate_for(&shape.c)?;
+        Ok(())
+    }
+}
+
 impl ColumnBindMatrixLayout {
     fn new<F>(mat: &SparseMatrix<F>) -> Self {
-        let mut entry_indices_by_col: Vec<usize> = (0..mat.entries.len()).collect();
-        entry_indices_by_col.sort_unstable_by_key(|&idx| mat.entries[idx].col);
+        let mut col_starts = vec![0usize; mat.num_cols + 1];
+        for entry in &mat.entries {
+            col_starts[entry.col + 1] += 1;
+        }
+        for col in 1..=mat.num_cols {
+            col_starts[col] += col_starts[col - 1];
+        }
+
+        let mut next = col_starts.clone();
+        let mut entry_indices_by_col = vec![0usize; mat.entries.len()];
+        for (idx, entry) in mat.entries.iter().enumerate() {
+            let pos = next[entry.col];
+            entry_indices_by_col[pos] = idx;
+            next[entry.col] += 1;
+        }
+
         Self {
             entry_indices_by_col,
+            col_starts,
         }
     }
 
     fn validate_for<F>(&self, mat: &SparseMatrix<F>) -> Result<(), SpartanWhirError> {
-        if self.entry_indices_by_col.len() != mat.entries.len() {
+        if self.entry_indices_by_col.len() != mat.entries.len()
+            || self.col_starts.len() != mat.num_cols + 1
+        {
             return Err(SpartanWhirError::InvalidR1csShape);
         }
 
@@ -402,6 +523,23 @@ impl ColumnBindMatrixLayout {
             }
             prev_col = Some(col);
         }
+        if self.col_starts.first().copied() != Some(0)
+            || self.col_starts.last().copied() != Some(mat.entries.len())
+        {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+        for window in self.col_starts.windows(2) {
+            if window[0] > window[1] || window[1] > mat.entries.len() {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+        }
+        for col in 0..mat.num_cols {
+            for &idx in self.range_for_cols(mat, col, col + 1) {
+                if mat.entries[idx].col != col {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -411,13 +549,82 @@ impl ColumnBindMatrixLayout {
         col_start: usize,
         col_end: usize,
     ) -> &[usize] {
-        let start = self
-            .entry_indices_by_col
-            .partition_point(|&idx| mat.entries[idx].col < col_start);
-        let end = self
-            .entry_indices_by_col
-            .partition_point(|&idx| mat.entries[idx].col < col_end);
+        debug_assert!(col_start <= col_end);
+        let col_start = col_start.min(mat.num_cols);
+        let col_end = col_end.min(mat.num_cols);
+        let start = self.col_starts[col_start];
+        let end = self.col_starts[col_end];
         &self.entry_indices_by_col[start..end]
+    }
+}
+
+impl RowMatrixLayout {
+    fn new<F>(mat: &SparseMatrix<F>) -> Self {
+        let mut entry_indices_by_row: Vec<usize> = (0..mat.entries.len()).collect();
+        entry_indices_by_row.sort_unstable_by_key(|&idx| mat.entries[idx].row);
+
+        let mut row_starts = vec![0usize; mat.num_rows + 1];
+        let mut pos = 0usize;
+        for (row, start) in row_starts.iter_mut().take(mat.num_rows).enumerate() {
+            *start = pos;
+            while pos < entry_indices_by_row.len()
+                && mat.entries[entry_indices_by_row[pos]].row == row
+            {
+                pos += 1;
+            }
+        }
+        row_starts[mat.num_rows] = entry_indices_by_row.len();
+
+        Self {
+            entry_indices_by_row,
+            row_starts,
+        }
+    }
+
+    fn validate_for<F>(&self, mat: &SparseMatrix<F>) -> Result<(), SpartanWhirError> {
+        if self.entry_indices_by_row.len() != mat.entries.len()
+            || self.row_starts.len() != mat.num_rows + 1
+        {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+
+        let mut seen = vec![false; mat.entries.len()];
+        let mut prev_row = None;
+        for &idx in &self.entry_indices_by_row {
+            if idx >= mat.entries.len() || seen[idx] {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+            seen[idx] = true;
+
+            let row = mat.entries[idx].row;
+            if prev_row.is_some_and(|prev| row < prev) {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+            prev_row = Some(row);
+        }
+
+        if self.row_starts.first().copied() != Some(0)
+            || self.row_starts.last().copied() != Some(mat.entries.len())
+        {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+        for window in self.row_starts.windows(2) {
+            if window[0] > window[1] || window[1] > mat.entries.len() {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+        }
+        for row in 0..mat.num_rows {
+            for &idx in self.range_for_row(row) {
+                if mat.entries[idx].row != row {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn range_for_row(&self, row: usize) -> &[usize] {
+        &self.entry_indices_by_row[self.row_starts[row]..self.row_starts[row + 1]]
     }
 }
 
@@ -451,8 +658,40 @@ fn multiply_sparse_matrix_vector<F: Field>(
 
     let mut out = vec![F::ZERO; mat.num_rows];
     for entry in &mat.entries {
-        out[entry.row] += entry.val * z[entry.col];
+        add_base_scaled(&mut out[entry.row], z[entry.col], entry.val);
     }
+    Ok(out)
+}
+
+fn multiply_sparse_matrix_vector_by_row<F>(
+    mat: &SparseMatrix<F>,
+    layout: &RowMatrixLayout,
+    z: &[F],
+) -> Result<Vec<F>, SpartanWhirError>
+where
+    F: Field + Send + Sync,
+{
+    if z.len() != mat.num_cols {
+        return Err(SpartanWhirError::InvalidWitnessLength);
+    }
+
+    let mut out = vec![F::ZERO; mat.num_rows];
+    let rows_per_chunk = 1024usize;
+    out.par_chunks_mut(rows_per_chunk)
+        .enumerate()
+        .for_each(|(chunk_idx, out_chunk)| {
+            let row_start = chunk_idx * rows_per_chunk;
+            for (offset, out) in out_chunk.iter_mut().enumerate() {
+                let row = row_start + offset;
+                let mut acc = F::ZERO;
+                for &entry_idx in layout.range_for_row(row) {
+                    let entry = &mat.entries[entry_idx];
+                    add_base_scaled(&mut acc, z[entry.col], entry.val);
+                }
+                *out = acc;
+            }
+        });
+
     Ok(out)
 }
 
@@ -470,11 +709,7 @@ where
     }
 
     for entry in &mat.entries {
-        if entry.val.is_one() {
-            out[entry.col] += eq_rx[entry.row];
-        } else {
-            out[entry.col] += eq_rx[entry.row] * entry.val;
-        }
+        add_extension_scaled(&mut out[entry.col], eq_rx[entry.row], entry.val);
     }
     Ok(())
 }
@@ -519,11 +754,7 @@ where
         .map(|entries| {
             let mut local = vec![EF::ZERO; out_len];
             for entry in entries {
-                if entry.val.is_one() {
-                    local[entry.col] += eq_rx[entry.row];
-                } else {
-                    local[entry.col] += eq_rx[entry.row] * entry.val;
-                }
+                add_extension_scaled(&mut local[entry.col], eq_rx[entry.row], entry.val);
             }
             local
         })
@@ -603,12 +834,11 @@ fn accumulate_bound_rows_for_column_range<F, EF>(
 {
     for &entry_idx in layout.range_for_cols(mat, col_start, col_end) {
         let entry = &mat.entries[entry_idx];
-        let dst = &mut out_chunk[entry.col - col_start];
-        if entry.val.is_one() {
-            *dst += eq_rx[entry.row];
-        } else {
-            *dst += eq_rx[entry.row] * entry.val;
-        }
+        add_extension_scaled(
+            &mut out_chunk[entry.col - col_start],
+            eq_rx[entry.row],
+            entry.val,
+        );
     }
 }
 
@@ -627,9 +857,33 @@ where
 
     let mut acc = EF::ZERO;
     for entry in &mat.entries {
-        acc += t_x[entry.row] * t_y[entry.col] * EF::from(entry.val);
+        add_extension_scaled(&mut acc, t_x[entry.row] * t_y[entry.col], entry.val);
     }
     Ok(acc)
+}
+
+fn add_base_scaled<F: Field>(dst: &mut F, value: F, scale: F) {
+    if scale.is_one() {
+        *dst += value;
+    } else if scale == -F::ONE {
+        *dst -= value;
+    } else {
+        *dst += scale * value;
+    }
+}
+
+fn add_extension_scaled<F, EF>(dst: &mut EF, value: EF, scale: F)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    if scale.is_one() {
+        *dst += value;
+    } else if scale == -F::ONE {
+        *dst -= value;
+    } else {
+        *dst += value * scale;
+    }
 }
 
 #[cfg(test)]
@@ -695,8 +949,49 @@ mod tests {
             .bind_row_vars_joint(&eq_rx, r)
             .expect("joint bind succeeds");
         let actual = shape
-            .bind_row_vars_joint_with_layout(&layout, &eq_rx, r)
+            .bind_row_vars_joint_with_layout_unchecked(&layout, &eq_rx, r)
             .expect("layout bind succeeds");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn direct_multiply_layout_matches_matrix_multiply() {
+        let num_cons = 64;
+        let num_vars = 64;
+        let num_io = 0;
+        let num_cols = num_vars + num_io + 1;
+        let shape = R1csShape {
+            num_cons,
+            num_vars,
+            num_io,
+            a: SparseMatrix {
+                num_rows: num_cons,
+                num_cols,
+                entries: repeated_entries(1, num_cons, num_cols),
+            },
+            b: SparseMatrix {
+                num_rows: num_cons,
+                num_cols,
+                entries: repeated_entries(2, num_cons, num_cols),
+            },
+            c: SparseMatrix {
+                num_rows: num_cons,
+                num_cols,
+                entries: repeated_entries(3, num_cons, num_cols),
+            },
+        };
+        let z: Vec<F> = (0..num_cols)
+            .map(|idx| F::from_u32((idx % 23) as u32 + 1))
+            .collect();
+
+        let layout = shape.direct_multiply_layout().expect("layout builds");
+        let expected = shape
+            .multiply_vec_parallel_unchecked(&z)
+            .expect("multiply succeeds");
+        let actual = shape
+            .multiply_vec_parallel_with_layout_unchecked(&layout, &z)
+            .expect("layout multiply succeeds");
 
         assert_eq!(actual, expected);
     }
@@ -745,6 +1040,48 @@ mod tests {
         layout.a.entry_indices_by_col = vec![1, 1];
         assert_eq!(
             layout.validate_for(&shape, 4),
+            Err(SpartanWhirError::InvalidR1csShape)
+        );
+    }
+
+    #[test]
+    fn direct_multiply_layout_validation_rejects_bad_row_ranges() {
+        let shape = R1csShape {
+            num_cons: 2,
+            num_vars: 2,
+            num_io: 0,
+            a: SparseMatrix {
+                num_rows: 2,
+                num_cols: 3,
+                entries: vec![
+                    SparseMatEntry {
+                        row: 0,
+                        col: 1,
+                        val: F::ONE,
+                    },
+                    SparseMatEntry {
+                        row: 1,
+                        col: 0,
+                        val: F::ONE,
+                    },
+                ],
+            },
+            b: SparseMatrix {
+                num_rows: 2,
+                num_cols: 3,
+                entries: vec![],
+            },
+            c: SparseMatrix {
+                num_rows: 2,
+                num_cols: 3,
+                entries: vec![],
+            },
+        };
+        let mut layout = shape.direct_multiply_layout().expect("layout builds");
+        layout.a.row_starts = vec![0, 0, 2];
+
+        assert_eq!(
+            layout.validate_for(&shape),
             Err(SpartanWhirError::InvalidR1csShape)
         );
     }
