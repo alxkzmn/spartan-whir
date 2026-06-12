@@ -345,9 +345,25 @@ where
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
 
-    let mut abc_tab = poly_abc.to_vec();
-    let mut z_tab = z.to_vec();
-    let num_rounds = poly_abc.len().ilog2() as usize;
+    prove_inner_with_tables(initial_claim, poly_abc.to_vec(), z.to_vec(), challenger)
+}
+
+fn prove_inner_with_tables<F, EF, C>(
+    initial_claim: EF,
+    mut abc_tab: Vec<EF>,
+    mut z_tab: Vec<EF>,
+    challenger: &mut C,
+) -> Result<(InnerSumcheckProof<EF>, MultilinearPoint<EF>, EF), SpartanWhirError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+{
+    if abc_tab.len() != z_tab.len() || abc_tab.is_empty() || !abc_tab.len().is_power_of_two() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let num_rounds = abc_tab.len().ilog2() as usize;
 
     let mut rounds = Vec::with_capacity(num_rounds);
     let mut r_y = Vec::with_capacity(num_rounds);
@@ -392,12 +408,12 @@ where
     C: FieldChallenger<F>,
 {
     shape.validate()?;
-    prove_inner_base_first_unchecked(initial_claim, poly_abc, z, challenger)
+    prove_inner_base_first_unchecked(initial_claim, poly_abc.to_vec(), z, challenger)
 }
 
 pub(crate) fn prove_inner_base_first_unchecked<F, EF, C>(
     initial_claim: EF,
-    poly_abc: &[EF],
+    poly_abc: Vec<EF>,
     z: &[F],
     challenger: &mut C,
 ) -> Result<(InnerSumcheckProof<EF>, MultilinearPoint<EF>, EF), SpartanWhirError>
@@ -410,8 +426,8 @@ where
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
 
-    let mut abc_tab = poly_abc.to_vec();
     let num_rounds = poly_abc.len().ilog2() as usize;
+    let mut abc_tab = poly_abc;
 
     let mut rounds = Vec::with_capacity(num_rounds);
     let mut r_y = Vec::with_capacity(num_rounds);

@@ -47,7 +47,7 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     #[serde(default)]
     spark_tables: Option<crate::SparkTables>,
     #[serde(skip)]
-    direct_bind_layout: Option<DirectBindLayout>,
+    direct_bind_layout: Option<DirectBindLayout<E::F>>,
     #[serde(skip)]
     direct_multiply_layout: Option<DirectMultiplyLayout>,
     pub domain_separator: DomainSeparator,
@@ -79,6 +79,7 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 impl<E, Pcs> ProvingKey<E, Pcs>
 where
     E: SpartanWhirEngine,
+    E::F: Copy + PartialEq,
     Pcs: MlePcs<E>,
 {
     pub fn prepare_for_proving(&mut self) -> Result<(), SpartanWhirError> {
@@ -542,16 +543,15 @@ where
             witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
             witness_padded
         };
-        let witness_mle = {
+        {
             let _profile = profile_scope("witness_to_mle");
-            pk.shape_canonical
-                .witness_to_mle_unchecked(&witness_padded)?
-        };
+            debug_assert_eq!(witness_padded.len(), pk.shape_canonical.num_vars);
+        }
 
         observer.on_stage(ProtocolStage::PcsCommit);
         let (witness_commitment, prover_data) = {
             let _profile = profile_scope("witness_pcs_commit");
-            <Pcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_mle, challenger)?
+            <Pcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_padded, challenger)?
         };
         let instance = {
             let _profile = profile_scope("build_instance");
@@ -561,18 +561,13 @@ where
             }
         };
 
-        let z_witness_half = witness_padded;
-        let z_public_half = {
-            let _profile = profile_scope("build_public_half");
-            build_public_half(pk.shape_canonical.num_vars, public_inputs)
-        };
         let z_full = {
             let _profile = profile_scope("build_z_full");
-            [z_witness_half.clone(), z_public_half.clone()].concat()
+            build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs)
         };
         let z_short = {
             let _profile = profile_scope("build_matrix_z");
-            build_matrix_z(&z_witness_half, public_inputs)
+            matrix_z_slice(&z_full, pk.shape_canonical.num_vars, public_inputs.len())?
         };
 
         let (az_f, bz_f, cz_f) = {
@@ -585,11 +580,10 @@ where
         };
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = {
+        let tau_point = {
             let _profile = profile_scope("sample_outer_tau");
-            sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x)
+            MultilinearPoint(sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x))
         };
-        let tau_point = MultilinearPoint(tau.clone());
 
         let (outer_sumcheck, r_x, outer_claims) = {
             let _profile = profile_scope("outer_sumcheck");
@@ -628,7 +622,7 @@ where
             let _profile = profile_scope("inner_sumcheck");
             prove_inner_base_first_unchecked::<F, E::EF, _>(
                 claim_inner_joint,
-                &poly_abc,
+                poly_abc,
                 &z_full,
                 challenger,
             )?
@@ -2605,6 +2599,31 @@ fn build_public_half(num_vars: usize, public_inputs: &[F]) -> Vec<F> {
     out
 }
 
+fn build_z_full(mut witness_half: Vec<F>, num_vars: usize, public_inputs: &[F]) -> Vec<F> {
+    debug_assert_eq!(witness_half.len(), num_vars);
+    let public_offset = witness_half.len();
+    witness_half.resize(public_offset + num_vars, F::ZERO);
+    witness_half[public_offset] = F::ONE;
+    for (i, &value) in public_inputs.iter().enumerate() {
+        witness_half[public_offset + i + 1] = value;
+    }
+    witness_half
+}
+
+fn matrix_z_slice(
+    z_full: &[F],
+    num_vars: usize,
+    public_input_len: usize,
+) -> Result<&[F], SpartanWhirError> {
+    let len = num_vars
+        .checked_add(public_input_len)
+        .and_then(|n| n.checked_add(1))
+        .ok_or(SpartanWhirError::InvalidWitnessLength)?;
+    z_full
+        .get(..len)
+        .ok_or(SpartanWhirError::InvalidWitnessLength)
+}
+
 fn evaluate_public_half<EF>(
     num_vars: usize,
     public_inputs: &[F],
@@ -2669,7 +2688,10 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 
 #[cfg(test)]
 mod tests {
-    use super::{build_public_half, evaluate_public_half, recover_witness_eval};
+    use super::{
+        build_matrix_z, build_public_half, build_z_full, evaluate_public_half, matrix_z_slice,
+        recover_witness_eval,
+    };
     use crate::{engine::F, QuarticBinExtension};
     use p3_field::PrimeCharacteristicRing;
 
@@ -2711,6 +2733,30 @@ mod tests {
         let got = evaluate_public_half(8, &public_inputs, &point).unwrap();
 
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn build_z_full_appends_public_half() {
+        let witness = vec![F::from_u32(11), F::from_u32(13), F::ZERO, F::from_u32(17)];
+        let public_inputs = vec![F::from_u32(3), F::from_u32(5)];
+
+        let got = build_z_full(witness.clone(), 4, &public_inputs);
+
+        let mut expected = witness;
+        expected.extend(build_public_half(4, &public_inputs));
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn matrix_z_slice_matches_explicit_matrix_z() {
+        let witness = vec![F::from_u32(11), F::from_u32(13), F::ZERO, F::from_u32(17)];
+        let public_inputs = vec![F::from_u32(3), F::from_u32(5)];
+        let z_full = build_z_full(witness.clone(), 4, &public_inputs);
+
+        let got = matrix_z_slice(&z_full, 4, public_inputs.len()).unwrap();
+        let expected = build_matrix_z(&witness, &public_inputs);
+
+        assert_eq!(got, expected.as_slice());
     }
 
     #[test]

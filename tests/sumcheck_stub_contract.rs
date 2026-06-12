@@ -137,18 +137,12 @@ fn outer_sumcheck_base_first_matches_full_eq_table_for_multiple_rounds() {
 #[test]
 fn inner_sumcheck_roundtrip_and_round_count_guard() {
     let shape = common::koala_shape_single_constraint(2);
-    let poly_abc = vec![
-        EF::from(F::from_u32(1)),
-        EF::from(F::from_u32(2)),
-        EF::from(F::from_u32(3)),
-        EF::from(F::from_u32(4)),
-    ];
-    let z_base = vec![
-        F::from_u32(5),
-        F::from_u32(6),
-        F::from_u32(7),
-        F::from_u32(8),
-    ];
+    let poly_abc: Vec<EF> = (0..16)
+        .map(|idx| EF::from(F::from_u32((idx * 3 + 1) as u32)))
+        .collect();
+    let z_base: Vec<F> = (0..16)
+        .map(|idx| F::from_u32((idx * 5 + 7) as u32))
+        .collect();
     let z: Vec<EF> = z_base.iter().map(|&value| EF::from(value)).collect();
     let initial_claim = poly_abc
         .iter()
@@ -169,12 +163,12 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
     )
     .expect("base-first inner prove succeeds");
     assert_eq!(base_first_result, (proof.clone(), r_y.clone(), _eval_z));
-    assert_eq!(proof.rounds.len(), 2);
-    assert_eq!(r_y.0.len(), 2);
+    assert_eq!(proof.rounds.len(), 4);
+    assert_eq!(r_y.0.len(), 4);
 
     let mut verifier_challenger = spartan_whir::keccak_challenger();
     let (r_y_verify, final_claim) =
-        verify_inner::<F, EF, _>(&proof, initial_claim, 2, &mut verifier_challenger)
+        verify_inner::<F, EF, _>(&proof, initial_claim, 4, &mut verifier_challenger)
             .expect("inner verify transcript succeeds");
 
     let expected = evaluate_mle_table(&poly_abc, &r_y_verify.0).unwrap()
@@ -183,7 +177,7 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
 
     let mut verifier_challenger = spartan_whir::keccak_challenger();
     let bad_round_count =
-        verify_inner::<F, EF, _>(&proof, initial_claim, 1, &mut verifier_challenger);
+        verify_inner::<F, EF, _>(&proof, initial_claim, 3, &mut verifier_challenger);
     assert_eq!(bad_round_count, Err(SpartanWhirError::InvalidRoundCount));
 }
 

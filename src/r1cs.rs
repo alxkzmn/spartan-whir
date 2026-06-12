@@ -52,11 +52,11 @@ pub struct R1csWitness<F> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DirectBindLayout {
+pub(crate) struct DirectBindLayout<F> {
     width: usize,
-    a: ColumnBindMatrixLayout,
-    b: ColumnBindMatrixLayout,
-    c: ColumnBindMatrixLayout,
+    a: ColumnBindMatrixLayout<F>,
+    b: ColumnBindMatrixLayout<F>,
+    c: ColumnBindMatrixLayout<F>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,9 +67,16 @@ pub(crate) struct DirectMultiplyLayout {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ColumnBindMatrixLayout {
-    entry_indices_by_col: Vec<usize>,
+struct ColumnBindMatrixLayout<F> {
+    entries_by_col: Vec<ColumnBindEntry<F>>,
     col_starts: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ColumnBindEntry<F> {
+    col: usize,
+    row: usize,
+    val: F,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +173,10 @@ impl<F> R1csShape<F> {
         })
     }
 
-    pub(crate) fn direct_bind_layout(&self) -> Result<DirectBindLayout, SpartanWhirError> {
+    pub(crate) fn direct_bind_layout(&self) -> Result<DirectBindLayout<F>, SpartanWhirError>
+    where
+        F: Copy + PartialEq,
+    {
         let _profile = crate::profiling::profile_scope("direct_bind_layout");
         self.validate()?;
         DirectBindLayout::new(self)
@@ -369,7 +379,7 @@ impl<F: Field> R1csShape<F> {
 
     pub(crate) fn bind_row_vars_joint_with_layout_unchecked<EF>(
         &self,
-        layout: &DirectBindLayout,
+        layout: &DirectBindLayout<F>,
         eq_rx: &[EF],
         r: EF,
     ) -> Result<Vec<EF>, SpartanWhirError>
@@ -398,7 +408,6 @@ impl<F: Field> R1csShape<F> {
                 || scale_eq_table(eq_rx, r_squared),
             )
         };
-
         {
             let _profile = crate::profiling::profile_scope("bind_row_accumulate");
             accumulate_bound_rows_for_joint_column_layout(
@@ -431,8 +440,11 @@ impl<F: Field> R1csShape<F> {
     }
 }
 
-impl DirectBindLayout {
-    fn new<F>(shape: &R1csShape<F>) -> Result<Self, SpartanWhirError> {
+impl<F> DirectBindLayout<F>
+where
+    F: Copy + PartialEq,
+{
+    fn new(shape: &R1csShape<F>) -> Result<Self, SpartanWhirError> {
         let width = shape
             .num_vars
             .checked_mul(2)
@@ -448,7 +460,7 @@ impl DirectBindLayout {
         Ok(layout)
     }
 
-    fn validate_for<F>(&self, shape: &R1csShape<F>, width: usize) -> Result<(), SpartanWhirError> {
+    fn validate_for(&self, shape: &R1csShape<F>, width: usize) -> Result<(), SpartanWhirError> {
         if self.width != width {
             return Err(SpartanWhirError::InvalidR1csShape);
         }
@@ -478,8 +490,11 @@ impl DirectMultiplyLayout {
     }
 }
 
-impl ColumnBindMatrixLayout {
-    fn new<F>(mat: &SparseMatrix<F>) -> Self {
+impl<F> ColumnBindMatrixLayout<F>
+where
+    F: Copy + PartialEq,
+{
+    fn new(mat: &SparseMatrix<F>) -> Self {
         let mut col_starts = vec![0usize; mat.num_cols + 1];
         for entry in &mat.entries {
             col_starts[entry.col + 1] += 1;
@@ -496,33 +511,31 @@ impl ColumnBindMatrixLayout {
             next[entry.col] += 1;
         }
 
+        let entries_by_col = entry_indices_by_col
+            .into_iter()
+            .map(|idx| {
+                let entry = &mat.entries[idx];
+                ColumnBindEntry {
+                    col: entry.col,
+                    row: entry.row,
+                    val: entry.val,
+                }
+            })
+            .collect();
+
         Self {
-            entry_indices_by_col,
+            entries_by_col,
             col_starts,
         }
     }
 
-    fn validate_for<F>(&self, mat: &SparseMatrix<F>) -> Result<(), SpartanWhirError> {
-        if self.entry_indices_by_col.len() != mat.entries.len()
+    fn validate_for(&self, mat: &SparseMatrix<F>) -> Result<(), SpartanWhirError> {
+        if self.entries_by_col.len() != mat.entries.len()
             || self.col_starts.len() != mat.num_cols + 1
         {
             return Err(SpartanWhirError::InvalidR1csShape);
         }
 
-        let mut seen = vec![false; mat.entries.len()];
-        let mut prev_col = None;
-        for &idx in &self.entry_indices_by_col {
-            if idx >= mat.entries.len() || seen[idx] {
-                return Err(SpartanWhirError::InvalidR1csShape);
-            }
-            seen[idx] = true;
-
-            let col = mat.entries[idx].col;
-            if prev_col.is_some_and(|prev| col < prev) {
-                return Err(SpartanWhirError::InvalidR1csShape);
-            }
-            prev_col = Some(col);
-        }
         if self.col_starts.first().copied() != Some(0)
             || self.col_starts.last().copied() != Some(mat.entries.len())
         {
@@ -533,28 +546,31 @@ impl ColumnBindMatrixLayout {
                 return Err(SpartanWhirError::InvalidR1csShape);
             }
         }
-        for col in 0..mat.num_cols {
-            for &idx in self.range_for_cols(mat, col, col + 1) {
-                if mat.entries[idx].col != col {
-                    return Err(SpartanWhirError::InvalidR1csShape);
-                }
+
+        let mut next = self.col_starts[..mat.num_cols].to_vec();
+        for entry in &mat.entries {
+            let pos = next[entry.col];
+            if pos >= self.col_starts[entry.col + 1] {
+                return Err(SpartanWhirError::InvalidR1csShape);
             }
+            let layout_entry = self.entries_by_col[pos];
+            if layout_entry.col != entry.col
+                || layout_entry.row != entry.row
+                || layout_entry.val != entry.val
+            {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+            next[entry.col] += 1;
         }
         Ok(())
     }
 
-    fn range_for_cols<F>(
-        &self,
-        mat: &SparseMatrix<F>,
-        col_start: usize,
-        col_end: usize,
-    ) -> &[usize] {
+    fn range_for_cols(&self, col_start: usize, col_end: usize) -> &[ColumnBindEntry<F>] {
         debug_assert!(col_start <= col_end);
-        let col_start = col_start.min(mat.num_cols);
-        let col_end = col_end.min(mat.num_cols);
-        let start = self.col_starts[col_start];
-        let end = self.col_starts[col_end];
-        &self.entry_indices_by_col[start..end]
+        let col_count = self.col_starts.len().saturating_sub(1);
+        let col_start = col_start.min(col_count);
+        let col_end = col_end.min(col_count);
+        &self.entries_by_col[self.col_starts[col_start]..self.col_starts[col_end]]
     }
 }
 
@@ -771,7 +787,7 @@ where
 
 fn accumulate_bound_rows_for_joint_column_layout<F, EF>(
     shape: &R1csShape<F>,
-    layout: &DirectBindLayout,
+    layout: &DirectBindLayout<F>,
     eq_a: &[EF],
     eq_b: &[EF],
     eq_c: &[EF],
@@ -789,9 +805,9 @@ where
         .ok_or(SpartanWhirError::InvalidR1csShape)?;
 
     if !(cfg!(feature = "parallel") && total_nnz >= R1CS_PARALLEL_BIND_MIN_NNZ) {
-        accumulate_bound_rows(&shape.a, eq_a, out)?;
-        accumulate_bound_rows(&shape.b, eq_b, out)?;
-        accumulate_bound_rows(&shape.c, eq_c, out)?;
+        accumulate_bound_rows_for_column_range(&layout.a, eq_a, 0, out.len(), out);
+        accumulate_bound_rows_for_column_range(&layout.b, eq_b, 0, out.len(), out);
+        accumulate_bound_rows_for_column_range(&layout.c, eq_c, 0, out.len(), out);
         return Ok(());
     }
 
@@ -807,23 +823,16 @@ where
             let col_start = chunk_idx * chunk_len;
             let col_end = col_start + out_chunk.len();
 
-            accumulate_bound_rows_for_column_range(
-                &shape.a, &layout.a, eq_a, col_start, col_end, out_chunk,
-            );
-            accumulate_bound_rows_for_column_range(
-                &shape.b, &layout.b, eq_b, col_start, col_end, out_chunk,
-            );
-            accumulate_bound_rows_for_column_range(
-                &shape.c, &layout.c, eq_c, col_start, col_end, out_chunk,
-            );
+            accumulate_bound_rows_for_column_range(&layout.a, eq_a, col_start, col_end, out_chunk);
+            accumulate_bound_rows_for_column_range(&layout.b, eq_b, col_start, col_end, out_chunk);
+            accumulate_bound_rows_for_column_range(&layout.c, eq_c, col_start, col_end, out_chunk);
         });
 
     Ok(())
 }
 
 fn accumulate_bound_rows_for_column_range<F, EF>(
-    mat: &SparseMatrix<F>,
-    layout: &ColumnBindMatrixLayout,
+    layout: &ColumnBindMatrixLayout<F>,
     eq_rx: &[EF],
     col_start: usize,
     col_end: usize,
@@ -832,8 +841,7 @@ fn accumulate_bound_rows_for_column_range<F, EF>(
     F: Field,
     EF: ExtensionField<F>,
 {
-    for &entry_idx in layout.range_for_cols(mat, col_start, col_end) {
-        let entry = &mat.entries[entry_idx];
+    for entry in layout.range_for_cols(col_start, col_end) {
         add_extension_scaled(
             &mut out_chunk[entry.col - col_start],
             eq_rx[entry.row],
@@ -997,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_bind_layout_validation_rejects_bad_indices() {
+    fn direct_bind_layout_validation_rejects_bad_entries() {
         let shape = R1csShape {
             num_cons: 2,
             num_vars: 2,
@@ -1030,14 +1038,15 @@ mod tests {
             },
         };
         let mut layout = shape.direct_bind_layout().expect("layout builds");
-        layout.a.entry_indices_by_col = vec![0, 1];
+        layout.a.entries_by_col[0].row = 0;
 
         assert_eq!(
             layout.validate_for(&shape, 4),
             Err(SpartanWhirError::InvalidR1csShape)
         );
 
-        layout.a.entry_indices_by_col = vec![1, 1];
+        let mut layout = shape.direct_bind_layout().expect("layout builds");
+        layout.a.col_starts = vec![0, 2, 2, 2];
         assert_eq!(
             layout.validate_for(&shape, 4),
             Err(SpartanWhirError::InvalidR1csShape)
