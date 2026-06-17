@@ -67,8 +67,9 @@ where
 {
     /// Set up a Poseidon Spartan proving/verifying key pair.
     ///
-    /// Spark proving keys include fixed-table prover data, so their serialized
-    /// form is expected to be materially larger than direct-mode keys.
+    /// Spark proving keys include fixed-table prover data and cached Spark
+    /// preprocessing tables, so their serialized form is expected to be
+    /// materially larger than direct-mode keys.
     pub fn setup(
         shape: R1csShape<F>,
         config: PoseidonSetupConfig,
@@ -360,13 +361,39 @@ mod witness_generator {
         Ext: ExtField,
         PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
     {
+        fn witness_from_generator(
+            &self,
+            generator: &PoseidonWitnessGenerator,
+            input: impl AsRef<[u8]>,
+        ) -> Result<(R1csWitness<F>, Vec<F>), PoseidonWitnessGeneratorError> {
+            generator.generate_witness(input, self.num_vars_unpadded, self.num_io)
+        }
+
+        /// Generate a witness and prove it without a full R1CS satisfaction check.
+        ///
+        /// The prover evaluates the R1CS matrices as part of the Spartan
+        /// protocol. Use `prove_from_witness_generator_checked` when the caller
+        /// wants an explicit R1CS satisfaction check.
         pub fn prove_from_witness_generator(
             &self,
             generator: &PoseidonWitnessGenerator,
             input: impl AsRef<[u8]>,
         ) -> Result<PoseidonProof<Ext>, PoseidonWitnessGeneratorError> {
-            let (witness, public_inputs) =
-                generator.generate_witness(input, self.num_vars_unpadded, self.num_io)?;
+            let (witness, public_inputs) = self.witness_from_generator(generator, input)?;
+            self.prove(witness, public_inputs).map_err(Into::into)
+        }
+
+        /// Generate a witness, validate R1CS satisfaction, then prove it.
+        ///
+        /// This is intended for import tests and debugging native witness
+        /// generators. It performs a full matrix-vector pass before proving and
+        /// should not be used as the default benchmark or production prove path.
+        pub fn prove_from_witness_generator_checked(
+            &self,
+            generator: &PoseidonWitnessGenerator,
+            input: impl AsRef<[u8]>,
+        ) -> Result<PoseidonProof<Ext>, PoseidonWitnessGeneratorError> {
+            let (witness, public_inputs) = self.witness_from_generator(generator, input)?;
             validate_satisfaction(&self.shape_canonical, &witness, &public_inputs)?;
             self.prove(witness, public_inputs).map_err(Into::into)
         }

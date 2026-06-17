@@ -5,17 +5,22 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use libloading::Library;
 use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_r1cs_path, compare_spark_layouts, engine::F, KeccakQuarticEngine,
-    MatrixClosingMode, OcticBinExtension, PoseidonOcticEngine, PoseidonSpartanProtocol,
-    PoseidonWitnessGenerator, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
-    SpartanProtocol, SpartanSnarkConfig, SumcheckStrategy, WhirParams, WhirPcs, WhirPcsConfig,
+    circom::import_r1cs_path, compare_spark_layouts, engine::F, recommended_octic_whir_params,
+    KeccakQuarticEngine, MatrixClosingMode, OcticBinExtension, PoseidonOcticEngine,
+    PoseidonSpartanProtocol, PoseidonWitnessGenerator, R1csShape, SecurityConfig,
+    SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanProtocol, SpartanSnarkConfig,
+    SumcheckStrategy, WhirFoldingSchedule, WhirParams, WhirPcs, WhirPcsConfig,
+};
+use spartan_whir::{
+    protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
+    spark::spark_col_memory_size,
 };
 
 const DEFAULT_SIZES: &[usize] = &[128, 256, 512, 1024, 2048];
@@ -31,6 +36,7 @@ struct ArtifactPaths {
     linked_library: PathBuf,
     circuit_data: Vec<u8>,
     run_name: String,
+    reused: bool,
 }
 
 struct LoadedWitnessGenerator {
@@ -55,6 +61,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("engines: {:?}", engines);
     println!("modes: {:?}", modes);
     println!("repeats: {repeats}");
+    if reuse_circom_artifacts() {
+        println!("reuse_circom_artifacts: enabled");
+    }
     if spartan_whir::profiling::profile_enabled() {
         println!("profile: enabled");
     }
@@ -97,8 +106,18 @@ fn run_size(
     let compile_start = Instant::now();
     let artifacts = generate_circom_artifacts(manifest_dir, &circuit, &size_workdir, size)?;
     let compile_elapsed = compile_start.elapsed();
-    println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
-    spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
+    if artifacts.reused {
+        println!("reuse_circom_artifacts: true");
+        println!("compile_and_build_ms: 0");
+        spartan_whir::profiling::record_profile_phase(
+            "circom_compile_build",
+            Duration::from_secs(0),
+        );
+        spartan_whir::profiling::record_profile_phase("circom_artifact_load", compile_elapsed);
+    } else {
+        println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
+        spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
+    }
 
     let import_start = Instant::now();
     let circom = import_r1cs_path(&artifacts.r1cs)?;
@@ -144,6 +163,21 @@ fn run_size(
         selected_layout.union_nnz,
         selected_layout.max_matrix_nnz_padded
     );
+    let direct_config = protocol_config(
+        MatrixClosingMode::DirectSparse,
+        poseidon_direct_whir_params(),
+        None,
+    );
+    let spark_config = {
+        let spark_folding_factor = spark_folding_factor(selected_layout.value_domain_size)?;
+        protocol_config(
+            MatrixClosingMode::Spark,
+            legacy_spark_whir_params(spark_folding_factor),
+            None,
+        )
+    };
+    let spark_independent_config =
+        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size)?;
 
     for sample in 0..repeats {
         if repeats > 1 {
@@ -155,25 +189,27 @@ fn run_size(
                     BenchMode::Direct => prove_and_verify(
                         engine,
                         "direct_sparse_octic_constant_pow0_ff8_lir1_rsv8",
-                        MatrixClosingMode::DirectSparse,
-                        POSEIDON_DIRECT_FOLDING_FACTOR,
+                        &direct_config,
                         &shape,
                         &loaded_generator.generator,
                         &input_binary,
                     )?,
-                    BenchMode::Spark => {
-                        let spark_folding_factor =
-                            spark_folding_factor(selected_layout.value_domain_size)?;
-                        prove_and_verify(
-                            engine,
-                            "spark",
-                            MatrixClosingMode::Spark,
-                            spark_folding_factor,
-                            &shape,
-                            &loaded_generator.generator,
-                            &input_binary,
-                        )?;
-                    }
+                    BenchMode::Spark => prove_and_verify(
+                        engine,
+                        "spark",
+                        &spark_config,
+                        &shape,
+                        &loaded_generator.generator,
+                        &input_binary,
+                    )?,
+                    BenchMode::SparkIndependent => prove_and_verify(
+                        engine,
+                        "spark_independent_whir_schedules",
+                        &spark_independent_config,
+                        &shape,
+                        &loaded_generator.generator,
+                        &input_binary,
+                    )?,
                 }
             }
         }
@@ -192,6 +228,13 @@ fn generate_circom_artifacts(
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("../circom/target/debug/circom"));
     fs::create_dir_all(workdir)?;
+
+    if reuse_circom_artifacts() {
+        if let Some(artifacts) = load_existing_circom_artifacts(workdir, size)? {
+            return Ok(artifacts);
+        }
+    }
+
     clear_previous_outputs(workdir, size)?;
 
     run(Command::new(&circom_bin)
@@ -213,7 +256,44 @@ fn generate_circom_artifacts(
         linked_library,
         circuit_data,
         run_name: format!("sha256_{size}b"),
+        reused: false,
     })
+}
+
+fn load_existing_circom_artifacts(
+    workdir: &Path,
+    size: usize,
+) -> Result<Option<ArtifactPaths>, Box<dyn Error>> {
+    let r1cs = workdir.join(format!("sha256_{size}b.r1cs"));
+    let linked_library = workdir.join(dynamic_library_name(size));
+    let circuit_data_path = workdir
+        .join(format!("sha256_{size}b_cpp"))
+        .join(format!("sha256_{size}b.dat"));
+
+    if !(r1cs.exists() && linked_library.exists() && circuit_data_path.exists()) {
+        return Ok(None);
+    }
+
+    Ok(Some(ArtifactPaths {
+        r1cs,
+        linked_library,
+        circuit_data: fs::read(circuit_data_path)?,
+        run_name: format!("sha256_{size}b"),
+        reused: true,
+    }))
+}
+
+fn reuse_circom_artifacts() -> bool {
+    env_flag("SHA256_BENCH_REUSE_ARTIFACTS")
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var_os(name)
+        .and_then(|value| value.into_string().ok())
+        .is_some_and(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+        })
 }
 
 fn clear_previous_outputs(workdir: &Path, size: usize) -> Result<(), Box<dyn Error>> {
@@ -308,44 +388,27 @@ fn dynamic_library_name(size: usize) -> String {
 fn prove_and_verify(
     engine: BenchEngine,
     label: &str,
-    matrix_closing: MatrixClosingMode,
-    folding_factor: usize,
+    config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
     generator: &PoseidonWitnessGenerator,
     input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     match engine {
-        BenchEngine::Poseidon => prove_and_verify_poseidon(
-            label,
-            matrix_closing,
-            folding_factor,
-            shape,
-            generator,
-            input_binary,
-        ),
-        BenchEngine::PoseidonPlonky3 => prove_and_verify_poseidon_plonky3(
-            label,
-            matrix_closing,
-            folding_factor,
-            shape,
-            generator,
-            input_binary,
-        ),
-        BenchEngine::Keccak => prove_and_verify_keccak(
-            label,
-            matrix_closing,
-            folding_factor,
-            shape,
-            generator,
-            input_binary,
-        ),
+        BenchEngine::Poseidon => {
+            prove_and_verify_poseidon(label, config, shape, generator, input_binary)
+        }
+        BenchEngine::PoseidonPlonky3 => {
+            prove_and_verify_poseidon_plonky3(label, config, shape, generator, input_binary)
+        }
+        BenchEngine::Keccak => {
+            prove_and_verify_keccak(label, config, shape, generator, input_binary)
+        }
     }
 }
 
 fn prove_and_verify_poseidon_plonky3(
     label: &str,
-    matrix_closing: MatrixClosingMode,
-    folding_factor: usize,
+    config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
     generator: &PoseidonWitnessGenerator,
     input_binary: &[u8],
@@ -354,29 +417,30 @@ fn prove_and_verify_poseidon_plonky3(
 
     let _profile_context =
         spartan_whir::profiling::set_profile_context("poseidon-plonky3-whir", label);
-    let config = protocol_config(matrix_closing, folding_factor);
     let setup_start = Instant::now();
     let _setup_profile = spartan_whir::profiling::profile_scope("setup");
-    let (pk, vk) = Protocol::setup_with_config(shape, &config)
+    let (pk, vk) = Protocol::setup_with_config(shape, config)
         .map_err(|err| format!("{label} Poseidon Plonky3 setup failed: {err}"))?;
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = Protocol::prove_with_mode(
         &pk,
         &public_inputs,
         &witness,
-        matrix_closing,
+        config.matrix_closing,
         &mut prover_challenger,
     )
     .map_err(|err| format!("{label} Poseidon Plonky3 prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -387,44 +451,44 @@ fn prove_and_verify_poseidon_plonky3(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: poseidon-plonky3-whir mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: poseidon-plonky3-whir mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
 
 fn prove_and_verify_poseidon(
     label: &str,
-    matrix_closing: MatrixClosingMode,
-    folding_factor: usize,
+    config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
     generator: &PoseidonWitnessGenerator,
     input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     let _profile_context = spartan_whir::profiling::set_profile_context("poseidon", label);
-    let config = protocol_config(matrix_closing, folding_factor);
     let setup_start = Instant::now();
     let _setup_profile = spartan_whir::profiling::profile_scope("setup");
     let (pk, vk) =
-        SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::setup_with_config(shape, &config)
+        SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::setup_with_config(shape, config)
             .map_err(|err| format!("{label} setup failed: {err}"))?;
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::prove_with_mode(
         &pk,
         &public_inputs,
         &witness,
-        matrix_closing,
+        config.matrix_closing,
         &mut prover_challenger,
     )
     .map_err(|err| format!("{label} prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -440,44 +504,44 @@ fn prove_and_verify_poseidon(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: poseidon mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: poseidon mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
 
 fn prove_and_verify_keccak(
     label: &str,
-    matrix_closing: MatrixClosingMode,
-    folding_factor: usize,
+    config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
     generator: &PoseidonWitnessGenerator,
     input_binary: &[u8],
 ) -> Result<(), Box<dyn Error>> {
     let _profile_context = spartan_whir::profiling::set_profile_context("keccak", label);
-    let config = protocol_config(matrix_closing, folding_factor);
     let setup_start = Instant::now();
     let _setup_profile = spartan_whir::profiling::profile_scope("setup");
     let (pk, vk) =
-        SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::setup_with_config(shape, &config)
+        SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::setup_with_config(shape, config)
             .map_err(|err| format!("{label} setup failed: {err}"))?;
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
-    let prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("prove");
-    let (witness, public_inputs) =
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?;
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
     let mut prover_challenger = spartan_whir::keccak_challenger();
     let (instance, proof) = SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::prove_with_mode(
         &pk,
         &public_inputs,
         &witness,
-        matrix_closing,
+        config.matrix_closing,
         &mut prover_challenger,
     )
     .map_err(|err| format!("{label} prove failed: {err}"))?;
     drop(_prove_profile);
-    let prove_ms = prove_start.elapsed().as_millis();
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
     let verify_start = Instant::now();
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
@@ -493,7 +557,7 @@ fn prove_and_verify_keccak(
     let verify_ms = verify_start.elapsed().as_millis();
 
     println!(
-        "engine: keccak mode: {label} folding_factor={folding_factor} setup_ms={setup_ms} prove_ms={prove_ms} verify_ms={verify_ms}"
+        "engine: keccak mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
     );
     Ok(())
 }
@@ -576,6 +640,7 @@ fn parse_engines() -> Result<Vec<BenchEngine>, Box<dyn Error>> {
 enum BenchMode {
     Direct,
     Spark,
+    SparkIndependent,
 }
 
 fn parse_modes() -> Result<Vec<BenchMode>, Box<dyn Error>> {
@@ -590,6 +655,9 @@ fn parse_modes() -> Result<Vec<BenchMode>, Box<dyn Error>> {
         match part.trim() {
             "direct" | "direct-sparse" | "direct_sparse_no_spark" => modes.push(BenchMode::Direct),
             "spark" => modes.push(BenchMode::Spark),
+            "spark-independent" | "spark_independent" | "spark-opt" => {
+                modes.push(BenchMode::SparkIndependent)
+            }
             "both" | "all" => {
                 modes.push(BenchMode::Direct);
                 modes.push(BenchMode::Spark);
@@ -673,22 +741,15 @@ fn spark_folding_factor(value_domain_size: usize) -> Result<usize, Box<dyn Error
         .max(1))
 }
 
-fn protocol_config(matrix_closing: MatrixClosingMode, folding_factor: usize) -> SpartanSnarkConfig {
+fn protocol_config(
+    matrix_closing: MatrixClosingMode,
+    whir_params: WhirParams,
+    spark_whir_params: Option<SparkWhirParams>,
+) -> SpartanSnarkConfig {
     let security = SecurityConfig {
         security_level_bits: POSEIDON_SECURITY_BITS,
         merkle_security_bits: POSEIDON_SECURITY_BITS,
         soundness_assumption: SoundnessAssumption::JohnsonBound,
-    };
-    let rs_domain_initial_reduction_factor = match matrix_closing {
-        MatrixClosingMode::DirectSparse => POSEIDON_DIRECT_RS_REDUCTION_FACTOR,
-        MatrixClosingMode::Spark => 1,
-    };
-    let whir_params = WhirParams {
-        pow_bits: 0,
-        folding_factor,
-        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
-        rs_domain_initial_reduction_factor,
-        ..WhirParams::default()
     };
     SpartanSnarkConfig {
         matrix_closing,
@@ -700,5 +761,105 @@ fn protocol_config(matrix_closing: MatrixClosingMode, folding_factor: usize) -> 
             whir: whir_params,
             sumcheck_strategy: SumcheckStrategy::Svo,
         },
+        spark_whir_params,
     }
+}
+
+fn poseidon_direct_whir_params() -> WhirParams {
+    WhirParams {
+        pow_bits: 0,
+        folding_factor: POSEIDON_DIRECT_FOLDING_FACTOR,
+        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
+        rs_domain_initial_reduction_factor: POSEIDON_DIRECT_RS_REDUCTION_FACTOR,
+        ..WhirParams::default()
+    }
+}
+
+fn legacy_spark_whir_params(folding_factor: usize) -> WhirParams {
+    WhirParams {
+        pow_bits: 0,
+        folding_factor,
+        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
+        rs_domain_initial_reduction_factor: 1,
+        ..WhirParams::default()
+    }
+}
+
+fn independent_spark_protocol_config(
+    padded_shape: &R1csShape<F>,
+    value_domain_size: usize,
+) -> Result<SpartanSnarkConfig, Box<dyn Error>> {
+    let witness_vars = log2_power_of_two(padded_shape.num_vars)?;
+    let value_vars = log2_power_of_two(value_domain_size)?;
+    let col_memory_size =
+        spark_col_memory_size(padded_shape).map_err(|err| format!("Spark layout failed: {err}"))?;
+    let audit_memory_size = padded_shape
+        .num_cons
+        .max(col_memory_size)
+        .checked_next_power_of_two()
+        .ok_or("audit memory size overflow")?;
+    let fixed_audit_domain_size = audit_memory_size
+        .checked_mul(fixed_audit_column_count())
+        .ok_or("fixed audit domain size overflow")?;
+    let fixed_value_vars = value_vars + fixed_value_column_bits();
+    let fixed_audit_vars = log2_power_of_two(fixed_audit_domain_size)?;
+    let read_vars = value_vars + read_column_bits::<OcticBinExtension>();
+
+    println!(
+        "spark_independent_vars: witness={witness_vars} fixed_value={fixed_value_vars} fixed_audit={fixed_audit_vars} read={read_vars}"
+    );
+
+    let witness = recommended_octic_whir_params(witness_vars);
+    let fixed_value = recommended_octic_whir_params(fixed_value_vars);
+    let fixed_audit = recommended_octic_whir_params(fixed_audit_vars);
+    let read = recommended_octic_whir_params(read_vars);
+
+    println!(
+        "spark_independent_schedules: witness={} fixed_value={} fixed_audit={} read={}",
+        whir_schedule_label(&witness),
+        whir_schedule_label(&fixed_value),
+        whir_schedule_label(&fixed_audit),
+        whir_schedule_label(&read)
+    );
+
+    Ok(protocol_config(
+        MatrixClosingMode::Spark,
+        witness,
+        Some(SparkWhirParams {
+            fixed_value,
+            fixed_audit,
+            read,
+        }),
+    ))
+}
+
+fn whir_schedule_label(params: &WhirParams) -> String {
+    match params.effective_folding_schedule() {
+        WhirFoldingSchedule::Constant(factor) => format!(
+            "octic_constant_pow{}_ff{factor}_lir{}_rsv{}",
+            params.pow_bits,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+        WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => format!(
+            "octic_cfsr_pow{}_ff{first}_rest{rest}_lir{}_rsv{}",
+            params.pow_bits,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+        WhirFoldingSchedule::PerRound(factors) => format!(
+            "octic_per_round_pow{}_factors{:?}_lir{}_rsv{}",
+            params.pow_bits,
+            factors,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+    }
+}
+
+fn log2_power_of_two(value: usize) -> Result<usize, Box<dyn Error>> {
+    if value == 0 || !value.is_power_of_two() {
+        return Err(format!("expected power-of-two value, got {value}").into());
+    }
+    Ok(value.ilog2() as usize)
 }

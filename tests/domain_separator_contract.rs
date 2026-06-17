@@ -1,7 +1,8 @@
 mod common;
 
 use spartan_whir::{
-    DomainSeparator, MatrixClosingMode, SecurityConfig, WhirFoldingSchedule, WhirParams,
+    DomainSeparator, MatrixClosingMode, SecurityConfig, SparkWhirParams, WhirFoldingSchedule,
+    WhirParams,
 };
 
 #[test]
@@ -78,4 +79,50 @@ fn domain_separator_canonicalizes_legacy_constant_schedule() {
     let explicit_bytes = DomainSeparator::new(&shape, &security, &explicit).to_bytes();
 
     assert_eq!(legacy_bytes, explicit_bytes);
+}
+
+#[test]
+fn domain_separator_ignores_spark_params_in_direct_mode() {
+    let shape = common::sample_shape();
+    let security = SecurityConfig::default();
+    let whir = WhirParams::default();
+    let spark_whir_params = SparkWhirParams {
+        fixed_value: WhirParams {
+            starting_log_inv_rate: 2,
+            ..whir.clone()
+        },
+        fixed_audit: WhirParams {
+            starting_log_inv_rate: 3,
+            ..whir.clone()
+        },
+        read: WhirParams {
+            starting_log_inv_rate: 4,
+            ..whir.clone()
+        },
+    };
+
+    let direct = DomainSeparator::new_with_matrix_closing(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::DirectSparse,
+    );
+    let direct_with_spark_params = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::DirectSparse,
+        Some(spark_whir_params.clone()),
+    );
+    let spark_with_spark_params = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::Spark,
+        Some(spark_whir_params),
+    );
+
+    assert_eq!(direct_with_spark_params.spark_whir_params, None);
+    assert_eq!(direct.to_bytes(), direct_with_spark_params.to_bytes());
+    assert_ne!(direct.to_bytes(), spark_with_spark_params.to_bytes());
 }

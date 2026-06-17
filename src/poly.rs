@@ -1,11 +1,14 @@
 use alloc::{vec, vec::Vec};
 
 use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::SpartanWhirError;
 
 pub type Evaluations<F> = Vec<F>;
+
+const EQ_EVALS_PARALLEL_MIN_LEN: usize = 1 << 14;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MultilinearPoint<F>(pub Vec<F>);
@@ -34,6 +37,40 @@ impl<EF: Field> EqPolynomial<EF> {
                 next.push(v * r_i);
             }
             evals = next;
+        }
+        evals
+    }
+}
+
+impl<EF: Field + Send + Sync> EqPolynomial<EF> {
+    pub fn evals_from_point_parallel(point: &[EF]) -> Vec<EF> {
+        let final_len = 1usize << point.len();
+        let mut evals = vec![EF::ZERO; final_len];
+        evals[0] = EF::ONE;
+        let mut active = 1usize;
+
+        for &r_i in point.iter().rev() {
+            let (lo, rest) = evals.split_at_mut(active);
+            let hi = &mut rest[..active];
+            let one_minus_r_i = EF::ONE - r_i;
+
+            if cfg!(feature = "parallel") && active >= EQ_EVALS_PARALLEL_MIN_LEN {
+                lo.par_iter_mut()
+                    .zip(hi.par_iter_mut())
+                    .for_each(|(lo, hi)| {
+                        let v = *lo;
+                        *lo = v * one_minus_r_i;
+                        *hi = v * r_i;
+                    });
+            } else {
+                for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
+                    let v = *lo;
+                    *lo = v * one_minus_r_i;
+                    *hi = v * r_i;
+                }
+            }
+
+            active *= 2;
         }
         evals
     }

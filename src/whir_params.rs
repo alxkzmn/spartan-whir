@@ -128,3 +128,32 @@ impl WhirParams {
         self.effective_folding_schedule().first_round()
     }
 }
+
+pub fn recommended_octic_schedule(num_variables: usize) -> WhirFoldingSchedule {
+    match num_variables {
+        0..=8 => WhirFoldingSchedule::Constant(num_variables.max(1)),
+        9..=21 => WhirFoldingSchedule::Constant(8),
+        22 => WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 },
+        23 | 24 => WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 5 },
+        25 | 26 => WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 },
+        27 => WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 7 },
+        _ => WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 8 },
+    }
+}
+
+pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
+    let schedule = recommended_octic_schedule(num_variables);
+    let folding_factor = schedule.first_round();
+    let folding_schedule = match schedule {
+        WhirFoldingSchedule::Constant(factor) if factor == folding_factor => None,
+        schedule => Some(schedule),
+    };
+    WhirParams {
+        pow_bits: 0,
+        folding_factor,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 8.min(folding_factor),
+        folding_schedule,
+        round_log_inv_rates: Vec::new(),
+    }
+}

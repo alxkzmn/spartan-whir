@@ -6,7 +6,7 @@ use tracing::info_span;
 #[cfg(feature = "circom")]
 use alloc::string::{String, ToString};
 #[cfg(feature = "circom")]
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 #[cfg(feature = "circom")]
 use std::{env, thread_local, time::Instant};
 #[cfg(feature = "circom")]
@@ -44,6 +44,8 @@ struct ProfileContext {
 #[cfg(feature = "circom")]
 thread_local! {
     static PROFILE_CONTEXT: RefCell<Option<ProfileContext>> = const { RefCell::new(None) };
+    static PROFILE_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
+    static PROFILE_DETAIL_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 #[cfg(feature = "circom")]
@@ -64,7 +66,7 @@ impl Drop for ProfileContextGuard {
 #[cfg(feature = "circom")]
 pub struct ProfileScope {
     phase: &'static str,
-    start: Instant,
+    start: Option<Instant>,
     enabled: bool,
 }
 
@@ -74,13 +76,40 @@ impl Drop for ProfileScope {
         if !self.enabled {
             return;
         }
-        record_profile_phase(self.phase, self.start.elapsed());
+        if let Some(start) = self.start {
+            record_profile_phase(self.phase, start.elapsed());
+        }
     }
 }
 
 #[cfg(feature = "circom")]
 pub fn profile_enabled() -> bool {
-    env::var_os("SHA256_BENCH_PROFILE")
+    PROFILE_ENABLED.with(|enabled| {
+        if let Some(value) = enabled.get() {
+            return value;
+        }
+        let value = env_flag("SHA256_BENCH_PROFILE");
+        enabled.set(Some(value));
+        value
+    })
+}
+
+#[cfg(feature = "circom")]
+pub fn profile_detail_enabled() -> bool {
+    profile_enabled()
+        && PROFILE_DETAIL_ENABLED.with(|enabled| {
+            if let Some(value) = enabled.get() {
+                return value;
+            }
+            let value = env_flag("SHA256_BENCH_PROFILE_DETAIL");
+            enabled.set(Some(value));
+            value
+        })
+}
+
+#[cfg(feature = "circom")]
+fn env_flag(name: &str) -> bool {
+    env::var_os(name)
         .and_then(|value| value.into_string().ok())
         .is_some_and(|value| {
             let value = value.trim();
@@ -90,6 +119,11 @@ pub fn profile_enabled() -> bool {
 
 #[cfg(not(feature = "circom"))]
 pub const fn profile_enabled() -> bool {
+    false
+}
+
+#[cfg(not(feature = "circom"))]
+pub const fn profile_detail_enabled() -> bool {
     false
 }
 
@@ -113,10 +147,21 @@ pub const fn set_profile_context(_engine: &str, _mode: &str) -> ProfileContextGu
 
 #[cfg(feature = "circom")]
 pub fn profile_scope(phase: &'static str) -> ProfileScope {
+    let enabled = profile_enabled();
     ProfileScope {
         phase,
-        start: Instant::now(),
-        enabled: profile_enabled(),
+        start: enabled.then(Instant::now),
+        enabled,
+    }
+}
+
+#[cfg(feature = "circom")]
+pub fn profile_detail_scope(phase: &'static str) -> ProfileScope {
+    let enabled = profile_detail_enabled();
+    ProfileScope {
+        phase,
+        start: enabled.then(Instant::now),
+        enabled,
     }
 }
 
@@ -125,6 +170,11 @@ pub struct ProfileScope;
 
 #[cfg(not(feature = "circom"))]
 pub const fn profile_scope(_phase: &'static str) -> ProfileScope {
+    ProfileScope
+}
+
+#[cfg(not(feature = "circom"))]
+pub const fn profile_detail_scope(_phase: &'static str) -> ProfileScope {
     ProfileScope
 }
 

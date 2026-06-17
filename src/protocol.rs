@@ -8,11 +8,16 @@ use p3_symmetric::{CryptographicHasher, Hash};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
+use crate::error::InvalidConfigReason;
 use crate::profiling::profile_scope;
+use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
+use crate::sumcheck::{
+    prove_inner_base_first_unchecked, prove_outer_split_eq_base_first_owned_unchecked,
+};
 use crate::{
-    compute_spark_read_tables, evaluate_mle_table, preprocess_spark_tables, prove_inner,
-    prove_outer, prove_spark_batched_memory_products_with_leaf_claims, verify_inner, verify_outer,
-    verify_spark_batched_memory_leaf_claims_with_openings,
+    compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_outer,
+    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
+    verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
     EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver,
     OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolPcs,
@@ -37,7 +42,14 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
     pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    pub spark_pcs_configs: Option<SparkPcsConfigs>,
     spark_fixed_prover_data: Option<SparkFixedProverData<E, Pcs>>,
+    #[serde(default)]
+    spark_tables: Option<crate::SparkTables>,
+    #[serde(skip)]
+    direct_bind_layout: Option<DirectBindLayout<E::F>>,
+    #[serde(skip)]
+    direct_multiply_layout: Option<DirectMultiplyLayout>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
@@ -58,9 +70,31 @@ pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub whir_params: WhirParams,
     pub pcs_config: Pcs::Config,
     pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    pub spark_pcs_configs: Option<SparkPcsConfigs>,
     pub domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
     marker: PhantomData<(E, Pcs)>,
+}
+
+impl<E, Pcs> ProvingKey<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    E::F: Copy + PartialEq,
+    Pcs: MlePcs<E>,
+{
+    pub fn prepare_for_proving(&mut self) -> Result<(), SpartanWhirError> {
+        match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => {
+                self.direct_bind_layout = Some(self.shape_canonical.direct_bind_layout()?);
+                self.direct_multiply_layout = Some(self.shape_canonical.direct_multiply_layout()?);
+            }
+            MatrixClosingMode::Spark => {
+                self.direct_bind_layout = None;
+                self.direct_multiply_layout = None;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -118,15 +152,31 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub num_variables: usize,
     pub column_bits: usize,
-    pub commitment: Pcs::Commitment,
+    pub erow_commitment: Pcs::Commitment,
+    pub ecol_commitment: Pcs::Commitment,
     pub erow_low_evals: Vec<E::EF>,
     pub erow_high_evals: Vec<E::EF>,
     pub ecol_low_evals: Vec<E::EF>,
     pub ecol_high_evals: Vec<E::EF>,
     pub erow_ops_evals: Vec<E::EF>,
     pub ecol_ops_evals: Vec<E::EF>,
-    pub proof: Pcs::Proof,
+    pub erow_proof: Pcs::Proof,
+    pub ecol_proof: Pcs::Proof,
     marker: PhantomData<E>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkWhirParams {
+    pub fixed_value: WhirParams,
+    pub fixed_audit: WhirParams,
+    pub read: WhirParams,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkPcsConfigs {
+    pub fixed_value: WhirPcsConfig,
+    pub fixed_audit: WhirPcsConfig,
+    pub read: WhirPcsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +185,8 @@ pub struct SpartanSnarkConfig {
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
     pub pcs_config: WhirPcsConfig,
+    #[serde(default)]
+    pub spark_whir_params: Option<SparkWhirParams>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -157,12 +209,14 @@ impl<E: SpartanWhirEngine, Pcs: MlePcs<E>> SpartanProofKind<E, Pcs> {
 }
 
 struct SparkReadProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
-    data: Pcs::ProverData,
+    erow: Pcs::ProverData,
+    ecol: Pcs::ProverData,
     marker: PhantomData<E>,
 }
 
 struct SparkReadCommitments<C> {
-    commitment: C,
+    erow: C,
+    ecol: C,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -202,7 +256,8 @@ where
     E: SpartanWhirEngine,
     Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
 {
-    commitment: Pcs::ParsedCommitment,
+    erow: Pcs::ParsedCommitment,
+    ecol: Pcs::ParsedCommitment,
 }
 
 struct ParsedSparkFixedOpenings<E, Pcs>
@@ -296,12 +351,15 @@ where
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         // Defaults to SPARK setup; call `setup_with_config` with
         // `DirectSparse` to skip SPARK preprocessing.
-        Self::setup_for_mode(
+        Self::setup_with_config(
             shape,
-            security,
-            whir_params,
-            pcs_config,
-            MatrixClosingMode::Spark,
+            &SpartanSnarkConfig {
+                matrix_closing: MatrixClosingMode::Spark,
+                security: *security,
+                whir_params: whir_params.clone(),
+                pcs_config: pcs_config.clone(),
+                spark_whir_params: None,
+            },
         )
     }
 
@@ -309,84 +367,92 @@ where
         shape: &R1csShape<F>,
         config: &SpartanSnarkConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
-        Self::setup_for_mode(
-            shape,
-            &config.security,
-            &config.whir_params,
-            &config.pcs_config,
-            config.matrix_closing,
-        )
+        Self::setup_for_mode(shape, config)
     }
 
     fn setup_for_mode(
         shape: &R1csShape<F>,
-        security: &SecurityConfig,
-        whir_params: &WhirParams,
-        pcs_config: &WhirPcsConfig,
-        matrix_closing: MatrixClosingMode,
+        config: &SpartanSnarkConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         let mut observer = NoopObserver;
         observer.on_stage(ProtocolStage::SetupStart);
 
-        security.validate()?;
+        config.security.validate()?;
         shape.validate()?;
 
         let shape_canonical = shape.pad_regular()?;
         let num_variables = shape_canonical.num_vars.ilog2() as usize;
 
-        let mut canonical_pcs_config = pcs_config.clone();
+        let mut canonical_pcs_config = config.pcs_config.clone();
         canonical_pcs_config.num_variables = num_variables;
-        canonical_pcs_config.security = *security;
-        canonical_pcs_config.whir = whir_params.clone();
+        canonical_pcs_config.security = config.security;
+        canonical_pcs_config.whir = config.whir_params.clone();
         canonical_pcs_config.validate()?;
 
-        let domain_separator = DomainSeparator::new_with_matrix_closing(
-            &shape_canonical,
-            security,
-            whir_params,
-            matrix_closing,
-        );
-        let spark_fixed_setup = match matrix_closing {
+        let transcript_spark_whir_params = match config.matrix_closing {
             MatrixClosingMode::DirectSparse => None,
+            MatrixClosingMode::Spark => config.spark_whir_params.clone(),
+        };
+        let domain_separator = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+            &shape_canonical,
+            &config.security,
+            &config.whir_params,
+            config.matrix_closing,
+            transcript_spark_whir_params,
+        );
+        let (spark_pcs_configs, spark_fixed_setup, spark_tables) = match config.matrix_closing {
+            MatrixClosingMode::DirectSparse => (None, None, None),
             MatrixClosingMode::Spark => {
                 let _profile = profile_scope("spark_fixed_setup");
-                setup_spark_fixed_commitments::<E, E::EF, Pcs>(
+                let spark_tables = preprocess_spark_tables(&shape_canonical)?;
+                let spark_pcs_configs = spark_pcs_configs_for_tables::<E::EF>(
                     &canonical_pcs_config,
-                    &shape_canonical,
-                )?
+                    &spark_tables,
+                    config.spark_whir_params.as_ref(),
+                )?;
+                let setup = setup_spark_fixed_commitments::<E, E::EF, Pcs>(
+                    &spark_pcs_configs,
+                    &spark_tables,
+                )?;
+                (Some(spark_pcs_configs), setup, Some(spark_tables))
             }
         };
         let (spark_fixed_prover_data, spark_fixed_commitments) = match spark_fixed_setup {
             Some((prover_data, commitments)) => (Some(prover_data), Some(commitments)),
             None => (None, None),
         };
-
-        let pk = ProvingKey {
-            matrix_closing,
+        let mut pk = ProvingKey {
+            matrix_closing: config.matrix_closing,
             shape_canonical: shape_canonical.clone(),
             num_cons_unpadded: shape.num_cons,
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
-            security: *security,
-            whir_params: whir_params.clone(),
+            security: config.security,
+            whir_params: config.whir_params.clone(),
             pcs_config: canonical_pcs_config.clone(),
             spark_fixed_commitments: spark_fixed_commitments.clone(),
+            spark_pcs_configs: spark_pcs_configs.clone(),
             spark_fixed_prover_data,
+            spark_tables,
+            direct_bind_layout: None,
+            direct_multiply_layout: None,
             domain_separator: domain_separator.clone(),
             observer: Some(NoopObserver),
             marker: PhantomData,
         };
+        pk.prepare_for_proving()?;
 
         let vk = VerifyingKey {
-            matrix_closing,
+            matrix_closing: config.matrix_closing,
             shape_canonical,
             num_cons_unpadded: shape.num_cons,
             num_vars_unpadded: shape.num_vars,
             num_io: shape.num_io,
-            security: *security,
-            whir_params: whir_params.clone(),
+            security: config.security,
+            whir_params: config.whir_params.clone(),
             pcs_config: canonical_pcs_config,
             spark_fixed_commitments,
+            spark_pcs_configs,
             domain_separator,
             observer: Some(NoopObserver),
             marker: PhantomData,
@@ -466,85 +532,118 @@ where
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        {
+            let _profile = profile_scope("observe_spartan_context");
+            observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        }
 
-        let mut witness_padded = witness.w.clone();
-        witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
-        let witness_mle = {
-            let _profile = profile_scope("witness_to_mle");
-            pk.shape_canonical.witness_to_mle(&witness_padded)?
+        let witness_padded = {
+            let _profile = profile_scope("pad_witness");
+            let mut witness_padded = witness.w.clone();
+            witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+            witness_padded
         };
+        {
+            let _profile = profile_scope("witness_to_mle");
+            debug_assert_eq!(witness_padded.len(), pk.shape_canonical.num_vars);
+        }
 
         observer.on_stage(ProtocolStage::PcsCommit);
         let (witness_commitment, prover_data) = {
             let _profile = profile_scope("witness_pcs_commit");
-            <Pcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_mle, challenger)?
+            <Pcs as MlePcs<E>>::commit(&pk.pcs_config, &witness_padded, challenger)?
         };
-        let instance = R1csInstance {
-            public_inputs: public_inputs.to_vec(),
-            witness_commitment,
+        let instance = {
+            let _profile = profile_scope("build_instance");
+            R1csInstance {
+                public_inputs: public_inputs.to_vec(),
+                witness_commitment,
+            }
         };
 
-        let z_witness_half = witness_padded;
-        let z_public_half = build_public_half(pk.shape_canonical.num_vars, public_inputs);
-        let z_full = [z_witness_half.clone(), z_public_half.clone()].concat();
-        let z_short = build_matrix_z(&z_witness_half, public_inputs);
+        let z_full = {
+            let _profile = profile_scope("build_z_full");
+            build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs)
+        };
+        let z_short = {
+            let _profile = profile_scope("build_matrix_z");
+            matrix_z_slice(&z_full, pk.shape_canonical.num_vars, public_inputs.len())?
+        };
 
         let (az_f, bz_f, cz_f) = {
             let _profile = profile_scope("r1cs_multiply_vec");
-            pk.shape_canonical.multiply_vec(&z_short)?
+            let layout = pk.direct_multiply_layout.as_ref().ok_or_else(|| {
+                SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+            })?;
+            pk.shape_canonical
+                .multiply_vec_parallel_with_layout_unchecked(layout, &z_short)?
         };
-        let az: Vec<E::EF> = az_f.iter().map(|&v| E::EF::from(v)).collect();
-        let bz: Vec<E::EF> = bz_f.iter().map(|&v| E::EF::from(v)).collect();
-        let cz: Vec<E::EF> = cz_f.iter().map(|&v| E::EF::from(v)).collect();
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
-        let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
-        let tau_point = MultilinearPoint(tau.clone());
+        let tau_point = {
+            let _profile = profile_scope("sample_outer_tau");
+            MultilinearPoint(sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x))
+        };
 
         let (outer_sumcheck, r_x, outer_claims) = {
             let _profile = profile_scope("outer_sumcheck");
-            prove_outer::<F, E::EF, _>(&pk.shape_canonical, &az, &bz, &cz, &tau_point, challenger)?
+            prove_outer_split_eq_base_first_owned_unchecked::<F, E::EF, _>(
+                &pk.shape_canonical,
+                az_f,
+                bz_f,
+                cz_f,
+                &tau_point,
+                challenger,
+            )?
         };
 
-        challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
-        let r = challenger.sample_algebra_element::<E::EF>();
+        let r = {
+            let _profile = profile_scope("sample_inner_joint");
+            challenger.observe_algebra_slice(&[outer_claims.0, outer_claims.1, outer_claims.2]);
+            challenger.sample_algebra_element::<E::EF>()
+        };
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
-        let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?;
-        let poly_abc: Vec<E::EF> = evals_a
-            .iter()
-            .zip(evals_b.iter())
-            .zip(evals_c.iter())
-            .map(|((&a, &b), &c)| a + r * b + r * r * c)
-            .collect();
-        let z_lifted: Vec<E::EF> = z_full.iter().map(|&v| E::EF::from(v)).collect();
-
+        let t_x = {
+            let _profile = profile_scope("eq_evals_from_point");
+            EqPolynomial::evals_from_point_parallel(&r_x.0)
+        };
+        let poly_abc: Vec<E::EF> = {
+            let _profile = profile_scope("bind_row_vars_joint");
+            let layout = pk.direct_bind_layout.as_ref().ok_or_else(|| {
+                SpartanWhirError::invalid_config_reason(
+                    InvalidConfigReason::MissingDerivedProverData,
+                )
+            })?;
+            pk.shape_canonical
+                .bind_row_vars_joint_with_layout_unchecked::<E::EF>(layout, &t_x, r)?
+        };
         let (inner_sumcheck, r_y, eval_z) = {
             let _profile = profile_scope("inner_sumcheck");
-            prove_inner::<F, E::EF, _>(
-                &pk.shape_canonical,
+            prove_inner_base_first_unchecked::<F, E::EF, _>(
                 claim_inner_joint,
-                &poly_abc,
-                &z_lifted,
+                poly_abc,
+                &z_full,
                 challenger,
             )?
         };
 
         let witness_eval = {
             let _profile = profile_scope("witness_eval");
-            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            let eval_x =
+                evaluate_public_half(pk.shape_canonical.num_vars, public_inputs, &r_y.0[1..])?;
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
-        let pcs_statement = PcsStatementBuilder::<E>::new()
-            .add_point_eval(PointEvalClaim {
-                point: MultilinearPoint(r_y.0[1..].to_vec()),
-                value: witness_eval,
-            })
-            .finalize()?;
+        let pcs_statement = {
+            let _profile = profile_scope("build_pcs_statement");
+            PcsStatementBuilder::<E>::new()
+                .add_point_eval(PointEvalClaim {
+                    point: MultilinearPoint(r_y.0[1..].to_vec()),
+                    value: witness_eval,
+                })
+                .finalize()?
+        };
 
         observer.on_stage(ProtocolStage::PcsOpen);
         let pcs_proof = {
@@ -631,9 +730,11 @@ where
             .shape_canonical
             .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
 
-        let eval_x_table =
-            public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+        let eval_x = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &r_y.0[1..],
+        )?;
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let expected_inner = (eval_a + r * eval_b + r * r * eval_c) * eval_z;
         if inner_final_claim != expected_inner {
@@ -748,19 +849,19 @@ where
             )?
         };
 
-        let spark_tables = {
-            let _profile = profile_scope("spark_preprocess_tables");
-            preprocess_spark_tables(&pk.shape_canonical)?
+        let computed_spark_tables;
+        let spark_tables = match pk.spark_tables.as_ref() {
+            Some(tables) => tables,
+            None => {
+                let _profile = profile_scope("spark_preprocess_tables");
+                computed_spark_tables = preprocess_spark_tables(&pk.shape_canonical)?;
+                &computed_spark_tables
+            }
         };
-        let spark_value_pcs_config =
-            spark_table_pcs_config(&pk.pcs_config, spark_tables.value_domain_size)?;
-        let spark_fixed_value_pcs_config = spark_fixed_value_pcs_config(&spark_value_pcs_config)?;
-        let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-            &pk.pcs_config,
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
-        )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
+        let spark_pcs_configs = pk
+            .spark_pcs_configs
+            .clone()
+            .ok_or(SpartanWhirError::invalid_config())?;
         let fixed_prover_data = pk
             .spark_fixed_prover_data
             .clone()
@@ -772,8 +873,8 @@ where
         let fixed_prover_data = {
             let _profile = profile_scope("spark_prepare_fixed_openings");
             prepare_spark_fixed_openings::<E, E::EF, Pcs>(
-                &spark_fixed_value_pcs_config,
-                &spark_fixed_audit_pcs_config,
+                &spark_pcs_configs.fixed_value,
+                &spark_pcs_configs.fixed_audit,
                 fixed_prover_data,
                 challenger,
             )?
@@ -785,25 +886,26 @@ where
         let (read_prover_data, read_commitments) = {
             let _profile = profile_scope("spark_commit_read_tables");
             commit_spark_read_tables::<E, E::EF, Pcs>(
-                &spark_read_pcs_config,
+                &spark_pcs_configs.read,
                 &read_tables,
                 challenger,
             )?
         };
         let (spark_products, product_claims) = {
             let _profile = profile_scope("spark_memory_products");
-            prove_spark_batched_memory_products_with_leaf_claims(
+            prove_spark_batched_memory_products_with_read_tables_and_leaf_claims(
                 &spark_tables,
                 &r_x,
                 &r_y,
+                &read_tables,
                 challenger,
             )?
         };
         let spark_fixed_openings = {
             let _profile = profile_scope("spark_open_fixed_tables");
             open_spark_fixed_tables::<E, E::EF, Pcs>(
-                &spark_fixed_value_pcs_config,
-                &spark_fixed_audit_pcs_config,
+                &spark_pcs_configs.fixed_value,
+                &spark_pcs_configs.fixed_audit,
                 fixed_prover_data,
                 expected_fixed_commitments,
                 &spark_tables,
@@ -814,7 +916,7 @@ where
         let spark_read_openings = {
             let _profile = profile_scope("spark_open_read_tables");
             open_spark_read_tables::<E, E::EF, Pcs>(
-                &spark_read_pcs_config,
+                &spark_pcs_configs.read,
                 read_prover_data,
                 read_commitments,
                 &product_claims,
@@ -824,8 +926,8 @@ where
 
         let witness_eval = {
             let _profile = profile_scope("witness_eval");
-            let eval_x_table = public_half_as_extension(pk.shape_canonical.num_vars, public_inputs);
-            let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+            let eval_x =
+                evaluate_public_half(pk.shape_canonical.num_vars, public_inputs, &r_y.0[1..])?;
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
@@ -919,15 +1021,10 @@ where
         )?;
 
         let spark_tables = preprocess_spark_tables(&vk.shape_canonical)?;
-        let spark_value_pcs_config =
-            spark_table_pcs_config(&vk.pcs_config, spark_tables.value_domain_size)?;
-        let spark_fixed_value_pcs_config = spark_fixed_value_pcs_config(&spark_value_pcs_config)?;
-        let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-            &vk.pcs_config,
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
-        )?;
-        let spark_read_pcs_config = spark_read_pcs_config::<E::EF>(&spark_value_pcs_config)?;
+        let spark_pcs_configs = vk
+            .spark_pcs_configs
+            .clone()
+            .ok_or(SpartanWhirError::invalid_config())?;
         let expected_fixed_commitments = vk
             .spark_fixed_commitments
             .clone()
@@ -937,13 +1034,13 @@ where
             &expected_fixed_commitments,
         )?;
         let parsed_fixed_openings = parse_spark_fixed_openings::<E, E::EF, Pcs>(
-            &spark_fixed_value_pcs_config,
-            &spark_fixed_audit_pcs_config,
+            &spark_pcs_configs.fixed_value,
+            &spark_pcs_configs.fixed_audit,
             &proof.spark_fixed_openings,
             challenger,
         )?;
         let parsed_read_openings = parse_spark_read_openings::<E, E::EF, Pcs>(
-            &spark_read_pcs_config,
+            &spark_pcs_configs.read,
             &proof.spark_read_openings,
             challenger,
         )?;
@@ -953,8 +1050,8 @@ where
             challenger,
         )?;
         finalize_spark_fixed_openings::<E, E::EF, Pcs>(
-            &spark_fixed_value_pcs_config,
-            &spark_fixed_audit_pcs_config,
+            &spark_pcs_configs.fixed_value,
+            &spark_pcs_configs.fixed_audit,
             spark_tables.row_memory_size,
             spark_tables.col_memory_size,
             &proof.spark_fixed_openings,
@@ -963,7 +1060,7 @@ where
             challenger,
         )?;
         let read_opening_evals = finalize_spark_read_openings::<E, E::EF, Pcs>(
-            &spark_read_pcs_config,
+            &spark_pcs_configs.read,
             &proof.spark_read_openings,
             parsed_read_openings,
             &product_claims,
@@ -979,9 +1076,11 @@ where
             &r_y,
         )?;
 
-        let eval_x_table =
-            public_half_as_extension(vk.shape_canonical.num_vars, &instance.public_inputs);
-        let eval_x = evaluate_mle_table(&eval_x_table, &r_y.0[1..])?;
+        let eval_x = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &r_y.0[1..],
+        )?;
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let spark_matrix_eval = matrix_eval_rlc(product_claims.matrix_evals, r);
         if inner_final_claim != spark_matrix_eval * eval_z {
@@ -1039,8 +1138,8 @@ where
 }
 
 fn setup_spark_fixed_commitments<E, EF, Pcs>(
-    pcs_config: &WhirPcsConfig,
-    shape: &R1csShape<F>,
+    configs: &SparkPcsConfigs,
+    spark_tables: &crate::SparkTables,
 ) -> Result<
     Option<(
         SparkFixedProverData<E, Pcs>,
@@ -1055,34 +1154,48 @@ where
     <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    let spark_tables = preprocess_spark_tables(shape)?;
-    let spark_value_pcs_config = spark_table_pcs_config(pcs_config, spark_tables.value_domain_size);
-    let spark_fixed_audit_pcs_config = spark_fixed_audit_pcs_config(
-        pcs_config,
-        spark_tables.row_memory_size,
-        spark_tables.col_memory_size,
-    );
-
-    let (Ok(value_config), Ok(audit_config)) =
-        (spark_value_pcs_config, spark_fixed_audit_pcs_config)
-    else {
-        return Ok(None);
-    };
-    let Ok(fixed_value_config) = spark_fixed_value_pcs_config(&value_config) else {
-        return Ok(None);
-    };
-
     let mut spark_setup_challenger = E::challenger();
     let (prover_data, commitments) = commit_spark_fixed_tables::<E, EF, Pcs>(
-        &fixed_value_config,
-        &audit_config,
-        &spark_tables,
+        &configs.fixed_value,
+        &configs.fixed_audit,
+        spark_tables,
         &mut spark_setup_challenger,
     )?;
     Ok(Some((prover_data, commitments)))
 }
 
-fn spark_table_pcs_config(
+fn spark_pcs_configs_for_tables<EF>(
+    base: &WhirPcsConfig,
+    spark_tables: &crate::SparkTables,
+    spark_whir_params: Option<&SparkWhirParams>,
+) -> Result<SparkPcsConfigs, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    let fixed_value_whir = spark_whir_params
+        .map(|params| &params.fixed_value)
+        .unwrap_or(&base.whir);
+    let fixed_audit_whir = spark_whir_params
+        .map(|params| &params.fixed_audit)
+        .unwrap_or(&base.whir);
+    let read_whir = spark_whir_params
+        .map(|params| &params.read)
+        .unwrap_or(&base.whir);
+    let value_shape_config = spark_table_shape_pcs_config(base, spark_tables.value_domain_size)?;
+
+    Ok(SparkPcsConfigs {
+        fixed_value: spark_fixed_value_pcs_config_with_whir(&value_shape_config, fixed_value_whir)?,
+        fixed_audit: spark_fixed_audit_pcs_config_with_whir(
+            base,
+            spark_tables.row_memory_size,
+            spark_tables.col_memory_size,
+            fixed_audit_whir,
+        )?,
+        read: spark_read_pcs_config_with_whir::<EF>(&value_shape_config, read_whir)?,
+    })
+}
+
+fn spark_table_shape_pcs_config(
     base: &WhirPcsConfig,
     domain_size: usize,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
@@ -1091,12 +1204,23 @@ fn spark_table_pcs_config(
     }
     let mut config = base.clone();
     config.num_variables = domain_size.ilog2() as usize;
+    Ok(config)
+}
+
+fn spark_table_pcs_config_with_whir(
+    base: &WhirPcsConfig,
+    domain_size: usize,
+    whir_params: &WhirParams,
+) -> Result<WhirPcsConfig, SpartanWhirError> {
+    let mut config = spark_table_shape_pcs_config(base, domain_size)?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_read_pcs_config<EF>(
+fn spark_read_pcs_config_with_whir<EF>(
     value_config: &WhirPcsConfig,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError>
 where
     EF: ExtField,
@@ -1106,26 +1230,30 @@ where
         .num_variables
         .checked_add(read_column_bits::<EF>())
         .ok_or(SpartanWhirError::invalid_config())?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_fixed_value_pcs_config(
+fn spark_fixed_value_pcs_config_with_whir(
     value_config: &WhirPcsConfig,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
     let mut config = value_config.clone();
     config.num_variables = config
         .num_variables
         .checked_add(fixed_value_column_bits())
         .ok_or(SpartanWhirError::invalid_config())?;
+    config.whir = whir_params.clone();
     config.validate()?;
     Ok(config)
 }
 
-fn spark_fixed_audit_pcs_config(
+fn spark_fixed_audit_pcs_config_with_whir(
     base: &WhirPcsConfig,
     row_memory_size: usize,
     col_memory_size: usize,
+    whir_params: &WhirParams,
 ) -> Result<WhirPcsConfig, SpartanWhirError> {
     let audit_memory_size = row_memory_size
         .max(col_memory_size)
@@ -1134,7 +1262,7 @@ fn spark_fixed_audit_pcs_config(
     let audit_domain_size = audit_memory_size
         .checked_mul(fixed_audit_column_count())
         .ok_or(SpartanWhirError::invalid_config())?;
-    spark_table_pcs_config(base, audit_domain_size)
+    spark_table_pcs_config_with_whir(base, audit_domain_size, whir_params)
 }
 
 fn commit_spark_fixed_tables<E, EF, Pcs>(
@@ -1266,25 +1394,32 @@ where
         return Err(SpartanWhirError::invalid_config());
     }
     // Column-major layout: high selector bits choose the coordinate column, and
-    // the remaining coordinates are the original sparse-entry point.
-    let mut packed = vec![F::ZERO; domain_size * read_column_count::<EF>()];
+    // the remaining coordinates are the original sparse-entry point. The row
+    // and column read vectors are committed separately so each read opening has
+    // one fewer selector bit than the old combined erow|ecol table.
+    let mut packed_erow = vec![F::ZERO; domain_size * read_column_count::<EF>()];
     for (column_index, column) in erow_columns.iter().enumerate() {
-        packed[column_index * domain_size..(column_index + 1) * domain_size]
+        packed_erow[column_index * domain_size..(column_index + 1) * domain_size]
             .copy_from_slice(column);
     }
-    for (coord_index, column) in ecol_columns.iter().enumerate() {
-        let column_index = EF::DIMENSION + coord_index;
-        packed[column_index * domain_size..(column_index + 1) * domain_size]
+    let mut packed_ecol = vec![F::ZERO; domain_size * read_column_count::<EF>()];
+    for (column_index, column) in ecol_columns.iter().enumerate() {
+        packed_ecol[column_index * domain_size..(column_index + 1) * domain_size]
             .copy_from_slice(column);
     }
-    let (commitment, data) = <Pcs as MlePcs<E>>::commit(config, &packed, challenger)?;
+    let (erow_commitment, erow) = <Pcs as MlePcs<E>>::commit(config, &packed_erow, challenger)?;
+    let (ecol_commitment, ecol) = <Pcs as MlePcs<E>>::commit(config, &packed_ecol, challenger)?;
 
     Ok((
         SparkReadProverData {
-            data,
+            erow,
+            ecol,
             marker: PhantomData,
         },
-        SparkReadCommitments { commitment },
+        SparkReadCommitments {
+            erow: erow_commitment,
+            ecol: ecol_commitment,
+        },
     ))
 }
 
@@ -1418,8 +1553,12 @@ where
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let (claims, erow_evals, ecol_evals) =
-        read_opening_claims_from_prover_data(config, &prover_data.data, product_claims)?;
+    let (erow_claims, ecol_claims, erow_evals, ecol_evals) = read_opening_claims_from_prover_data(
+        config,
+        &prover_data.erow,
+        &prover_data.ecol,
+        product_claims,
+    )?;
     let read_evals = split_read_coordinate_evals::<EF>(&erow_evals, &ecol_evals)?;
     let expected_left = [
         read_evals.erow_low,
@@ -1443,20 +1582,26 @@ where
     {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    let statement = point_eval_statement::<E, EF>(&claims)?;
-    let proof = <Pcs as MlePcs<E>>::open(config, prover_data.data, &statement, challenger)?;
+    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
+    let erow_proof =
+        <Pcs as MlePcs<E>>::open(config, prover_data.erow, &erow_statement, challenger)?;
+    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
+    let ecol_proof =
+        <Pcs as MlePcs<E>>::open(config, prover_data.ecol, &ecol_statement, challenger)?;
 
     Ok(SparkReadOpeningProof {
         num_variables: config.num_variables,
         column_bits: read_column_bits::<EF>(),
-        commitment: commitments.commitment,
+        erow_commitment: commitments.erow,
+        ecol_commitment: commitments.ecol,
         erow_low_evals: erow_evals[0].clone(),
         erow_high_evals: erow_evals[1].clone(),
         ecol_low_evals: ecol_evals[0].clone(),
         ecol_high_evals: ecol_evals[1].clone(),
         erow_ops_evals: erow_evals[2].clone(),
         ecol_ops_evals: ecol_evals[2].clone(),
-        proof,
+        erow_proof,
+        ecol_proof,
         marker: PhantomData,
     })
 }
@@ -1503,10 +1648,16 @@ where
 {
     validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
     Ok(ParsedSparkReadOpenings {
-        commitment: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+        erow: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
             config,
-            &proof.commitment,
-            &proof.proof,
+            &proof.erow_commitment,
+            &proof.erow_proof,
+            challenger,
+        )?,
+        ecol: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+            config,
+            &proof.ecol_commitment,
+            &proof.ecol_proof,
             challenger,
         )?,
     })
@@ -1587,13 +1738,22 @@ where
         proof.ecol_high_evals.as_slice(),
         proof.ecol_ops_evals.as_slice(),
     ];
-    let claims = read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
-    let statement = point_eval_statement::<E, EF>(&claims)?;
+    let (erow_claims, ecol_claims) =
+        read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
+    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
     <Pcs as ProtocolPcs<E>>::verify_finalize(
         config,
-        &parsed.commitment,
-        &statement,
-        &proof.proof,
+        &parsed.erow,
+        &erow_statement,
+        &proof.erow_proof,
+        challenger,
+    )?;
+    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
+    <Pcs as ProtocolPcs<E>>::verify_finalize(
+        config,
+        &parsed.ecol,
+        &ecol_statement,
+        &proof.ecol_proof,
         challenger,
     )?;
     split_read_coordinate_evals(
@@ -1635,78 +1795,74 @@ where
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&value| EF::from(value))
-        .collect();
+    let polynomial = prover_data.polynomial();
     let (dot_low_point, dot_high_point) = dotproduct_full_domain_points(&product_claims.ops)?;
     let mut claims = Vec::with_capacity(10);
     let row_addr = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         0,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let col_addr = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         1,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let val_a_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         2,
         &dot_low_point,
         &mut claims,
     )?;
     let val_a_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         2,
         &dot_high_point,
         &mut claims,
     )?;
     let val_b_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         3,
         &dot_low_point,
         &mut claims,
     )?;
     let val_b_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         3,
         &dot_high_point,
         &mut claims,
     )?;
     let val_c_low = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         4,
         &dot_low_point,
         &mut claims,
     )?;
     let val_c_high = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         4,
         &dot_high_point,
         &mut claims,
     )?;
     let row_read_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         5,
         &product_claims.ops.product_point,
         &mut claims,
     )?;
     let col_read_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_value_column_bits(),
         6,
         &product_claims.ops.product_point,
@@ -1821,11 +1977,7 @@ where
         .num_variables
         .checked_sub(fixed_audit_column_bits())
         .ok_or(SpartanWhirError::invalid_config())?;
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&value| EF::from(value))
-        .collect();
+    let polynomial = prover_data.polynomial();
     let row_point = low_block_memory_point(
         &product_claims.mem.product_point,
         row_memory_size,
@@ -1838,14 +1990,14 @@ where
     )?;
     let mut claims = Vec::with_capacity(2);
     let row_audit_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_audit_column_bits(),
         0,
         &row_point,
         &mut claims,
     )?;
     let col_audit_ts = push_rectangular_opening_claim(
-        &poly_ext,
+        polynomial,
         fixed_audit_column_bits(),
         1,
         &col_point,
@@ -1920,10 +2072,12 @@ type ReadCoordinateEvals<EF> = [Vec<EF>; 3];
 
 fn read_opening_claims_from_prover_data<EF, D>(
     config: &WhirPcsConfig,
-    prover_data: &D,
+    erow_prover_data: &D,
+    ecol_prover_data: &D,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
 ) -> Result<
     (
+        Vec<(MultilinearPoint<EF>, EF)>,
         Vec<(MultilinearPoint<EF>, EF)>,
         ReadCoordinateEvals<EF>,
         ReadCoordinateEvals<EF>,
@@ -1934,16 +2088,16 @@ where
     EF: ExtField,
     D: CommittedPolynomialView<EF>,
 {
-    if prover_data.num_variables() != config.num_variables {
+    if erow_prover_data.num_variables() != config.num_variables
+        || ecol_prover_data.num_variables() != config.num_variables
+    {
         return Err(SpartanWhirError::invalid_config());
     }
-    let poly_ext: Vec<EF> = prover_data
-        .polynomial()
-        .iter()
-        .map(|&v| EF::from(v))
-        .collect();
+    let erow_polynomial = erow_prover_data.polynomial();
+    let ecol_polynomial = ecol_prover_data.polynomial();
     let points = read_opening_points(product_claims)?;
-    let mut claims = Vec::with_capacity(6 * EF::DIMENSION);
+    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
+    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
     let mut erow_evals = [
         Vec::with_capacity(EF::DIMENSION),
         Vec::with_capacity(EF::DIMENSION),
@@ -1957,53 +2111,52 @@ where
 
     for column in 0..EF::DIMENSION {
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_low,
             &mut erow_evals[0],
-            &mut claims,
+            &mut erow_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_high,
             &mut erow_evals[1],
-            &mut claims,
+            &mut erow_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            erow_polynomial,
             column,
             &points.erow_ops,
             &mut erow_evals[2],
-            &mut claims,
+            &mut erow_claims,
         )?;
     }
-    for coordinate in 0..EF::DIMENSION {
-        let column = EF::DIMENSION + coordinate;
+    for column in 0..EF::DIMENSION {
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_low,
             &mut ecol_evals[0],
-            &mut claims,
+            &mut ecol_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_high,
             &mut ecol_evals[1],
-            &mut claims,
+            &mut ecol_claims,
         )?;
         push_read_opening_claim(
-            &poly_ext,
+            ecol_polynomial,
             column,
             &points.ecol_ops,
             &mut ecol_evals[2],
-            &mut claims,
+            &mut ecol_claims,
         )?;
     }
 
-    Ok((claims, erow_evals, ecol_evals))
+    Ok((erow_claims, ecol_claims, erow_evals, ecol_evals))
 }
 
 struct SparkReadOpeningPoints<EF> {
@@ -2036,7 +2189,13 @@ fn read_opening_claims_from_evals<EF>(
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
     erow_evals: &[&[EF]; 3],
     ecol_evals: &[&[EF]; 3],
-) -> Result<Vec<(MultilinearPoint<EF>, EF)>, SpartanWhirError>
+) -> Result<
+    (
+        Vec<(MultilinearPoint<EF>, EF)>,
+        Vec<(MultilinearPoint<EF>, EF)>,
+    ),
+    SpartanWhirError,
+>
 where
     EF: ExtField,
 {
@@ -2046,41 +2205,41 @@ where
         return Err(SpartanWhirError::invalid_config());
     }
     let points = read_opening_points(product_claims)?;
-    let mut claims = Vec::with_capacity(6 * EF::DIMENSION);
+    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
     for column in 0..EF::DIMENSION {
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_low)?,
             erow_evals[0][column],
         ));
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_high)?,
             erow_evals[1][column],
         ));
-        claims.push((
+        erow_claims.push((
             read_rectangular_point::<EF>(column, &points.erow_ops)?,
             erow_evals[2][column],
         ));
     }
+    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
     for coordinate in 0..EF::DIMENSION {
-        let column = EF::DIMENSION + coordinate;
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_low)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_low)?,
             ecol_evals[0][coordinate],
         ));
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_high)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_high)?,
             ecol_evals[1][coordinate],
         ));
-        claims.push((
-            read_rectangular_point::<EF>(column, &points.ecol_ops)?,
+        ecol_claims.push((
+            read_rectangular_point::<EF>(coordinate, &points.ecol_ops)?,
             ecol_evals[2][coordinate],
         ));
     }
-    Ok(claims)
+    Ok((erow_claims, ecol_claims))
 }
 
 fn push_read_opening_claim<EF>(
-    poly_ext: &[EF],
+    polynomial: &[F],
     column: usize,
     base_point: &MultilinearPoint<EF>,
     evals: &mut Vec<EF>,
@@ -2090,7 +2249,13 @@ where
     EF: ExtField,
 {
     let point = read_rectangular_point::<EF>(column, base_point)?;
-    let value = push_opening_claim_at_point(poly_ext, point, claims)?;
+    let value = evaluate_base_rectangular_opening_claim(
+        polynomial,
+        read_column_bits::<EF>(),
+        column,
+        base_point,
+    )?;
+    claims.push((point, value));
     evals.push(value);
     Ok(())
 }
@@ -2148,7 +2313,7 @@ where
 }
 
 fn push_rectangular_opening_claim<EF>(
-    poly_ext: &[EF],
+    polynomial: &[F],
     column_bits: usize,
     column: usize,
     base_point: &MultilinearPoint<EF>,
@@ -2158,20 +2323,87 @@ where
     EF: ExtField,
 {
     let point = rectangular_point(column, column_bits, base_point)?;
-    push_opening_claim_at_point(poly_ext, point, claims)
+    let value =
+        evaluate_base_rectangular_opening_claim(polynomial, column_bits, column, base_point)?;
+    claims.push((point, value));
+    Ok(value)
 }
 
-fn push_opening_claim_at_point<EF>(
-    poly_ext: &[EF],
-    point: MultilinearPoint<EF>,
-    claims: &mut Vec<(MultilinearPoint<EF>, EF)>,
+fn evaluate_base_rectangular_opening_claim<EF>(
+    polynomial: &[F],
+    column_bits: usize,
+    column: usize,
+    base_point: &MultilinearPoint<EF>,
 ) -> Result<EF, SpartanWhirError>
 where
     EF: ExtField,
 {
-    let value = evaluate_mle_table(poly_ext, &point.0)?;
-    claims.push((point, value));
-    Ok(value)
+    let column_count = 1usize
+        .checked_shl(column_bits as u32)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    let domain_size = 1usize
+        .checked_shl(base_point.0.len() as u32)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    if column >= column_count
+        || polynomial.len()
+            != domain_size
+                .checked_mul(column_count)
+                .ok_or(SpartanWhirError::invalid_config())?
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let start = column
+        .checked_mul(domain_size)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    let end = start
+        .checked_add(domain_size)
+        .ok_or(SpartanWhirError::invalid_config())?;
+    evaluate_base_mle_table_as_extension(&polynomial[start..end], &base_point.0)
+}
+
+fn evaluate_base_mle_table_as_extension<EF>(
+    table: &[F],
+    point: &[EF],
+) -> Result<EF, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    if table.is_empty() || !table.len().is_power_of_two() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    let expected_len = 1usize
+        .checked_shl(point.len() as u32)
+        .ok_or(SpartanWhirError::InvalidRoundPolynomial)?;
+    if table.len() != expected_len {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    if point.is_empty() {
+        return Ok(EF::from(table[0]));
+    }
+
+    let first_challenge = point[0];
+    let first_half = table.len() / 2;
+    let mut layer = Vec::with_capacity(first_half);
+    for i in 0..first_half {
+        let lo = table[i];
+        let hi = table[i + first_half];
+        layer.push(EF::from(lo) + first_challenge * (hi - lo));
+    }
+
+    let mut active = layer.len();
+    for &r_i in &point[1..] {
+        let half = active / 2;
+        for i in 0..half {
+            let lo = layer[i];
+            let hi = layer[i + half];
+            layer[i] = lo + r_i * (hi - lo);
+        }
+        active = half;
+    }
+
+    Ok(layer[0])
 }
 
 fn rectangular_point<EF>(
@@ -2201,7 +2433,7 @@ pub fn read_column_count<EF>() -> usize
 where
     EF: ExtField,
 {
-    (2 * EF::DIMENSION).next_power_of_two()
+    EF::DIMENSION.next_power_of_two()
 }
 
 pub fn read_column_bits<EF>() -> usize
@@ -2367,14 +2599,66 @@ fn build_public_half(num_vars: usize, public_inputs: &[F]) -> Vec<F> {
     out
 }
 
-fn public_half_as_extension<Ext>(num_vars: usize, public_inputs: &[F]) -> Vec<Ext>
+fn build_z_full(mut witness_half: Vec<F>, num_vars: usize, public_inputs: &[F]) -> Vec<F> {
+    debug_assert_eq!(witness_half.len(), num_vars);
+    let public_offset = witness_half.len();
+    witness_half.resize(public_offset + num_vars, F::ZERO);
+    witness_half[public_offset] = F::ONE;
+    for (i, &value) in public_inputs.iter().enumerate() {
+        witness_half[public_offset + i + 1] = value;
+    }
+    witness_half
+}
+
+fn matrix_z_slice(
+    z_full: &[F],
+    num_vars: usize,
+    public_input_len: usize,
+) -> Result<&[F], SpartanWhirError> {
+    let len = num_vars
+        .checked_add(public_input_len)
+        .and_then(|n| n.checked_add(1))
+        .ok_or(SpartanWhirError::InvalidWitnessLength)?;
+    z_full
+        .get(..len)
+        .ok_or(SpartanWhirError::InvalidWitnessLength)
+}
+
+fn evaluate_public_half<EF>(
+    num_vars: usize,
+    public_inputs: &[F],
+    point: &[EF],
+) -> Result<EF, SpartanWhirError>
 where
-    Ext: ExtField,
+    EF: ExtField,
 {
-    build_public_half(num_vars, public_inputs)
-        .into_iter()
-        .map(Ext::from)
-        .collect()
+    if num_vars == 0 || !num_vars.is_power_of_two() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    if point.len() != num_vars.ilog2() as usize {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    if public_inputs.len() >= num_vars {
+        return Err(SpartanWhirError::InvalidPublicInputLength);
+    }
+
+    let active_len = public_inputs
+        .len()
+        .checked_add(1)
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or(SpartanWhirError::InvalidPublicInputLength)?;
+    let active_vars = active_len.ilog2() as usize;
+    let fixed_zero_vars = point.len() - active_vars;
+    let fixed_zero_weight = point[..fixed_zero_vars]
+        .iter()
+        .fold(EF::ONE, |acc, &r| acc * (EF::ONE - r));
+
+    let mut table = vec![EF::ZERO; active_len];
+    table[0] = EF::ONE;
+    for (i, &value) in public_inputs.iter().enumerate() {
+        table[i + 1] = EF::from(value);
+    }
+    Ok(fixed_zero_weight * crate::evaluate_mle_table(&table, &point[fixed_zero_vars..])?)
 }
 
 fn build_matrix_z(witness: &[F], public_inputs: &[F]) -> Vec<F> {
@@ -2404,7 +2688,10 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 
 #[cfg(test)]
 mod tests {
-    use super::recover_witness_eval;
+    use super::{
+        build_matrix_z, build_public_half, build_z_full, evaluate_public_half, matrix_z_slice,
+        recover_witness_eval,
+    };
     use crate::{engine::F, QuarticBinExtension};
     use p3_field::PrimeCharacteristicRing;
 
@@ -2427,5 +2714,81 @@ mod tests {
 
         let recomposed = (QuarticBinExtension::ONE - r0) * got + r0 * eval_x;
         assert_eq!(recomposed, eval_z);
+    }
+
+    #[test]
+    fn evaluate_public_half_matches_full_table() {
+        let public_inputs = vec![F::from_u32(3), F::ZERO, F::from_u32(5), F::from_u32(7)];
+        let point = vec![
+            QuarticBinExtension::from(F::from_u32(2)),
+            QuarticBinExtension::from(F::from_u32(4)),
+            QuarticBinExtension::from(F::from_u32(6)),
+        ];
+        let full_table = build_public_half(8, &public_inputs)
+            .into_iter()
+            .map(QuarticBinExtension::from)
+            .collect::<Vec<_>>();
+        let expected = crate::evaluate_mle_table(&full_table, &point).unwrap();
+
+        let got = evaluate_public_half(8, &public_inputs, &point).unwrap();
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn build_z_full_appends_public_half() {
+        let witness = vec![F::from_u32(11), F::from_u32(13), F::ZERO, F::from_u32(17)];
+        let public_inputs = vec![F::from_u32(3), F::from_u32(5)];
+
+        let got = build_z_full(witness.clone(), 4, &public_inputs);
+
+        let mut expected = witness;
+        expected.extend(build_public_half(4, &public_inputs));
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn matrix_z_slice_matches_explicit_matrix_z() {
+        let witness = vec![F::from_u32(11), F::from_u32(13), F::ZERO, F::from_u32(17)];
+        let public_inputs = vec![F::from_u32(3), F::from_u32(5)];
+        let z_full = build_z_full(witness.clone(), 4, &public_inputs);
+
+        let got = matrix_z_slice(&z_full, 4, public_inputs.len()).unwrap();
+        let expected = build_matrix_z(&witness, &public_inputs);
+
+        assert_eq!(got, expected.as_slice());
+    }
+
+    #[test]
+    fn evaluate_public_half_sparse_matches_full_table() {
+        let public_inputs = vec![F::from_u32(3), F::ZERO];
+        let point = vec![
+            QuarticBinExtension::from(F::from_u32(2)),
+            QuarticBinExtension::from(F::from_u32(4)),
+            QuarticBinExtension::from(F::from_u32(6)),
+            QuarticBinExtension::from(F::from_u32(8)),
+        ];
+        let full_table = build_public_half(16, &public_inputs)
+            .into_iter()
+            .map(QuarticBinExtension::from)
+            .collect::<Vec<_>>();
+        let expected = crate::evaluate_mle_table(&full_table, &point).unwrap();
+
+        let got = evaluate_public_half(16, &public_inputs, &point).unwrap();
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn evaluate_public_half_rejects_invalid_inputs() {
+        let point = vec![QuarticBinExtension::from(F::from_u32(2))];
+        assert_eq!(
+            evaluate_public_half(3, &[], &point),
+            Err(crate::SpartanWhirError::InvalidRoundPolynomial)
+        );
+        assert_eq!(
+            evaluate_public_half(2, &[F::ONE, F::ONE], &point),
+            Err(crate::SpartanWhirError::InvalidPublicInputLength)
+        );
     }
 }

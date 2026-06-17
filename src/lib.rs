@@ -97,9 +97,9 @@ pub use profiling::{
     ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
-    ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkReadOpeningProof,
-    SparkSpartanProof, SpartanProof, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
-    VerifyingKey,
+    ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkPcsConfigs,
+    SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof, SpartanProofKind,
+    SpartanProtocol, SpartanSnarkConfig, VerifyingKey,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MIN_SECURITY_BITS};
@@ -109,6 +109,7 @@ pub use spark::{
     preprocess_joint_with_split_vals_spark_tables, preprocess_per_matrix_spark_tables,
     preprocess_shared_union_spark_tables, preprocess_spark_tables,
     prove_spark_batched_memory_products, prove_spark_batched_memory_products_with_leaf_claims,
+    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims,
     prove_spark_batched_product, prove_spark_grand_product, prove_spark_grand_product_terms,
     prove_spark_memory_grand_products, prove_spark_memory_grand_products_with_leaf_claims,
     prove_spark_memory_products, prove_spark_value_sumcheck, prove_spark_value_sumcheck_with_reads,
@@ -134,9 +135,13 @@ pub use spark::{
 };
 pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, PointEvalClaim};
 pub use sumcheck::{
-    prove_inner, prove_outer, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
+    prove_inner, prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
+    prove_outer_split_eq_owned, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
 };
-pub use whir_params::{WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES};
+pub use whir_params::{
+    recommended_octic_schedule, recommended_octic_whir_params, WhirFoldingSchedule, WhirParams,
+    FINAL_SUMCHECK_MAX_VARIABLES,
+};
 #[cfg(feature = "whir-p3-backend")]
 pub use whir_pcs::{
     observe_whir_fs_domain_separator, prepare_committed_opening, verify_finalize,

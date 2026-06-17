@@ -4,8 +4,8 @@ use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
     engine::F, generate_satisfiable_fixture, MatrixClosingMode, MultilinearPoint,
     PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim, PoseidonQuarticEngine,
-    PoseidonSpartanProtocol, SpartanSnarkConfig, SyntheticR1csConfig, WhirFoldingSchedule,
-    WhirParams,
+    PoseidonSpartanProtocol, SparkWhirParams, SpartanSnarkConfig, SyntheticR1csConfig,
+    WhirFoldingSchedule, WhirParams,
 };
 
 type PoseidonEngineForTest = PoseidonQuarticEngine;
@@ -17,6 +17,7 @@ fn poseidon_config(mode: MatrixClosingMode) -> SpartanSnarkConfig {
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
         pcs_config: common::phase3_pcs_config(),
+        spark_whir_params: None,
     }
 }
 
@@ -113,6 +114,40 @@ fn poseidon_spark_plonky3_whir_roundtrip() {
 
     Protocol::verify_spark(&vk, &instance, &proof, &mut verifier_challenger)
         .expect("Poseidon Spark verify succeeds");
+}
+
+#[test]
+fn poseidon_spark_accepts_independent_table_whir_params() {
+    let fixture = fixture();
+    let mut config = poseidon_config(MatrixClosingMode::Spark);
+    config.whir_params = whir_params_with_starting_log_inv_rate(1);
+    config.pcs_config.whir = config.whir_params.clone();
+    config.spark_whir_params = Some(SparkWhirParams {
+        fixed_value: whir_params_with_starting_log_inv_rate(2),
+        fixed_audit: whir_params_with_starting_log_inv_rate(3),
+        read: whir_params_with_starting_log_inv_rate(2),
+    });
+
+    let (pk, vk) =
+        Protocol::setup_with_config(&fixture.shape, &config).expect("independent setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = Protocol::prove_spark(
+        &pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut prover_challenger,
+    )
+    .expect("independent Spark prove succeeds");
+
+    Protocol::verify_spark(&vk, &instance, &proof, &mut verifier_challenger)
+        .expect("independent Spark verify succeeds");
+}
+
+fn whir_params_with_starting_log_inv_rate(starting_log_inv_rate: usize) -> WhirParams {
+    let mut params = common::phase3_whir_params();
+    params.starting_log_inv_rate = starting_log_inv_rate;
+    params
 }
 
 #[test]

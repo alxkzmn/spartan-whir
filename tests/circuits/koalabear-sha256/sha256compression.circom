@@ -18,9 +18,7 @@
 */
 pragma circom 2.0.0;
 
-include "constants.circom";
-include "t1.circom";
-include "t2.circom";
+include "round.circom";
 include "../binsum.circom";
 include "sigmaplus.circom";
 
@@ -45,17 +43,8 @@ template Sha256compression() {
     component sigmaPlus[48];
     for (i=0; i<48; i++) sigmaPlus[i] = SigmaPlus();
 
-    component t1[64];
-    for (i=0; i<64; i++) t1[i] = T1(i);
-
-    component t2[64];
-    for (i=0; i<64; i++) t2[i] = T2();
-
-    component suma[64];
-    for (i=0; i<64; i++) suma[i] = BinSum(32, 2);
-
-    component sume[64];
-    for (i=0; i<64; i++) sume[i] = BinSum(32, 2);
+    component round[64];
+    for (i=0; i<64; i++) round[i] = Sha256Round(i);
 
     component fsum[8];
     for (i=0; i<8; i++) fsum[i] = BinSum(32, 2);
@@ -95,34 +84,26 @@ template Sha256compression() {
 
     for (t = 0; t<64; t++) {
         for (k=0; k<32; k++) {
-            t1[t].h[k] <== h[t][k];
-            t1[t].e[k] <== e[t][k];
-            t1[t].f[k] <== f[t][k];
-            t1[t].g[k] <== g[t][k];
-            t1[t].w[k] <== w[t][k];
-
-            t2[t].a[k] <== a[t][k];
-            t2[t].b[k] <== b[t][k];
-            t2[t].c[k] <== c[t][k];
+            round[t].a[k] <== a[t][k];
+            round[t].b[k] <== b[t][k];
+            round[t].c[k] <== c[t][k];
+            round[t].d[k] <== d[t][k];
+            round[t].e[k] <== e[t][k];
+            round[t].f[k] <== f[t][k];
+            round[t].g[k] <== g[t][k];
+            round[t].h[k] <== h[t][k];
+            round[t].w[k] <== w[t][k];
         }
 
         for (k=0; k<32; k++) {
-            sume[t].in[0][k] <== d[t][k];
-            sume[t].in[1][k] <== t1[t].out[k];
-
-            suma[t].in[0][k] <== t1[t].out[k];
-            suma[t].in[1][k] <== t2[t].out[k];
-        }
-
-        for (k=0; k<32; k++) {
-            h[t+1][k] <== g[t][k];
-            g[t+1][k] <== f[t][k];
-            f[t+1][k] <== e[t][k];
-            e[t+1][k] <== sume[t].out[k];
-            d[t+1][k] <== c[t][k];
-            c[t+1][k] <== b[t][k];
+            a[t+1][k] <== round[t].next_a[k];
             b[t+1][k] <== a[t][k];
-            a[t+1][k] <== suma[t].out[k];
+            c[t+1][k] <== b[t][k];
+            d[t+1][k] <== c[t][k];
+            e[t+1][k] <== round[t].next_e[k];
+            f[t+1][k] <== e[t][k];
+            g[t+1][k] <== f[t][k];
+            h[t+1][k] <== g[t][k];
         }
     }
 

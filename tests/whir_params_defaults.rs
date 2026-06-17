@@ -1,4 +1,6 @@
-use spartan_whir::{WhirFoldingSchedule, WhirParams};
+use spartan_whir::{
+    recommended_octic_schedule, recommended_octic_whir_params, WhirFoldingSchedule, WhirParams,
+};
 
 #[test]
 fn whir_params_defaults_match_phase_one_contract() {
@@ -24,4 +26,41 @@ fn explicit_schedule_serializes_roundtrips() {
     let json = serde_json::to_string(&params).expect("params serialize");
     let decoded: WhirParams = serde_json::from_str(&json).expect("params deserialize");
     assert_eq!(decoded, params);
+}
+
+#[test]
+fn recommended_octic_schedule_covers_known_spark_sizes_and_falls_back() {
+    assert_eq!(
+        recommended_octic_schedule(21),
+        WhirFoldingSchedule::Constant(8)
+    );
+    assert_eq!(
+        recommended_octic_schedule(22),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 }
+    );
+    assert_eq!(
+        recommended_octic_schedule(24),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 5 }
+    );
+    assert_eq!(
+        recommended_octic_schedule(26),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 }
+    );
+    assert_eq!(
+        recommended_octic_schedule(27),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 7 }
+    );
+    assert_eq!(
+        recommended_octic_schedule(28),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 8 }
+    );
+}
+
+#[test]
+fn recommended_octic_whir_params_are_valid_for_small_inputs() {
+    let params = recommended_octic_whir_params(2);
+
+    assert_eq!(params.folding_factor, 2);
+    assert_eq!(params.rs_domain_initial_reduction_factor, 2);
+    assert_eq!(params.folding_schedule, None);
 }

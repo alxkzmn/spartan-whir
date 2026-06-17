@@ -22,6 +22,7 @@ fn run_target_e2e<EF: ExtField>(
             security: *security,
             whir_params: whir_params.clone(),
             pcs_config: common::phase3_pcs_config(),
+            spark_whir_params: None,
         },
     )
     .expect("setup succeeds");

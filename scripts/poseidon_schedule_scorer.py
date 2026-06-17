@@ -31,6 +31,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidates", help="Candidate JSON from poseidon-schedule-candidates")
     parser.add_argument("--num-variables", type=int, help="Generate candidates for this size")
+    parser.add_argument("--field", default="koalabear", help="Field profile: koalabear or babybear")
     parser.add_argument("--calibration", required=True, help="Component calibration JSON")
     parser.add_argument("--out-report", required=True, help="Ranked report JSON path")
     parser.add_argument("--out-config", required=True, help="Selected PoseidonSetupConfig JSON path")
@@ -46,7 +47,7 @@ def main() -> None:
     candidates = (
         read_json(Path(args.candidates))
         if args.candidates
-        else generate_candidates(args.cargo, args.num_variables, args.max_pow_bits)
+        else generate_candidates(args.cargo, args.num_variables, args.max_pow_bits, args.field)
     )
     apply_case_metrics(candidates, args.constraint_work, args.case_label)
     calibration = read_json(Path(args.calibration))
@@ -213,7 +214,9 @@ def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[
     }
 
 
-def generate_candidates(cargo: str, num_variables: int, max_pow_bits: int) -> dict[str, Any]:
+def generate_candidates(
+    cargo: str, num_variables: int, max_pow_bits: int, field: str
+) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
         cargo,
@@ -226,6 +229,8 @@ def generate_candidates(cargo: str, num_variables: int, max_pow_bits: int) -> di
         "--",
         "--num-variables",
         str(num_variables),
+        "--field",
+        field,
         "--max-pow-bits",
         str(max_pow_bits),
     ]

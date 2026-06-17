@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{R1csShape, SecurityConfig, SoundnessAssumption, WhirParams};
+use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, WhirParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {
@@ -21,6 +21,8 @@ pub struct DomainSeparator {
     pub merkle_security_bits: u32,
     pub soundness_assumption: SoundnessAssumption,
     pub whir_params: WhirParams,
+    #[serde(default)]
+    pub spark_whir_params: Option<SparkWhirParams>,
 }
 
 impl DomainSeparator {
@@ -43,6 +45,26 @@ impl DomainSeparator {
         whir_params: &WhirParams,
         matrix_closing: MatrixClosingMode,
     ) -> Self {
+        Self::new_with_matrix_closing_and_spark_whir_params(
+            shape,
+            security,
+            whir_params,
+            matrix_closing,
+            None,
+        )
+    }
+
+    pub fn new_with_matrix_closing_and_spark_whir_params<F>(
+        shape: &R1csShape<F>,
+        security: &SecurityConfig,
+        whir_params: &WhirParams,
+        matrix_closing: MatrixClosingMode,
+        spark_whir_params: Option<SparkWhirParams>,
+    ) -> Self {
+        let spark_whir_params = match matrix_closing {
+            MatrixClosingMode::DirectSparse => None,
+            MatrixClosingMode::Spark => spark_whir_params,
+        };
         Self {
             protocol_id: b"spartan-whir-v0".to_vec(),
             matrix_closing,
@@ -53,6 +75,7 @@ impl DomainSeparator {
             merkle_security_bits: security.merkle_security_bits,
             soundness_assumption: security.soundness_assumption,
             whir_params: whir_params.clone(),
+            spark_whir_params,
         }
     }
 
@@ -66,16 +89,26 @@ impl DomainSeparator {
         out.extend_from_slice(&self.security_level_bits.to_le_bytes());
         out.extend_from_slice(&self.merkle_security_bits.to_le_bytes());
         out.push(soundness_to_byte(self.soundness_assumption));
-        out.extend_from_slice(&self.whir_params.pow_bits.to_le_bytes());
-        out.extend_from_slice(&(self.whir_params.folding_factor as u64).to_le_bytes());
-        out.extend_from_slice(&(self.whir_params.starting_log_inv_rate as u64).to_le_bytes());
-        out.extend_from_slice(
-            &(self.whir_params.rs_domain_initial_reduction_factor as u64).to_le_bytes(),
-        );
-        if should_encode_schedule_suffix(&self.whir_params) {
-            encode_folding_schedule(&self.whir_params, &mut out);
+        encode_whir_params(&self.whir_params, &mut out);
+        if self.matrix_closing == MatrixClosingMode::Spark {
+            if let Some(spark_whir_params) = &self.spark_whir_params {
+                out.push(1);
+                encode_whir_params(&spark_whir_params.fixed_value, &mut out);
+                encode_whir_params(&spark_whir_params.fixed_audit, &mut out);
+                encode_whir_params(&spark_whir_params.read, &mut out);
+            }
         }
         out
+    }
+}
+
+fn encode_whir_params(params: &WhirParams, out: &mut Vec<u8>) {
+    out.extend_from_slice(&params.pow_bits.to_le_bytes());
+    out.extend_from_slice(&(params.folding_factor as u64).to_le_bytes());
+    out.extend_from_slice(&(params.starting_log_inv_rate as u64).to_le_bytes());
+    out.extend_from_slice(&(params.rs_domain_initial_reduction_factor as u64).to_le_bytes());
+    if should_encode_schedule_suffix(params) {
+        encode_folding_schedule(params, out);
     }
 }
 

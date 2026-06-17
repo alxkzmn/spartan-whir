@@ -1,9 +1,9 @@
 mod common;
 
 use spartan_whir::{
-    generate_satisfiable_fixture, setup_poseidon, MatrixClosingMode, PoseidonProof,
-    PoseidonProvingKey, PoseidonSetupConfig, PoseidonVerifyingKey, QuarticBinExtension,
-    SpartanSnarkConfig, SyntheticR1csConfig,
+    generate_satisfiable_fixture, setup_poseidon, InvalidConfigReason, MatrixClosingMode,
+    PoseidonProof, PoseidonProvingKey, PoseidonSetupConfig, PoseidonVerifyingKey,
+    QuarticBinExtension, SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig,
 };
 
 fn config(mode: MatrixClosingMode) -> PoseidonSetupConfig {
@@ -12,6 +12,7 @@ fn config(mode: MatrixClosingMode) -> PoseidonSetupConfig {
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
         pcs_config: common::phase3_pcs_config(),
+        spark_whir_params: None,
     }
 }
 
@@ -57,15 +58,17 @@ fn poseidon_deployment_types_are_serializable() {
         config(MatrixClosingMode::DirectSparse),
     )
     .expect("setup succeeds");
+    let witness = fixture.witness.clone();
+    let public_inputs = fixture.public_inputs.clone();
     let proof = pk
-        .prove(fixture.witness, fixture.public_inputs)
+        .prove(witness.clone(), public_inputs.clone())
         .expect("prove succeeds");
 
     let pk_bytes = bincode::serialize(&pk).expect("proving key serializes");
     let vk_bytes = bincode::serialize(&vk).expect("verifying key serializes");
     let proof_bytes = serde_json::to_vec(&proof).expect("proof serializes");
 
-    let pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
+    let mut pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("proving key deserializes");
     let vk_roundtrip: PoseidonVerifyingKey<QuarticBinExtension> =
         bincode::deserialize(&vk_bytes).expect("verifying key deserializes");
@@ -76,6 +79,23 @@ fn poseidon_deployment_types_are_serializable() {
     vk_roundtrip
         .verify(&proof_roundtrip)
         .expect("deserialized verifying key verifies deserialized proof");
+    let missing_cache_error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
+        Ok(_) => panic!("deserialized proving key proves without derived cache rebuild"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        missing_cache_error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+    );
+    pk_roundtrip
+        .prepare_for_proving()
+        .expect("derived prover cache rebuild succeeds");
+    let proof_from_roundtrip_pk = pk_roundtrip
+        .prove(witness, public_inputs)
+        .expect("deserialized proving key proves");
+    vk_roundtrip
+        .verify(&proof_from_roundtrip_pk)
+        .expect("deserialized verifying key verifies proof from deserialized proving key");
 
     let mut tampered_proof_bytes = proof_bytes;
     let byte = tampered_proof_bytes
@@ -109,7 +129,7 @@ fn poseidon_spark_proving_key_is_serializable() {
     );
     assert!(
         direct_pk_bytes.len() < pk_bytes.len(),
-        "Spark proving key should carry fixed prover data"
+        "Spark proving key should carry fixed prover data and cached Spark tables"
     );
     let pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("spark proving key deserializes");
@@ -205,7 +225,7 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 
     let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
-    let (pk, _vk) = setup_poseidon::<QuarticBinExtension>(
+    let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
         circom.shape,
         config(MatrixClosingMode::DirectSparse),
     )
@@ -219,8 +239,17 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
         tiny_free_circuit,
     )
     .expect("linked generator loads circuit");
+
+    let proof = pk
+        .prove_from_witness_generator(&bad, b"\x05")
+        .expect("fast path proves without explicit satisfaction validation");
+    assert!(
+        vk.verify(&proof).is_err(),
+        "unsatisfied fast-path proof must not verify"
+    );
+
     assert!(matches!(
-        pk.prove_from_witness_generator(&bad, b"\x05"),
+        pk.prove_from_witness_generator_checked(&bad, b"\x05"),
         Err(PoseidonWitnessGeneratorError::Circom(
             CircomAdapterError::UnsatisfiedConstraint { .. }
         ))
