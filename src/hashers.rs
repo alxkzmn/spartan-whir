@@ -3,29 +3,13 @@ use alloc::vec::Vec;
 use p3_field::{PackedValue, PrimeField32};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-#[cfg(feature = "whir-p3-backend")]
-use whir_p3::metrics::{add_leaf_hash_call, add_node_hash_call};
-
-// Keccak hash-call counters live in `whir-p3`; keep direct Keccak hashing
-// usable when that backend is not compiled in.
-#[cfg(not(feature = "whir-p3-backend"))]
-fn add_leaf_hash_call() {}
-
-#[cfg(not(feature = "whir-p3-backend"))]
-fn add_node_hash_call() {}
 
 pub const KECCAK_DIGEST_ELEMS: usize = 4;
 const KECCAK_DIGEST_BYTES: usize = 32;
 
 #[inline]
 fn maybe_push_leaf_prefix(buf: &mut Vec<u8>) {
-    #[cfg(feature = "keccak_no_prefix")]
-    let _ = buf;
-
-    #[cfg(not(feature = "keccak_no_prefix"))]
-    {
-        buf.push(0x00);
-    }
+    buf.push(0x00);
 }
 
 #[must_use]
@@ -148,7 +132,6 @@ where
             }
         }
 
-        add_leaf_hash_call();
         let mut bytes: [u8; 32] = Keccak256Hash.hash_iter(preimage);
         mask_digest_tail(&mut bytes, self.effective_digest_bytes());
         digest_from_bytes(&bytes)
@@ -190,11 +173,6 @@ impl PseudoCompressionFunction<[u64; KECCAK_DIGEST_ELEMS], 2> for Keccak256NodeC
         let left = digest_to_bytes(&input[0]);
         let right = digest_to_bytes(&input[1]);
 
-        add_node_hash_call();
-
-        #[cfg(feature = "keccak_no_prefix")]
-        let mut bytes: [u8; 32] = Keccak256Hash.hash_iter_slices([&left[..], &right[..]]);
-        #[cfg(not(feature = "keccak_no_prefix"))]
         let mut bytes: [u8; 32] =
             Keccak256Hash.hash_iter_slices([&[0x01_u8][..], &left[..], &right[..]]);
 

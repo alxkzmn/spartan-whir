@@ -1,12 +1,12 @@
-#![cfg(all(feature = "circom", feature = "whir-p3-backend"))]
+#![cfg(feature = "circom")]
 
 mod common;
 
 use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
-    circom::import_bytes, engine::F, KeccakQuarticEngine as KeccakEngine, MatrixClosingMode,
-    SpartanProtocol, SpartanSnarkConfig, SpartanWhirError, WhirPcs,
+    circom::import_bytes, engine::F, MatrixClosingMode, Plonky3WhirPcs,
+    PoseidonQuarticEngine as PoseidonEngine, SpartanProtocol, SpartanSnarkConfig, SpartanWhirError,
 };
 
 const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
@@ -30,13 +30,15 @@ fn prove_and_verify(
     witness: &spartan_whir::R1csWitness<F>,
     public_inputs: &[F],
 ) {
-    let (pk, vk) =
-        SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(shape, &direct_config())
-            .expect("setup succeeds");
+    let (pk, vk) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::setup_with_config(
+        shape,
+        &direct_config(),
+    )
+    .expect("setup succeeds");
     assert_eq!(pk.num_vars_unpadded, witness.w.len());
 
-    let mut prover_challenger = spartan_whir::keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove(
         &pk,
         public_inputs,
         witness,
@@ -44,9 +46,9 @@ fn prove_and_verify(
     )
     .expect("prove succeeds");
 
-    let mut verifier_challenger = spartan_whir::keccak_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
     assert_eq!(
-        SpartanProtocol::<KeccakEngine, WhirPcs>::verify(
+        SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify(
             &vk,
             &instance,
             &proof,
@@ -82,9 +84,11 @@ fn imports_real_generated_non_power_of_two_fixture_and_protocol_pads_it() {
         vec![F::from_u32(25), F::from_u32(30), F::from_u32(900)]
     );
 
-    let (pk, _vk) =
-        SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(&shape, &direct_config())
-            .expect("setup pads imported raw shape");
+    let (pk, _vk) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::setup_with_config(
+        &shape,
+        &direct_config(),
+    )
+    .expect("setup pads imported raw shape");
     assert_eq!(pk.num_vars_unpadded, 3);
     assert_eq!(pk.shape_canonical.num_vars, 4);
 
@@ -95,17 +99,19 @@ fn imports_real_generated_non_power_of_two_fixture_and_protocol_pads_it() {
 fn proves_and_verifies_real_generated_tiny_fixture() {
     let (shape, witness, public_inputs) =
         import_bytes(TINY_R1CS, TINY_WTNS).expect("real tiny fixture imports");
-    let (pk, _vk) =
-        SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(&shape, &direct_config())
-            .expect("setup succeeds");
+    let (pk, _vk) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::setup_with_config(
+        &shape,
+        &direct_config(),
+    )
+    .expect("setup succeeds");
 
     assert_eq!(pk.num_vars_unpadded, witness.w.len());
 
     let mut bad_witness = witness.clone();
     bad_witness.w.push(F::ZERO);
-    let mut bad_challenger = spartan_whir::keccak_challenger();
+    let mut bad_challenger = spartan_whir::poseidon_challenger();
     assert!(matches!(
-        SpartanProtocol::<KeccakEngine, WhirPcs>::prove(
+        SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove(
             &pk,
             &public_inputs,
             &bad_witness,

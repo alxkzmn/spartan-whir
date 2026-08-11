@@ -11,10 +11,10 @@ use std::{
 use p3_field::PrimeField32;
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_paths, compare_spark_layouts, engine::F, KeccakQuarticEngine as KeccakEngine,
-    MatrixClosingMode, R1csShape, R1csWitness, SecurityConfig, SoundnessAssumption,
-    SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig, SumcheckStrategy, WhirParams,
-    WhirPcs, WhirPcsConfig,
+    circom::import_paths, compare_spark_layouts, engine::F, MatrixClosingMode, Plonky3WhirPcs,
+    PoseidonQuarticEngine as PoseidonEngine, R1csShape, R1csWitness, SecurityConfig,
+    SoundnessAssumption, SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig, WhirParams,
+    WhirPcsConfig,
 };
 
 const INPUT_BYTES: usize = 512;
@@ -104,8 +104,9 @@ fn prove_and_verify(
         config.security.security_level_bits
     );
     let setup_start = Instant::now();
-    let (pk, vk) = SpartanProtocol::<KeccakEngine, WhirPcs>::setup_with_config(&shape, &config)
-        .map_err(|err| format!("{label} setup failed: {err}"))?;
+    let (pk, vk) =
+        SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::setup_with_config(&shape, &config)
+            .map_err(|err| format!("{label} setup failed: {err}"))?;
     println!(
         "setup: canonical_constraints={} canonical_vars={} elapsed_ms={}",
         pk.shape_canonical.num_cons,
@@ -114,8 +115,8 @@ fn prove_and_verify(
     );
 
     let prove_only_start = Instant::now();
-    let mut prover_challenger = spartan_whir::keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakEngine, WhirPcs>::prove_with_mode(
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove_with_mode(
         &pk,
         &public_inputs,
         &witness,
@@ -129,8 +130,8 @@ fn prove_and_verify(
     );
 
     let verify_start = Instant::now();
-    let mut verifier_challenger = spartan_whir::keccak_challenger();
-    SpartanProtocol::<KeccakEngine, WhirPcs>::verify_with_mode(
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_with_mode(
         &vk,
         &instance,
         &proof,
@@ -342,7 +343,6 @@ fn protocol_config(matrix_closing: MatrixClosingMode) -> SpartanSnarkConfig {
             num_variables: 0,
             security,
             whir: whir_params,
-            sumcheck_strategy: SumcheckStrategy::Svo,
         },
         spark_whir_params: None,
     }

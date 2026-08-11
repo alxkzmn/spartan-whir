@@ -1,10 +1,8 @@
-#![cfg(feature = "whir-p3-backend")]
-
 mod common;
 
 use spartan_whir::{
-    engine::ExtField, generate_satisfiable_fixture_for_pow2, KeccakEngine, MatrixClosingMode,
-    SpartanProtocol, SpartanSnarkConfig, WhirPcs,
+    engine::ExtField, generate_satisfiable_fixture_for_pow2, MatrixClosingMode, Plonky3WhirPcs,
+    PoseidonEngine, SpartanProtocol, SpartanSnarkConfig,
 };
 
 fn run_target_e2e<EF: ExtField>(
@@ -15,7 +13,7 @@ fn run_target_e2e<EF: ExtField>(
     let fixture =
         generate_satisfiable_fixture_for_pow2(k).expect("synthetic fixture generation succeeds");
 
-    let (pk, vk) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::setup_with_config(
+    let (pk, vk) = SpartanProtocol::<PoseidonEngine<EF>, Plonky3WhirPcs>::setup_with_config(
         &fixture.shape,
         &SpartanSnarkConfig {
             matrix_closing: MatrixClosingMode::DirectSparse,
@@ -32,8 +30,8 @@ fn run_target_e2e<EF: ExtField>(
     assert_eq!(pk.pcs_config.num_variables, k);
     assert_eq!(vk.pcs_config.num_variables, k);
 
-    let mut prover_challenger = spartan_whir::keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::prove(
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = SpartanProtocol::<PoseidonEngine<EF>, Plonky3WhirPcs>::prove(
         &pk,
         &fixture.public_inputs,
         &fixture.witness,
@@ -41,8 +39,8 @@ fn run_target_e2e<EF: ExtField>(
     )
     .expect("prove succeeds");
 
-    let mut verifier_challenger = spartan_whir::keccak_challenger();
-    let verified = SpartanProtocol::<KeccakEngine<EF>, WhirPcs>::verify(
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let verified = SpartanProtocol::<PoseidonEngine<EF>, Plonky3WhirPcs>::verify(
         &vk,
         &instance,
         &proof,

@@ -1,6 +1,6 @@
 use spartan_whir::{
-    InvalidConfigReason, SecurityConfig, SpartanWhirError, SumcheckStrategy, WhirFoldingSchedule,
-    WhirParams, WhirPcsConfig,
+    InvalidConfigReason, SecurityConfig, SpartanWhirError, WhirFoldingSchedule, WhirParams,
+    WhirPcsConfig,
 };
 
 fn base_config() -> WhirPcsConfig {
@@ -8,7 +8,6 @@ fn base_config() -> WhirPcsConfig {
         num_variables: 24,
         security: SecurityConfig::default(),
         whir: WhirParams::default(),
-        sumcheck_strategy: SumcheckStrategy::Svo,
     }
 }
 

@@ -1,23 +1,14 @@
 # spartan-whir
 
 `spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields.
-The Poseidon instantiation uses upstream Plonky3 WHIR as its multilinear PCS
-backend. The Keccak instantiation uses the legacy `whir-p3` backend behind the
-`whir-p3-backend` feature.
+Its Poseidon instantiation uses upstream Plonky3 WHIR as its multilinear PCS
+backend.
 
 ## SNARK Instantiations
 
-`spartan-whir` supports two hash instantiations with different deployment
-targets:
-
-- `KeccakEngine<Ext>` is the on-chain-verifier instantiation. It keeps the
-  Keccak transcript and Keccak Merkle hashing needed by the Solidity verifier
-  work.
-- `PoseidonEngine<Ext>` is the client-side-oriented instantiation. It uses the
-  KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR and is the intended
-  path for Circom frontend benchmarks.
-
-The Circom frontend circuits are written over KoalaBear in both cases.
+`PoseidonEngine<Ext>` is the client-side SNARK instantiation. It uses the
+KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. The Circom frontend
+circuits are written over KoalaBear.
 
 #### Poseidon Deployment Witness Generation
 
@@ -56,20 +47,6 @@ let proof = pk.prove(witness, public_inputs)?;
 of falling back to a slower path. `Spark` proving keys may use the same
 preparation call so load paths stay uniform.
 
-## Keccak Backend
-
-The Keccak backend is enabled with the `whir-p3-backend` Cargo feature.
-
-- Engine: `KeccakEngine<Ext>`
-  - `QuarticBinExtension = BinomialExtensionField<F, 4>`
-  - `QuinticExtension = QuinticTrinomialExtensionField<F>`
-  - `OcticBinExtension = BinomialExtensionField<F, 8>`
-  - Extension choice is a compile-time engine parameter, not a runtime switch
-  - Fixed parameters: `F = KoalaBear`, `W = u64`, `DIGEST_ELEMS = 4`
-- PCS: `WhirPcs`
-- Protocol: `SpartanProtocol::setup/prove/verify`
-- Transcript and commitment stack: Keccak challenger plus Keccak Merkle hashing
-
 ## Protocol Capabilities
 
 - Real outer cubic and inner quadratic sumchecks
@@ -79,15 +56,11 @@ The Keccak backend is enabled with the `whir-p3-backend` Cargo feature.
 - WHIR verification is split into commitment-parse and finalize phases to preserve transcript continuity
 - The `SpartanProtocol` PCS statement path accepts point-evaluation claims
 - Linear and tensor-product PCS constraints are unsupported by the Spartan/WHIR path
-- Blob codec v1 encodes `Proof + Instance`
-- `SpartanBlobDecodeContext::from_vk` derives an engine-typed decode context from the verifying key
-- Codec v1 records extension degree explicitly in the header
-- `profile_spartan_blob_v1` and `encode_spartan_blob_v1_with_report` provide deterministic size reporting
 
 ## Extension Support
 
-- Quartic and quintic are covered by the PCS, protocol, codec, and profiling test matrix
-- Octic is available in the engine surface and is used by the proof-size benchmark target
+- Quartic and quintic are covered by the PCS and protocol test matrix
+- Octic is available in the engine surface and is used by the SHA-256 benchmarks
 - Benchmarking with different extensions is expected to be workload-dependent; extension choice is part of the measurement surface
 
 WHIR univariate-skip support is disabled. Extension-specific two-adicity limits
@@ -97,11 +70,9 @@ stay within 24.
 ## Implemented Modules
 
 - `src/engine.rs`
-  - Generic `KeccakEngine<Ext>` plus quartic/quintic/octic extension aliases and challenger constructors
-- `src/hashers.rs`
-  - EVM-compatible Keccak leaf/node hashing with digest masking controls
-- `src/whir_pcs.rs`
-  - WHIR-backed `MlePcs`
+  - Generic `PoseidonEngine<Ext>` plus quartic/quintic/octic extension aliases and challenger constructors
+- `src/plonky3_whir_pcs.rs`
+  - Plonky3-WHIR-backed `MlePcs`
   - `verify_parse_commitment` / `verify_finalize` helpers
 - `src/r1cs.rs`
   - Canonical padding and sparse-matrix evaluation helpers
@@ -109,11 +80,8 @@ stay within 24.
   - Transcript-driven outer/inner sumcheck prove/verify
 - `src/protocol.rs`
   - Real Spartan setup/prove/verify orchestration
-- `src/codec.rs`, `src/codec_v1.rs`
-  - Versioned blob encoding/decoding dispatch + v1 wire format implementation
 - `src/profiling.rs`
   - No-op protocol hooks (`ProtocolObserver`, `ProtocolStage`)
-  - Deterministic codec-driven byte accounting report
   - Tracing span emission for proof-size breakdown (`trace_proof_size_report`)
 
 ## Related Design Notes
@@ -289,14 +257,11 @@ is `--max-pow-bits`; the default candidate set is
 
 ```bash
 cargo test
-cargo test --features keccak_no_prefix
 ```
 
 Test suite includes:
 
-- WHIR PCS lifecycle and ordering regression tests
-- Codec v1 roundtrip/rejection/structural-validation tests
-- Profiling determinism and byte-invariant tests
+- Plonky3-WHIR PCS lifecycle and ordering regression tests
 - R1CS canonicalization and table-evaluation consistency tests
 - Sumcheck roundtrip and tamper/round-count checks
 - Direct quadratic/cubic round-polynomial interpolation spot checks
@@ -314,53 +279,4 @@ Additional targeted-size commands:
 ```bash
 cargo test protocol_e2e_target_2_pow_18
 cargo test protocol_e2e_target_2_pow_22 -- --ignored
-cargo test sparsity_sweep_target_2_pow_18 -- --ignored --nocapture
-```
-
-## Run Benchmarks
-
-`spartan-whir` includes a Criterion benchmark target for proof-size roundtrip measurement:
-
-```bash
-cargo bench --bench proof_size_roundtrip -- --noplot
-```
-
-For realistic local timing, prefer native CPU tuning:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" cargo bench --bench proof_size_roundtrip -- --noplot
-```
-
-The benchmark currently:
-
-- uses Criterion with `sample_size(10)`
-- generates a synthetic satisfiable R1CS fixture
-- proves and verifies with `KeccakEngine<OcticBinExtension>` and `WhirPcs`
-- emits a tracing-style proof-size tree before the Criterion timing output
-
-Supported benchmark environment overrides:
-
-- `SPARTAN_WHIR_BENCH_K`
-- `SPARTAN_WHIR_BENCH_NUM_CONSTRAINTS`
-- `SPARTAN_WHIR_BENCH_NUM_IO`
-- `SPARTAN_WHIR_BENCH_A_TERMS`
-- `SPARTAN_WHIR_BENCH_B_TERMS`
-- `SPARTAN_WHIR_BENCH_SEED`
-
-The default benchmark configuration is the SHA-like comparison case discussed in this repository:
-
-- `k = 19`
-- `num_constraints = 2^19`
-- `num_io = 256`
-- `a_terms = 2`
-- `b_terms = 1`
-
-The proof-size tracing output is intended for human inspection and is rendered as an `INFO` tree with labeled `key: value` fields, for example:
-
-```text
-INFO     proof_size_roundtrip | total_bytes: ...
-INFO     ┝━ header | bytes: ... | pct_of_parent: ... | pct_of_total: ...
-INFO     ┕━ whir | bytes: ... | pct_of_parent: ... | pct_of_total: ...
-INFO        ┝━ whir_initial | ...
-INFO        ┕━ whir_final | ...
 ```

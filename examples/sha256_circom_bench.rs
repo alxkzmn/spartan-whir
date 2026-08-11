@@ -13,10 +13,9 @@ use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
     circom::import_r1cs_path, compare_spark_layouts, engine::F, recommended_octic_whir_params,
-    KeccakQuarticEngine, MatrixClosingMode, OcticBinExtension, PoseidonOcticEngine,
-    PoseidonSpartanProtocol, PoseidonWitnessGenerator, R1csShape, SecurityConfig,
-    SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanProtocol, SpartanSnarkConfig,
-    SumcheckStrategy, WhirFoldingSchedule, WhirParams, WhirPcs, WhirPcsConfig,
+    MatrixClosingMode, OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator,
+    R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SparkWhirParams,
+    SpartanSnarkConfig, WhirFoldingSchedule, WhirParams, WhirPcsConfig,
 };
 use spartan_whir::{
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
@@ -51,14 +50,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| env::temp_dir().join("spartan-whir-sha256-bench"));
     let sizes = parse_sizes()?;
-    let engines = parse_engines()?;
     let modes = parse_modes()?;
     let repeats = parse_repeats()?;
 
     println!("security: {POSEIDON_SECURITY_BITS}-bit JohnsonBound");
     println!("poseidon_direct_schedule: {POSEIDON_DIRECT_SCHEDULE}");
     println!("sizes: {:?}", sizes);
-    println!("engines: {:?}", engines);
     println!("modes: {:?}", modes);
     println!("repeats: {repeats}");
     if reuse_circom_artifacts() {
@@ -69,7 +66,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     for size in sizes {
-        run_size(&manifest_dir, &workdir, size, &engines, &modes, repeats)?;
+        run_size(&manifest_dir, &workdir, size, &modes, repeats)?;
     }
 
     Ok(())
@@ -90,7 +87,6 @@ fn run_size(
     manifest_dir: &Path,
     workdir: &Path,
     size: usize,
-    engines: &[BenchEngine],
     modes: &[BenchMode],
     repeats: usize,
 ) -> Result<(), Box<dyn Error>> {
@@ -183,34 +179,29 @@ fn run_size(
         if repeats > 1 {
             println!("sample: {}", sample + 1);
         }
-        for &engine in engines {
-            for &mode in modes {
-                match mode {
-                    BenchMode::Direct => prove_and_verify(
-                        engine,
-                        "direct_sparse_octic_constant_pow0_ff8_lir1_rsv8",
-                        &direct_config,
-                        &shape,
-                        &loaded_generator.generator,
-                        &input_binary,
-                    )?,
-                    BenchMode::Spark => prove_and_verify(
-                        engine,
-                        "spark",
-                        &spark_config,
-                        &shape,
-                        &loaded_generator.generator,
-                        &input_binary,
-                    )?,
-                    BenchMode::SparkIndependent => prove_and_verify(
-                        engine,
-                        "spark_independent_whir_schedules",
-                        &spark_independent_config,
-                        &shape,
-                        &loaded_generator.generator,
-                        &input_binary,
-                    )?,
-                }
+        for &mode in modes {
+            match mode {
+                BenchMode::Direct => prove_and_verify(
+                    "direct_sparse_octic_constant_pow0_ff8_lir1_rsv8",
+                    &direct_config,
+                    &shape,
+                    &loaded_generator.generator,
+                    &input_binary,
+                )?,
+                BenchMode::Spark => prove_and_verify(
+                    "spark",
+                    &spark_config,
+                    &shape,
+                    &loaded_generator.generator,
+                    &input_binary,
+                )?,
+                BenchMode::SparkIndependent => prove_and_verify(
+                    "spark_independent_whir_schedules",
+                    &spark_independent_config,
+                    &shape,
+                    &loaded_generator.generator,
+                    &input_binary,
+                )?,
             }
         }
     }
@@ -386,27 +377,6 @@ fn dynamic_library_name(size: usize) -> String {
 }
 
 fn prove_and_verify(
-    engine: BenchEngine,
-    label: &str,
-    config: &SpartanSnarkConfig,
-    shape: &R1csShape<F>,
-    generator: &PoseidonWitnessGenerator,
-    input_binary: &[u8],
-) -> Result<(), Box<dyn Error>> {
-    match engine {
-        BenchEngine::Poseidon => {
-            prove_and_verify_poseidon(label, config, shape, generator, input_binary)
-        }
-        BenchEngine::PoseidonPlonky3 => {
-            prove_and_verify_poseidon_plonky3(label, config, shape, generator, input_binary)
-        }
-        BenchEngine::Keccak => {
-            prove_and_verify_keccak(label, config, shape, generator, input_binary)
-        }
-    }
-}
-
-fn prove_and_verify_poseidon_plonky3(
     label: &str,
     config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
@@ -456,112 +426,6 @@ fn prove_and_verify_poseidon_plonky3(
     Ok(())
 }
 
-fn prove_and_verify_poseidon(
-    label: &str,
-    config: &SpartanSnarkConfig,
-    shape: &R1csShape<F>,
-    generator: &PoseidonWitnessGenerator,
-    input_binary: &[u8],
-) -> Result<(), Box<dyn Error>> {
-    let _profile_context = spartan_whir::profiling::set_profile_context("poseidon", label);
-    let setup_start = Instant::now();
-    let _setup_profile = spartan_whir::profiling::profile_scope("setup");
-    let (pk, vk) =
-        SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::setup_with_config(shape, config)
-            .map_err(|err| format!("{label} setup failed: {err}"))?;
-    drop(_setup_profile);
-    let setup_ms = setup_start.elapsed().as_millis();
-
-    let witness_and_prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
-    let (witness, public_inputs) = {
-        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
-    };
-    let mut prover_challenger = spartan_whir::poseidon_challenger();
-    let (instance, proof) = SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::prove_with_mode(
-        &pk,
-        &public_inputs,
-        &witness,
-        config.matrix_closing,
-        &mut prover_challenger,
-    )
-    .map_err(|err| format!("{label} prove failed: {err}"))?;
-    drop(_prove_profile);
-    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
-
-    let verify_start = Instant::now();
-    let _verify_profile = spartan_whir::profiling::profile_scope("verify");
-    let mut verifier_challenger = spartan_whir::poseidon_challenger();
-    SpartanProtocol::<PoseidonOcticEngine, WhirPcs>::verify_with_mode(
-        &vk,
-        &instance,
-        &proof,
-        &mut verifier_challenger,
-    )
-    .map_err(|err| format!("{label} verify failed: {err}"))?;
-    drop(_verify_profile);
-    let verify_ms = verify_start.elapsed().as_millis();
-
-    println!(
-        "engine: poseidon mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
-    );
-    Ok(())
-}
-
-fn prove_and_verify_keccak(
-    label: &str,
-    config: &SpartanSnarkConfig,
-    shape: &R1csShape<F>,
-    generator: &PoseidonWitnessGenerator,
-    input_binary: &[u8],
-) -> Result<(), Box<dyn Error>> {
-    let _profile_context = spartan_whir::profiling::set_profile_context("keccak", label);
-    let setup_start = Instant::now();
-    let _setup_profile = spartan_whir::profiling::profile_scope("setup");
-    let (pk, vk) =
-        SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::setup_with_config(shape, config)
-            .map_err(|err| format!("{label} setup failed: {err}"))?;
-    drop(_setup_profile);
-    let setup_ms = setup_start.elapsed().as_millis();
-
-    let witness_and_prove_start = Instant::now();
-    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
-    let (witness, public_inputs) = {
-        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
-        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
-    };
-    let mut prover_challenger = spartan_whir::keccak_challenger();
-    let (instance, proof) = SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::prove_with_mode(
-        &pk,
-        &public_inputs,
-        &witness,
-        config.matrix_closing,
-        &mut prover_challenger,
-    )
-    .map_err(|err| format!("{label} prove failed: {err}"))?;
-    drop(_prove_profile);
-    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
-
-    let verify_start = Instant::now();
-    let _verify_profile = spartan_whir::profiling::profile_scope("verify");
-    let mut verifier_challenger = spartan_whir::keccak_challenger();
-    SpartanProtocol::<KeccakQuarticEngine, WhirPcs>::verify_with_mode(
-        &vk,
-        &instance,
-        &proof,
-        &mut verifier_challenger,
-    )
-    .map_err(|err| format!("{label} verify failed: {err}"))?;
-    drop(_verify_profile);
-    let verify_ms = verify_start.elapsed().as_millis();
-
-    println!(
-        "engine: keccak mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
-    );
-    Ok(())
-}
-
 fn run(command: &mut Command) -> Result<(), Box<dyn Error>> {
     let status = command.status()?;
     if status.success() {
@@ -590,50 +454,6 @@ fn parse_sizes() -> Result<Vec<usize>, Box<dyn Error>> {
         return Err("SHA256_BENCH_SIZES must not be empty".into());
     }
     Ok(sizes)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BenchEngine {
-    PoseidonPlonky3,
-    Poseidon,
-    Keccak,
-}
-
-fn parse_engines() -> Result<Vec<BenchEngine>, Box<dyn Error>> {
-    let Some(raw) = env::var_os("SHA256_BENCH_ENGINES") else {
-        return Ok(vec![BenchEngine::PoseidonPlonky3]);
-    };
-    let raw = raw
-        .into_string()
-        .map_err(|_| "SHA256_BENCH_ENGINES must be valid UTF-8")?;
-    let mut engines = Vec::new();
-    for part in raw.split(',') {
-        match part.trim() {
-            "poseidon-plonky3" | "plonky3" | "plonky3-whir" => {
-                engines.push(BenchEngine::PoseidonPlonky3)
-            }
-            "poseidon" => engines.push(BenchEngine::Poseidon),
-            "keccak" => engines.push(BenchEngine::Keccak),
-            "both" => {
-                engines.push(BenchEngine::Keccak);
-                engines.push(BenchEngine::Poseidon);
-            }
-            "poseidon-plonky3-vs-old-poseidon" => {
-                engines.push(BenchEngine::PoseidonPlonky3);
-                engines.push(BenchEngine::Poseidon);
-            }
-            "all" => {
-                engines.push(BenchEngine::Keccak);
-                engines.push(BenchEngine::Poseidon);
-                engines.push(BenchEngine::PoseidonPlonky3);
-            }
-            other => return Err(format!("unsupported SHA benchmark engine: {other}").into()),
-        }
-    }
-    if engines.is_empty() {
-        return Err("SHA256_BENCH_ENGINES must not be empty".into());
-    }
-    Ok(engines)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -759,7 +579,6 @@ fn protocol_config(
             num_variables: 0,
             security,
             whir: whir_params,
-            sumcheck_strategy: SumcheckStrategy::Svo,
         },
         spark_whir_params,
     }
