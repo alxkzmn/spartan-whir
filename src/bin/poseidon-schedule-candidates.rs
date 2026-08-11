@@ -11,8 +11,8 @@ use serde::Serialize;
 use spartan_whir::{
     engine::{PoseidonChallenger, F},
     MatrixClosingMode, OcticBinExtension, PoseidonSetupConfig, QuarticBinExtension, SecurityConfig,
-    SoundnessAssumption, SpartanSnarkConfig, SumcheckStrategy, WhirFoldingSchedule, WhirParams,
-    WhirPcsConfig, FINAL_SUMCHECK_MAX_VARIABLES,
+    SoundnessAssumption, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams, WhirPcsConfig,
+    FINAL_SUMCHECK_MAX_VARIABLES,
 };
 
 const DEFAULT_SECURITY_BITS: usize = 128;
@@ -497,7 +497,6 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> SpartanSnarkConfig {
             num_variables: args.num_variables,
             security,
             whir: whir_params,
-            sumcheck_strategy: SumcheckStrategy::Svo,
         },
         spark_whir_params: None,
     }

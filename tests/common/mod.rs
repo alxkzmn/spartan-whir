@@ -6,7 +6,7 @@ use spartan_whir::{
     engine::F, DomainSeparator, Evaluations, LinearConstraintClaim, MlePcs, MultilinearPoint,
     PcsStatement, PcsStatementBuilder, PointEvalClaim, R1csInstance, R1csShape, R1csWitness,
     SecurityConfig, SoundnessAssumption, SparseMatEntry, SparseMatrix, SpartanWhirEngine,
-    SpartanWhirError, SumcheckStrategy, WhirParams, WhirPcsConfig,
+    SpartanWhirError, WhirParams, WhirPcsConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -211,7 +211,6 @@ pub fn phase3_pcs_config() -> WhirPcsConfig {
         num_variables: 0,
         security: phase3_security(),
         whir: phase3_whir_params(),
-        sumcheck_strategy: SumcheckStrategy::Svo,
     }
 }
 
@@ -238,6 +237,5 @@ pub fn k22_jb100_pcs_config() -> WhirPcsConfig {
         num_variables: 22,
         security: k22_jb100_security(),
         whir: k22_jb100_whir_params(),
-        sumcheck_strategy: SumcheckStrategy::Svo,
     }
 }

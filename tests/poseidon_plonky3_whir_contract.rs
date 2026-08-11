@@ -1,15 +1,84 @@
 mod common;
 
+use p3_challenger::FieldChallenger;
 use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
-    engine::F, generate_satisfiable_fixture, MatrixClosingMode, MultilinearPoint,
-    PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim, PoseidonQuarticEngine,
-    PoseidonSpartanProtocol, SparkWhirParams, SpartanSnarkConfig, SyntheticR1csConfig,
-    WhirFoldingSchedule, WhirParams,
+    engine::F, generate_satisfiable_fixture, LinearConstraintClaim, MatrixClosingMode, MlePcs,
+    MultilinearPoint, PcsStatement, PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim,
+    PoseidonQuarticEngine, PoseidonSpartanProtocol, QuarticBinExtension as EF, SparkWhirParams,
+    SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig, WhirFoldingSchedule, WhirParams,
+    WhirPcsConfig,
 };
 
 type PoseidonEngineForTest = PoseidonQuarticEngine;
 type Protocol = PoseidonSpartanProtocol<spartan_whir::QuarticBinExtension>;
+type PcsCommitment = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::Commitment;
+type PcsProof = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::Proof;
+
+fn pcs_config(num_variables: usize) -> WhirPcsConfig {
+    WhirPcsConfig {
+        num_variables,
+        ..common::phase3_pcs_config()
+    }
+}
+
+fn sample_poly(num_variables: usize) -> Vec<F> {
+    (0..(1 << num_variables))
+        .map(|i| F::from_u32((i + 1) as u32))
+        .collect()
+}
+
+fn point_eval_claim(
+    poly: &[F],
+    num_variables: usize,
+    seed: u32,
+) -> PointEvalClaim<PoseidonEngineForTest> {
+    let point = MultilinearPoint(
+        (0..num_variables)
+            .map(|i| EF::from_u32(seed + i as u32))
+            .collect(),
+    );
+    let value = spartan_whir::evaluate_mle_table(
+        &poly.iter().copied().map(EF::from).collect::<Vec<_>>(),
+        &point.0,
+    )
+    .expect("point evaluates");
+    PointEvalClaim { point, value }
+}
+
+fn point_eval_statement(
+    poly: &[F],
+    num_variables: usize,
+    seeds: &[u32],
+) -> PcsStatement<PoseidonEngineForTest> {
+    let mut builder = PcsStatementBuilder::<PoseidonEngineForTest>::new();
+    for &seed in seeds {
+        builder = builder.add_point_eval(point_eval_claim(poly, num_variables, seed));
+    }
+    builder.finalize().expect("statement finalizes")
+}
+
+fn commit_and_open(
+    config: &WhirPcsConfig,
+    poly: &[F],
+    statement: &PcsStatement<PoseidonEngineForTest>,
+) -> (PcsCommitment, PcsProof, spartan_whir::PoseidonChallenger) {
+    let mut challenger = spartan_whir::poseidon_challenger();
+    let (commitment, prover_data) = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::commit(
+        config,
+        &poly.to_vec(),
+        &mut challenger,
+    )
+    .expect("commit succeeds");
+    let proof = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::open(
+        config,
+        prover_data,
+        statement,
+        &mut challenger,
+    )
+    .expect("open succeeds");
+    (commitment, proof, challenger)
+}
 
 fn poseidon_config(mode: MatrixClosingMode) -> SpartanSnarkConfig {
     SpartanSnarkConfig {
@@ -156,7 +225,6 @@ fn poseidon_point_order_matches_spartan_mle_convention() {
         num_variables: 2,
         security: common::phase3_security(),
         whir: common::phase3_whir_params(),
-        sumcheck_strategy: spartan_whir::SumcheckStrategy::Svo,
     };
     let poly = vec![
         F::from_u32(3),
@@ -205,4 +273,166 @@ fn poseidon_point_order_matches_spartan_mle_convention() {
         &mut verifier_challenger,
     )
     .expect("verify succeeds");
+}
+
+#[test]
+fn poseidon_whir_preserves_multiple_claim_order() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let statement = point_eval_statement(&poly, config.num_variables, &[2, 7]);
+    let (commitment, proof, _) = commit_and_open(&config, &poly, &statement);
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &statement,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("ordered claims verify");
+
+    let swapped_statement = point_eval_statement(&poly, config.num_variables, &[7, 2]);
+    let mut swapped_verifier_challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &swapped_statement,
+        &proof,
+        &mut swapped_verifier_challenger,
+    );
+    assert_eq!(result, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn poseidon_whir_rejects_tampered_commitment() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let statement = point_eval_statement(&poly, config.num_variables, &[5]);
+    let (commitment, proof, _) = commit_and_open(&config, &poly, &statement);
+    let mut roots = commitment.into_roots();
+    roots[0][0] += F::ONE;
+    let tampered_commitment = roots.into();
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &tampered_commitment,
+        &statement,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(result, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn poseidon_whir_rejects_wrong_claimed_evaluation() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let statement = point_eval_statement(&poly, config.num_variables, &[9]);
+    let (commitment, proof, _) = commit_and_open(&config, &poly, &statement);
+    let claim = point_eval_claim(&poly, config.num_variables, 9);
+    let wrong_statement = PcsStatementBuilder::<PoseidonEngineForTest>::new()
+        .add_point_eval(PointEvalClaim {
+            point: claim.point,
+            value: claim.value + EF::ONE,
+        })
+        .finalize()
+        .expect("wrong statement finalizes");
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &wrong_statement,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(result, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn poseidon_whir_rejects_non_power_of_two_polynomial() {
+    let config = pcs_config(6);
+    let mut challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::commit(
+        &config,
+        &vec![F::ONE, F::from_u32(2), F::from_u32(3)],
+        &mut challenger,
+    );
+    assert!(matches!(
+        result,
+        Err(SpartanWhirError::InvalidPolynomialLength)
+    ));
+}
+
+#[test]
+fn poseidon_whir_rejects_num_variables_mismatch() {
+    let config = pcs_config(5);
+    let poly = sample_poly(6);
+    let mut challenger = spartan_whir::poseidon_challenger();
+    let result =
+        <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::commit(&config, &poly, &mut challenger);
+    assert!(matches!(result, Err(SpartanWhirError::InvalidNumVariables)));
+}
+
+#[test]
+fn poseidon_whir_rejects_linear_constraints() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let linear_statement = PcsStatementBuilder::<PoseidonEngineForTest>::new()
+        .add_linear_constraint(LinearConstraintClaim {
+            coefficients: vec![F::ONE],
+            expected: EF::ONE,
+        })
+        .finalize()
+        .expect("linear statement finalizes");
+    let mut challenger = spartan_whir::poseidon_challenger();
+    let (_, prover_data) =
+        <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::commit(&config, &poly, &mut challenger)
+            .expect("commit succeeds");
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::open(
+        &config,
+        prover_data,
+        &linear_statement,
+        &mut challenger,
+    );
+    assert_eq!(
+        result.err(),
+        Some(SpartanWhirError::UnsupportedStatementType)
+    );
+
+    let point_statement = point_eval_statement(&poly, config.num_variables, &[3]);
+    let (commitment, proof, _) = commit_and_open(&config, &poly, &point_statement);
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &linear_statement,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(result, Err(SpartanWhirError::UnsupportedStatementType));
+}
+
+#[test]
+fn poseidon_whir_transcript_matches_after_opening() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let statement = point_eval_statement(&poly, config.num_variables, &[4, 11]);
+    let (commitment, proof, mut prover_challenger) = commit_and_open(&config, &poly, &statement);
+    let prover_checkpoint: EF = prover_challenger.sample_algebra_element();
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &statement,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("verify succeeds");
+    let verifier_checkpoint: EF = verifier_challenger.sample_algebra_element();
+
+    assert_eq!(prover_checkpoint, verifier_checkpoint);
 }
