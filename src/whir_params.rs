@@ -167,8 +167,22 @@ pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
 /// These are conservative fallback parameters. For benchmarked circuits, prefer
 /// a schedule selected by `poseidon-schedule-candidates --proof-mode full-zk`.
 pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
-    if num_variables <= 8 {
-        return recommended_octic_whir_params(num_variables);
+    if num_variables < 18 {
+        let schedule = WhirFoldingSchedule::Constant(1);
+        let starting_log_inv_rate = if num_variables == 1 { 6 } else { 5 };
+        return WhirParams {
+            pow_bits: 0,
+            folding_factor: 1,
+            starting_log_inv_rate,
+            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: derived_round_log_inv_rates(
+                num_variables,
+                &schedule,
+                starting_log_inv_rate,
+                1,
+            ),
+            folding_schedule: Some(schedule),
+        };
     }
 
     if num_variables == 20 {

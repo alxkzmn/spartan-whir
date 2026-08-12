@@ -105,7 +105,7 @@ fn recommended_octic_zk_whir_params_use_measured_sha256_2048_schedule() {
 
 #[test]
 fn recommended_octic_zk_whir_params_are_accepted_by_zk_config() {
-    for num_variables in 18..=31 {
+    for num_variables in 1..=31 {
         let params = recommended_octic_zk_whir_params(num_variables);
         ZkWhirConfig::<OcticBinExtension, F, PoseidonChallenger>::new(
             num_variables,

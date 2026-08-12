@@ -64,6 +64,11 @@ name = "sha256_circom_bench"
 path = "examples/sha256_circom_bench.rs"
 required-features = ["circom"]
 
+[[example]]
+name = "end_to_end"
+path = "examples/end_to_end.rs"
+required-features = ["circom"]
+
 [dev-dependencies]
 bincode = "1.3"
 criterion = "0.8"
