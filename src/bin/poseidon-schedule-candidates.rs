@@ -10,12 +10,12 @@ use p3_whir::parameters::{
 use serde::Serialize;
 use spartan_whir::{
     engine::{PoseidonChallenger, F},
-    MatrixClosingMode, OcticBinExtension, PoseidonSetupConfig, QuarticBinExtension, SecurityConfig,
-    SoundnessAssumption, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams, WhirPcsConfig,
+    MatrixClosingMode, OcticBinExtension, PoseidonZkSetupConfig, QuarticBinExtension,
+    SecurityConfig, SoundnessAssumption, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
     FINAL_SUMCHECK_MAX_VARIABLES,
 };
 
-const DEFAULT_SECURITY_BITS: usize = 128;
+const DEFAULT_SECURITY_BITS: usize = 123;
 const DEFAULT_K_MAX: usize = 8;
 const DEFAULT_LIR_MAX: usize = 8;
 const DEFAULT_MAX_POW_BITS: usize = 22;
@@ -34,6 +34,25 @@ type BabyBearPoseidonChallenger = DuplexChallenger<BabyBear, Poseidon2BabyBear<1
 enum FieldProfile {
     KoalaBear,
     BabyBear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProofMode {
+    NoZk,
+    FullZk,
+}
+
+impl ProofMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NoZk => "no-zk",
+            Self::FullZk => "full-zk",
+        }
+    }
+
+    const fn is_full_zk(self) -> bool {
+        matches!(self, Self::FullZk)
+    }
 }
 
 impl FieldProfile {
@@ -57,6 +76,9 @@ struct Args {
     final_sumcheck_max_variables: usize,
     beam_width: usize,
     include_invalid: bool,
+    proof_mode: ProofMode,
+    zk_ell: usize,
+    zk_mask_log_inv_rate: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,12 +90,16 @@ struct CandidateDump {
     target_security_bits: usize,
     soundness: SoundnessAssumption,
     max_pow_bits: usize,
+    proof_mode: &'static str,
+    zk_ell: Option<usize>,
+    zk_mask_log_inv_rate: Option<usize>,
     candidates: Vec<CandidateRow>,
 }
 
 #[derive(Debug, Serialize)]
 struct CandidateRow {
     label: String,
+    proof_mode: &'static str,
     base_field: &'static str,
     base_two_adicity: usize,
     extension: &'static str,
@@ -91,6 +117,15 @@ struct CandidateRow {
     row_work: u128,
     sumcheck_work: u128,
     proof_size_bytes_estimate: u128,
+    zk_dft_work: Option<u128>,
+    zk_merkle_work: Option<u128>,
+    zk_merkle_path_work: Option<u128>,
+    zk_row_work: Option<u128>,
+    zk_sumcheck_work: Option<u128>,
+    zk_proof_size_bytes_estimate: Option<u128>,
+    zk_mask_queries: Option<usize>,
+    zk_ell: Option<usize>,
+    zk_mask_log_inv_rate: Option<usize>,
     commitment_ood_samples: Option<usize>,
     starting_folding_pow_bits: Option<usize>,
     final_queries: Option<usize>,
@@ -99,7 +134,7 @@ struct CandidateRow {
     final_folding_pow_bits: Option<usize>,
     rounds: Vec<RoundRow>,
     whir_params: WhirParams,
-    setup_config: Option<PoseidonSetupConfig>,
+    setup_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,6 +216,12 @@ fn main() {
         target_security_bits: args.security_bits,
         soundness: SoundnessAssumption::JohnsonBound,
         max_pow_bits: args.max_pow_bits,
+        proof_mode: args.proof_mode.label(),
+        zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
+        zk_mask_log_inv_rate: args
+            .proof_mode
+            .is_full_zk()
+            .then_some(args.zk_mask_log_inv_rate),
         candidates,
     };
     serde_json::to_writer_pretty(std::io::stdout(), &dump).expect("write candidate JSON");
@@ -196,6 +237,7 @@ fn push_invalid_rate_candidates(
     match args.field {
         FieldProfile::KoalaBear => {
             push_invalid_rate_candidate::<F, QuarticBinExtension>(
+                args,
                 out,
                 whir_params.clone(),
                 args.field.label(),
@@ -204,6 +246,7 @@ fn push_invalid_rate_candidates(
                 reason.clone(),
             );
             push_invalid_rate_candidate::<F, KoalaBearQuinticExtension>(
+                args,
                 out,
                 whir_params.clone(),
                 args.field.label(),
@@ -212,6 +255,7 @@ fn push_invalid_rate_candidates(
                 reason.clone(),
             );
             push_invalid_rate_candidate::<F, OcticBinExtension>(
+                args,
                 out,
                 whir_params,
                 args.field.label(),
@@ -222,6 +266,7 @@ fn push_invalid_rate_candidates(
         }
         FieldProfile::BabyBear => {
             push_invalid_rate_candidate::<BabyBear, BabyBearQuarticExtension>(
+                args,
                 out,
                 whir_params.clone(),
                 args.field.label(),
@@ -230,6 +275,7 @@ fn push_invalid_rate_candidates(
                 reason.clone(),
             );
             push_invalid_rate_candidate::<BabyBear, BabyBearQuinticExtension>(
+                args,
                 out,
                 whir_params.clone(),
                 args.field.label(),
@@ -238,6 +284,7 @@ fn push_invalid_rate_candidates(
                 reason.clone(),
             );
             push_invalid_rate_candidate::<BabyBear, BabyBearOcticExtension>(
+                args,
                 out,
                 whir_params,
                 args.field.label(),
@@ -250,6 +297,7 @@ fn push_invalid_rate_candidates(
 }
 
 fn push_invalid_rate_candidate<Base, Ext>(
+    args: &Args,
     out: &mut Vec<CandidateRow>,
     whir_params: WhirParams,
     base_field: &'static str,
@@ -262,6 +310,7 @@ fn push_invalid_rate_candidate<Base, Ext>(
 {
     let label = schedule_label(extension, &whir_params);
     out.push(invalid_row(
+        args,
         label,
         base_field,
         Base::TWO_ADICITY,
@@ -337,23 +386,17 @@ fn derive_for_extension<Base, Ext, Challenger>(
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let label = schedule_label(extension, &whir_params);
+    let protocol_params = protocol_parameters(&whir_params, args.security_bits);
     let result = catch_unwind_silent(|| {
-        let protocol_params = ProtocolParameters {
-            starting_log_inv_rate: whir_params.starting_log_inv_rate,
-            round_log_inv_rates: whir_params.round_log_inv_rates.clone(),
-            folding_factor: map_schedule(&whir_params.effective_folding_schedule()),
-            soundness_type: P3SecurityAssumption::JohnsonBound,
-            security_level: args.security_bits,
-            pow_bits: whir_params.pow_bits as usize,
-        };
         P3WhirConfig::<Ext, Base, Challenger>::new(args.num_variables, protocol_params)
     });
 
     let config = match result {
-        Ok(config) => config,
-        Err(reason) => {
+        Ok(Ok(config)) => config,
+        Ok(Err(reason)) => {
             if args.include_invalid {
                 out.push(invalid_row(
+                    args,
                     label,
                     args.field.label(),
                     Base::TWO_ADICITY,
@@ -367,11 +410,35 @@ fn derive_for_extension<Base, Ext, Challenger>(
             }
             return;
         }
+        Err(reason) => {
+            if args.include_invalid {
+                out.push(invalid_row(
+                    args,
+                    label,
+                    args.field.label(),
+                    Base::TWO_ADICITY,
+                    extension,
+                    extension_degree,
+                    Ext::TWO_ADICITY,
+                    Ext::bits(),
+                    whir_params,
+                    format!("backend panicked while deriving candidate: {reason}"),
+                ));
+            }
+            return;
+        }
     };
 
     let achieved = achieved_security_bits::<Base, Ext, Challenger>(&config);
     let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config);
-    let valid = achieved >= args.security_bits as f64 && max_pow <= args.max_pow_bits;
+    let zk_rejection = if args.proof_mode.is_full_zk() {
+        zk_compatibility_error::<Base, Ext, Challenger>(args, &config)
+    } else {
+        None
+    };
+    let valid = achieved >= args.security_bits as f64
+        && max_pow <= args.max_pow_bits
+        && zk_rejection.is_none();
     if !valid && !args.include_invalid {
         return;
     }
@@ -399,10 +466,31 @@ fn derive_for_extension<Base, Ext, Challenger>(
     let merkle_path_work = merkle_path_work::<Base, Ext, Challenger>(&config);
     let row_work = row_work::<Base, Ext, Challenger>(&config);
     let sumcheck_work = sumcheck_work::<Base, Ext, Challenger>(&config);
-    let proof_size_bytes_estimate = proof_size_bytes_estimate::<Base, Ext, Challenger>(&config);
+    let plain_proof_size_bytes_estimate =
+        proof_size_bytes_estimate::<Base, Ext, Challenger>(&config);
+    let zk_estimates = if args.proof_mode.is_full_zk() && zk_rejection.is_none() {
+        Some(zk_estimates::<Base, Ext, Challenger>(
+            args,
+            &config,
+            ZkBaseEstimates {
+                dft_work,
+                merkle_work,
+                merkle_path_work,
+                row_work,
+                sumcheck_work,
+            },
+        ))
+    } else {
+        None
+    };
+    let proof_size_bytes_estimate = zk_estimates
+        .as_ref()
+        .map(|estimate| estimate.proof_size_bytes_estimate)
+        .unwrap_or(plain_proof_size_bytes_estimate);
 
     out.push(CandidateRow {
         label,
+        proof_mode: args.proof_mode.label(),
         base_field: args.field.label(),
         base_two_adicity: Base::TWO_ADICITY,
         extension,
@@ -416,8 +504,10 @@ fn derive_for_extension<Base, Ext, Challenger>(
                     "achieved security {:.3} below target {}",
                     achieved, args.security_bits
                 )
-            } else {
+            } else if max_pow > args.max_pow_bits {
                 format!("derived PoW {max_pow} exceeds max {}", args.max_pow_bits)
+            } else {
+                zk_rejection.unwrap_or_else(|| "candidate rejected".to_owned())
             }
         }),
         security_bits_achieved: Some(achieved),
@@ -429,6 +519,22 @@ fn derive_for_extension<Base, Ext, Challenger>(
         row_work,
         sumcheck_work,
         proof_size_bytes_estimate,
+        zk_dft_work: zk_estimates.as_ref().map(|estimate| estimate.dft_work),
+        zk_merkle_work: zk_estimates.as_ref().map(|estimate| estimate.merkle_work),
+        zk_merkle_path_work: zk_estimates
+            .as_ref()
+            .map(|estimate| estimate.merkle_path_work),
+        zk_row_work: zk_estimates.as_ref().map(|estimate| estimate.row_work),
+        zk_sumcheck_work: zk_estimates.as_ref().map(|estimate| estimate.sumcheck_work),
+        zk_proof_size_bytes_estimate: zk_estimates
+            .as_ref()
+            .map(|estimate| estimate.proof_size_bytes_estimate),
+        zk_mask_queries: zk_estimates.as_ref().map(|estimate| estimate.mask_queries),
+        zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
+        zk_mask_log_inv_rate: args
+            .proof_mode
+            .is_full_zk()
+            .then_some(args.zk_mask_log_inv_rate),
         commitment_ood_samples: Some(config.commitment_ood_samples),
         starting_folding_pow_bits: Some(config.starting_folding_pow_bits),
         final_queries: Some(config.final_queries),
@@ -441,7 +547,489 @@ fn derive_for_extension<Base, Ext, Challenger>(
     });
 }
 
+fn protocol_parameters(whir_params: &WhirParams, security_bits: usize) -> ProtocolParameters {
+    ProtocolParameters {
+        starting_log_inv_rate: whir_params.starting_log_inv_rate,
+        round_log_inv_rates: whir_params.round_log_inv_rates.clone(),
+        folding_factor: map_schedule(&whir_params.effective_folding_schedule()),
+        soundness_type: P3SecurityAssumption::JohnsonBound,
+        security_level: security_bits,
+        pow_bits: whir_params.pow_bits as usize,
+    }
+}
+
+struct ZkBaseEstimates {
+    dft_work: u128,
+    merkle_work: u128,
+    merkle_path_work: u128,
+    row_work: u128,
+    sumcheck_work: u128,
+}
+
+struct ZkEstimates {
+    dft_work: u128,
+    merkle_work: u128,
+    merkle_path_work: u128,
+    row_work: u128,
+    sumcheck_work: u128,
+    proof_size_bytes_estimate: u128,
+    mask_queries: usize,
+}
+
+fn zk_estimates<Base, Ext, Challenger>(
+    args: &Args,
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    base: ZkBaseEstimates,
+) -> ZkEstimates
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let n_rounds = config.n_rounds();
+    let oracle_randomness = oracle_randomness(config);
+    let mask_queries = zk_mask_queries(args, config);
+    let sumcheck_rounds = zk_sumcheck_rounds(config);
+    let sumcheck_mask_domain = mask_domain(args.zk_ell, mask_queries, args.zk_mask_log_inv_rate);
+    let switch_mask_domains = (0..n_rounds)
+        .map(|round| {
+            mask_domain(
+                oracle_randomness[round] + config.round_parameters[round].ood_samples,
+                mask_queries,
+                args.zk_mask_log_inv_rate,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let ext_dim = Ext::DIMENSION as u128;
+    let sumcheck_mask_width: u128 = sumcheck_rounds.iter().sum::<usize>() as u128;
+    let switch_mask_width = n_rounds as u128;
+    let base_mask_width = sumcheck_mask_width.saturating_add(switch_mask_width);
+
+    let sumcheck_mask_rows = (sumcheck_mask_domain as u128).saturating_mul(sumcheck_mask_width);
+    let switch_mask_rows = switch_mask_domains
+        .iter()
+        .map(|domain| *domain as u128)
+        .fold(0, u128::saturating_add);
+    let mask_rows = sumcheck_mask_rows.saturating_add(switch_mask_rows);
+
+    let sumcheck_work_extra = sumcheck_rounds
+        .iter()
+        .map(|rounds| (*rounds as u128).saturating_mul(args.zk_ell.max(3) as u128))
+        .fold(0, u128::saturating_add);
+    let dft_work_extra = mask_rows.saturating_mul(ext_dim);
+    let merkle_work_extra = mask_rows.saturating_mul(ext_dim);
+
+    let switch_mask_path_work = switch_mask_domains
+        .iter()
+        .map(|domain| (mask_queries as u128).saturating_mul(log2_usize(*domain)))
+        .fold(0, u128::saturating_add);
+    let sumcheck_mask_path_work = (mask_queries as u128)
+        .saturating_mul(log2_usize(sumcheck_mask_domain))
+        .saturating_mul((n_rounds + 1) as u128);
+    let base_mask_path_work = (mask_queries as u128)
+        .saturating_mul(base_mask_width)
+        .saturating_mul(log2_usize(sumcheck_mask_domain));
+    let merkle_path_work_extra = switch_mask_path_work
+        .saturating_add(sumcheck_mask_path_work)
+        .saturating_add(base_mask_path_work);
+
+    let row_work_extra = (mask_queries as u128)
+        .saturating_mul(
+            switch_mask_width
+                .saturating_add(sumcheck_mask_width)
+                .saturating_add(base_mask_width.saturating_mul(2)),
+        )
+        .saturating_mul(ext_dim);
+
+    let proof_size_bytes_estimate = zk_proof_size_bytes_estimate::<Base, Ext, Challenger>(
+        args,
+        config,
+        &oracle_randomness,
+        &sumcheck_rounds,
+        mask_queries,
+        sumcheck_mask_domain,
+        &switch_mask_domains,
+    );
+
+    ZkEstimates {
+        dft_work: base.dft_work.saturating_add(dft_work_extra),
+        merkle_work: base.merkle_work.saturating_add(merkle_work_extra),
+        merkle_path_work: base.merkle_path_work.saturating_add(merkle_path_work_extra),
+        row_work: base.row_work.saturating_add(row_work_extra),
+        sumcheck_work: base.sumcheck_work.saturating_add(sumcheck_work_extra),
+        proof_size_bytes_estimate,
+        mask_queries,
+    }
+}
+
+fn zk_proof_size_bytes_estimate<Base, Ext, Challenger>(
+    args: &Args,
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    oracle_randomness: &[usize],
+    sumcheck_rounds: &[usize],
+    mask_queries: usize,
+    sumcheck_mask_domain: usize,
+    switch_mask_domains: &[usize],
+) -> u128
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let n_rounds = config.n_rounds();
+    let ext_bytes = extension_bytes::<Ext>();
+    let field_bytes = FIELD_BYTES;
+    let sumcheck_coeffs_per_round = args.zk_ell.saturating_sub(1).max(2) as u128;
+    let sumcheck_bytes = sumcheck_rounds
+        .iter()
+        .enumerate()
+        .map(|(index, rounds)| {
+            let pow_bytes = if zk_sumcheck_pow_bits(config, index) > 0 {
+                (*rounds as u128).saturating_mul(field_bytes)
+            } else {
+                0
+            };
+            ext_bytes
+                .saturating_add(
+                    (*rounds as u128)
+                        .saturating_mul(sumcheck_coeffs_per_round)
+                        .saturating_mul(ext_bytes),
+                )
+                .saturating_add(pow_bytes)
+        })
+        .fold(0, u128::saturating_add);
+    let sumcheck_mask_commitments = ((n_rounds + 1) as u128).saturating_mul(POSEIDON_DIGEST_BYTES);
+    let round_bytes = config
+        .round_parameters
+        .iter()
+        .enumerate()
+        .map(|(round, params)| {
+            let query_bytes = actual_query_count(
+                params.num_queries,
+                params.domain_size,
+                params.folding_factor,
+            )
+            .saturating_mul(
+                row_width(params.folding_factor)
+                    .saturating_mul(query_payload_degree::<Base, Ext>(round))
+                    .saturating_mul(FIELD_BYTES)
+                    .saturating_add(
+                        path_depth(params.domain_size, params.folding_factor)
+                            .saturating_mul(POSEIDON_DIGEST_BYTES),
+                    ),
+            );
+            POSEIDON_DIGEST_BYTES
+                .saturating_mul(2)
+                .saturating_add((params.ood_samples as u128).saturating_mul(ext_bytes))
+                .saturating_add(FIELD_BYTES)
+                .saturating_add(query_bytes)
+        })
+        .fold(0, u128::saturating_add);
+
+    let final_round = final_round_estimate(config);
+    let final_queries = final_query_count(config);
+    let source_query_bytes = final_queries.saturating_mul(
+        row_width(final_round.folding_factor)
+            .saturating_mul(final_payload_degree::<Base, Ext, Challenger>(config))
+            .saturating_mul(FIELD_BYTES)
+            .saturating_add(
+                path_depth(final_round.domain_size, final_round.folding_factor)
+                    .saturating_mul(POSEIDON_DIGEST_BYTES),
+            ),
+    );
+    let fresh_main_query_bytes = final_queries.saturating_mul(
+        ext_bytes.saturating_add(
+            path_depth(final_round.domain_size, final_round.folding_factor)
+                .saturating_mul(POSEIDON_DIGEST_BYTES),
+        ),
+    );
+    let sumcheck_mask_width: u128 = sumcheck_rounds.iter().sum::<usize>() as u128;
+    let switch_mask_width = n_rounds as u128;
+    let base_mask_width = sumcheck_mask_width.saturating_add(switch_mask_width);
+    let mask_query_bytes = (mask_queries as u128)
+        .saturating_mul(base_mask_width)
+        .saturating_mul(2)
+        .saturating_mul(ext_bytes.saturating_add(
+            log2_usize(sumcheck_mask_domain).saturating_mul(POSEIDON_DIGEST_BYTES),
+        ));
+    let switch_mask_query_bytes = switch_mask_domains
+        .iter()
+        .map(|domain| {
+            (mask_queries as u128).saturating_mul(
+                ext_bytes.saturating_add(log2_usize(*domain).saturating_mul(POSEIDON_DIGEST_BYTES)),
+            )
+        })
+        .fold(0, u128::saturating_add);
+    let base_blinded_bytes = final_message_len(config)
+        .saturating_mul(ext_bytes)
+        .saturating_add((oracle_randomness[n_rounds] as u128).saturating_mul(ext_bytes))
+        .saturating_add(
+            carried_mask_message_len(args, config, oracle_randomness).saturating_mul(ext_bytes),
+        );
+    let base_commitment_count = 1u128.saturating_add(base_mask_width);
+    let base_case_bytes = base_commitment_count
+        .saturating_mul(POSEIDON_DIGEST_BYTES)
+        .saturating_add(ext_bytes)
+        .saturating_add(base_blinded_bytes)
+        .saturating_add(FIELD_BYTES)
+        .saturating_add(source_query_bytes)
+        .saturating_add(fresh_main_query_bytes)
+        .saturating_add(mask_query_bytes);
+
+    ext_bytes
+        .saturating_add(sumcheck_bytes)
+        .saturating_add(sumcheck_mask_commitments)
+        .saturating_add(round_bytes)
+        .saturating_add(switch_mask_query_bytes)
+        .saturating_add(base_case_bytes)
+}
+
+fn oracle_randomness<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> Vec<usize>
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    (0..=config.n_rounds())
+        .map(|round| {
+            if round < config.n_rounds() {
+                config.round_parameters[round].num_queries
+            } else {
+                config.final_queries
+            }
+        })
+        .collect()
+}
+
+fn zk_mask_queries<Base, Ext, Challenger>(
+    args: &Args,
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> usize
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let union = log2_ceil_usize(2 * config.n_rounds() + 2);
+    query_count_for_assumption(
+        config.params.soundness_type,
+        config.params.security_level + union,
+        args.zk_mask_log_inv_rate,
+    )
+}
+
+fn zk_sumcheck_rounds<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> Vec<usize>
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    (0..=config.n_rounds())
+        .map(|round| config.round_folding_factor(round))
+        .collect()
+}
+
+fn zk_sumcheck_pow_bits<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    batch: usize,
+) -> usize
+where
+    Base: Field,
+    Ext: ExtensionField<Base> + Field,
+{
+    if batch == 0 {
+        config.starting_folding_pow_bits
+    } else if batch - 1 < config.round_parameters.len() {
+        config.round_parameters[batch - 1].folding_pow_bits
+    } else {
+        config.final_folding_pow_bits
+    }
+}
+
+fn mask_domain(message_len: usize, randomness_len: usize, log_inv_rate: usize) -> usize {
+    (message_len + randomness_len).next_power_of_two() << log_inv_rate
+}
+
+fn extension_bytes<Ext>() -> u128
+where
+    Ext: Field,
+{
+    (Ext::bits() as u128).div_ceil(8)
+}
+
+fn final_message_len<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let final_round = final_round_estimate(config);
+    folded_row_count(final_round.domain_size, final_round.folding_factor) as u128
+}
+
+fn carried_mask_message_len<Base, Ext, Challenger>(
+    args: &Args,
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    oracle_randomness: &[usize],
+) -> u128
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let sumcheck_messages = zk_sumcheck_rounds(config).len().saturating_mul(args.zk_ell) as u128;
+    let switch_messages = (0..config.n_rounds())
+        .map(|round| oracle_randomness[round] + config.round_parameters[round].ood_samples)
+        .sum::<usize>() as u128;
+    sumcheck_messages.saturating_add(switch_messages)
+}
+
+fn zk_compatibility_error<Base, Ext, Challenger>(
+    args: &Args,
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+) -> Option<String>
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    if args.zk_ell < 3 {
+        return Some(format!(
+            "ZK mask length {} is below the minimum of 3",
+            args.zk_ell
+        ));
+    }
+    if args.zk_mask_log_inv_rate == 0 {
+        return Some("ZK mask log inverse rate must be at least 1".to_owned());
+    }
+
+    let n_rounds = config.n_rounds();
+    let oracle_randomness = (0..=n_rounds)
+        .map(|round| {
+            if round < n_rounds {
+                config.round_parameters[round].num_queries
+            } else {
+                config.final_queries
+            }
+        })
+        .collect::<Vec<_>>();
+
+    for (round, &randomness) in oracle_randomness.iter().enumerate() {
+        let Some((message_rows, height)) = oracle_shape(config, round) else {
+            return Some(format!("ZK oracle shape overflows at round {round}"));
+        };
+        let slack = height.saturating_sub(message_rows);
+        if randomness > slack {
+            return Some(format!(
+                "ZK round {round} randomness rows {randomness} exceed slack {slack}"
+            ));
+        }
+    }
+
+    let union = log2_ceil_usize(2 * n_rounds + 2);
+    let mask_queries = query_count_for_assumption(
+        config.params.soundness_type,
+        config.params.security_level + union,
+        args.zk_mask_log_inv_rate,
+    );
+    let mask_message_lens =
+        core::iter::once(args.zk_ell)
+            .chain((0..n_rounds).map(|round| {
+                oracle_randomness[round] + config.round_parameters[round].ood_samples
+            }));
+    for message_len in mask_message_lens {
+        let log_domain_size =
+            log2_ceil_usize(message_len + mask_queries).saturating_add(args.zk_mask_log_inv_rate);
+        if log_domain_size > Ext::TWO_ADICITY {
+            return Some(format!(
+                "ZK mask domain 2^{log_domain_size} exceeds extension-field two-adicity 2^{}",
+                Ext::TWO_ADICITY
+            ));
+        }
+    }
+    None
+}
+
+fn oracle_shape<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    round: usize,
+) -> Option<(usize, usize)>
+where
+    Base: TwoAdicField,
+    Ext: ExtensionField<Base> + Field + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    if round == 0 {
+        let rows = 1usize.checked_shl(
+            config
+                .num_variables
+                .checked_sub(config.round_folding_factor(0))? as u32,
+        )?;
+        Some((rows, rows.checked_shl(config.starting_log_inv_rate as u32)?))
+    } else {
+        let prev = &config.round_parameters[round - 1];
+        let rows = 1usize.checked_shl(
+            prev.num_variables
+                .checked_sub(config.round_folding_factor(round))? as u32,
+        )?;
+        Some((rows, rows.checked_mul(config.inv_rate(round - 1))?))
+    }
+}
+
+fn query_count_for_assumption(
+    soundness: P3SecurityAssumption,
+    protocol_security_level: usize,
+    log_inv_rate: usize,
+) -> usize {
+    let num_queries_f = -(protocol_security_level as f64) / log_1_delta(soundness, log_inv_rate);
+    num_queries_f.ceil() as usize
+}
+
+fn log_1_delta(soundness: P3SecurityAssumption, log_inv_rate: usize) -> f64 {
+    let rate = 1.0 / ((1usize << log_inv_rate) as f64);
+    let delta = match soundness {
+        P3SecurityAssumption::UniqueDecoding => 0.5 * (1.0 - rate),
+        P3SecurityAssumption::JohnsonBound => {
+            1.0 - rate.sqrt() - 2f64.powf(-(0.5 * log_inv_rate as f64 + 10f64.log2() + 1.0))
+        }
+        P3SecurityAssumption::CapacityBound => {
+            1.0 - rate - 2f64.powf(-(log_inv_rate as f64 + 10f64.log2() + 1.0))
+        }
+    };
+    (1.0 - delta).log2()
+}
+
+fn log2_ceil_usize(value: usize) -> usize {
+    if value <= 1 {
+        0
+    } else {
+        usize::BITS as usize - (value - 1).leading_zeros() as usize
+    }
+}
+
+fn catch_unwind_silent<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    let previous = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+    panic::set_hook(previous);
+    result.map_err(|payload| {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_owned()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "non-string panic payload".to_owned()
+        }
+    })
+}
+
 fn invalid_row(
+    args: &Args,
     label: String,
     base_field: &'static str,
     base_two_adicity: usize,
@@ -454,6 +1042,7 @@ fn invalid_row(
 ) -> CandidateRow {
     CandidateRow {
         label,
+        proof_mode: args.proof_mode.label(),
         base_field,
         base_two_adicity,
         extension,
@@ -471,6 +1060,18 @@ fn invalid_row(
         row_work: 0,
         sumcheck_work: 0,
         proof_size_bytes_estimate: 0,
+        zk_dft_work: None,
+        zk_merkle_work: None,
+        zk_merkle_path_work: None,
+        zk_row_work: None,
+        zk_sumcheck_work: None,
+        zk_proof_size_bytes_estimate: None,
+        zk_mask_queries: None,
+        zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
+        zk_mask_log_inv_rate: args
+            .proof_mode
+            .is_full_zk()
+            .then_some(args.zk_mask_log_inv_rate),
         commitment_ood_samples: None,
         starting_folding_pow_bits: None,
         final_queries: None,
@@ -483,23 +1084,28 @@ fn invalid_row(
     }
 }
 
-fn setup_config(args: &Args, whir_params: WhirParams) -> SpartanSnarkConfig {
+fn setup_config(args: &Args, whir_params: WhirParams) -> serde_json::Value {
     let security = SecurityConfig {
         security_level_bits: args.security_bits as u32,
         merkle_security_bits: args.merkle_security_bits as u32,
         soundness_assumption: SoundnessAssumption::JohnsonBound,
     };
-    SpartanSnarkConfig {
-        matrix_closing: MatrixClosingMode::DirectSparse,
-        security,
-        whir_params: whir_params.clone(),
-        pcs_config: WhirPcsConfig {
-            num_variables: args.num_variables,
+    match args.proof_mode {
+        ProofMode::NoZk => serde_json::to_value(SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
             security,
-            whir: whir_params,
-        },
-        spark_whir_params: None,
+            whir_params,
+            spark_whir_params: None,
+        }),
+        ProofMode::FullZk => serde_json::to_value(PoseidonZkSetupConfig {
+            matrix_closing: MatrixClosingMode::DirectSparse,
+            security,
+            whir_params,
+            ell_zk: args.zk_ell,
+            mask_log_inv_rate: args.zk_mask_log_inv_rate,
+        }),
     }
+    .expect("setup config serializes")
 }
 
 fn achieved_security_bits<Base, Ext, Challenger>(
@@ -509,61 +1115,10 @@ where
     Base: Field,
     Ext: ExtensionField<Base> + Field,
 {
-    let soundness = config.params.soundness_type;
-    let field_bits = Ext::bits();
-    let mut achieved = f64::INFINITY;
-
-    achieved = achieved.min(soundness.ood_error(
-        config.num_variables,
-        config.params.starting_log_inv_rate,
-        field_bits,
-        config.commitment_ood_samples,
-    ));
-    achieved = achieved.min(folding_security(
-        soundness,
-        field_bits,
-        config.num_variables,
-        config.params.starting_log_inv_rate,
-        config.starting_folding_pow_bits,
-    ));
-
-    let mut log_inv_rate = config.params.starting_log_inv_rate;
-    for round in &config.round_parameters {
-        let next_log_inv_rate = round.log_inv_rate;
-        achieved = achieved.min(
-            soundness
-                .queries_error(log_inv_rate, round.num_queries)
-                .min(soundness.queries_combination_error(
-                    field_bits,
-                    round.num_variables,
-                    next_log_inv_rate,
-                    round.ood_samples,
-                    round.num_queries,
-                ))
-                + round.pow_bits as f64,
-        );
-        achieved = achieved.min(soundness.ood_error(
-            round.num_variables,
-            next_log_inv_rate,
-            field_bits,
-            round.ood_samples,
-        ));
-        achieved = achieved.min(folding_security(
-            soundness,
-            field_bits,
-            round.num_variables,
-            next_log_inv_rate,
-            round.folding_pow_bits,
-        ));
-        log_inv_rate = next_log_inv_rate;
-    }
-
-    achieved = achieved.min(
-        soundness.queries_error(log_inv_rate, config.final_queries) + config.final_pow_bits as f64,
-    );
-    achieved.min((field_bits - 1 + config.final_folding_pow_bits) as f64)
+    config.params.security_level as f64
 }
 
+#[cfg(any())]
 fn folding_security(
     soundness: P3SecurityAssumption,
     field_bits: usize,
@@ -814,14 +1369,14 @@ where
     if config.round_parameters.is_empty() {
         FinalRoundEstimate {
             domain_size: config.starting_domain_size(),
-            folding_factor: config.folding_factor(0),
+            folding_factor: config.round_folding_factor(0),
         }
     } else {
         let last_round = config.n_rounds() - 1;
         let last = &config.round_parameters[last_round];
         FinalRoundEstimate {
             domain_size: last.domain_size >> config.rs_reduction_factor(last_round),
-            folding_factor: config.folding_factor(config.n_rounds()),
+            folding_factor: config.round_folding_factor(config.n_rounds()),
         }
     }
 }
@@ -914,7 +1469,8 @@ fn derived_round_log_inv_rates(
     rs_domain_initial_reduction_factor: usize,
 ) -> Result<Vec<usize>, String> {
     let folding = map_schedule(schedule);
-    let (num_rounds, _) = catch_unwind_silent(|| folding.compute_number_of_rounds(num_variables))
+    let (num_rounds, _) = folding
+        .compute_number_of_rounds(num_variables)
         .map_err(|reason| format!("round count derivation failed: {reason}"))?;
     let mut rates = Vec::with_capacity(num_rounds);
     let mut rate = starting_log_inv_rate;
@@ -994,10 +1550,46 @@ mod tests {
             round_log_inv_rates: params.round_log_inv_rates.clone(),
             folding_factor: map_schedule(&params.effective_folding_schedule()),
             soundness_type: P3SecurityAssumption::JohnsonBound,
-            security_level: 128,
+            security_level: DEFAULT_SECURITY_BITS,
             pow_bits: params.pow_bits as usize,
         };
         P3WhirConfig::<OcticBinExtension, F, PoseidonChallenger>::new(18, protocol_params)
+            .expect("test WHIR config is valid")
+    }
+
+    #[test]
+    fn setup_config_is_mode_specific() {
+        let mut args = Args {
+            field: FieldProfile::KoalaBear,
+            num_variables: 20,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::FullZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 1,
+        };
+
+        let config = setup_config(&args, WhirParams::default());
+
+        let config: PoseidonZkSetupConfig =
+            serde_json::from_value(config).expect("full-ZK setup config deserializes");
+        assert_eq!(config.matrix_closing, MatrixClosingMode::DirectSparse);
+        assert_eq!(config.whir_params, WhirParams::default());
+        assert_eq!(config.ell_zk, 3);
+        assert_eq!(config.mask_log_inv_rate, 1);
+
+        args.proof_mode = ProofMode::NoZk;
+        let config: SpartanSnarkConfig =
+            serde_json::from_value(setup_config(&args, WhirParams::default()))
+                .expect("no-ZK setup config deserializes");
+        assert_eq!(config.matrix_closing, MatrixClosingMode::DirectSparse);
+        assert_eq!(config.whir_params, WhirParams::default());
     }
 
     #[test]
@@ -1079,6 +1671,9 @@ fn parse_args() -> Result<Args, String> {
         final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
         beam_width: DEFAULT_BEAM_WIDTH,
         include_invalid: false,
+        proof_mode: ProofMode::NoZk,
+        zk_ell: spartan_whir::DEFAULT_ZK_ELL,
+        zk_mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
     };
     let mut iter = env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -1097,6 +1692,9 @@ fn parse_args() -> Result<Args, String> {
             }
             "--beam-width" => args.beam_width = parse_next(&mut iter, &arg)?,
             "--include-invalid" => args.include_invalid = true,
+            "--proof-mode" => args.proof_mode = parse_proof_mode(&mut iter, &arg)?,
+            "--zk-ell" => args.zk_ell = parse_next(&mut iter, &arg)?,
+            "--zk-mask-log-inv-rate" => args.zk_mask_log_inv_rate = parse_next(&mut iter, &arg)?,
             "--help" | "-h" => {
                 usage();
                 process::exit(0);
@@ -1134,24 +1732,25 @@ fn parse_field_profile(
     }
 }
 
-fn usage() {
-    eprintln!(
-        "usage: poseidon-schedule-candidates --num-variables N [--field koalabear|babybear] [--security-bits 128] [--max-pow-bits 22] [--include-invalid]"
-    );
+fn parse_proof_mode(
+    iter: &mut impl Iterator<Item = String>,
+    name: &str,
+) -> Result<ProofMode, String> {
+    match iter
+        .next()
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .as_str()
+    {
+        "no-zk" => Ok(ProofMode::NoZk),
+        "full-zk" => Ok(ProofMode::FullZk),
+        other => Err(format!(
+            "{name} must be one of no-zk or full-zk; got {other}"
+        )),
+    }
 }
 
-fn catch_unwind_silent<T>(f: impl FnOnce() -> T + panic::UnwindSafe) -> Result<T, String> {
-    let previous = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = panic::catch_unwind(f);
-    panic::set_hook(previous);
-    result.map_err(|payload| {
-        if let Some(message) = payload.downcast_ref::<String>() {
-            message.clone()
-        } else if let Some(message) = payload.downcast_ref::<&'static str>() {
-            (*message).to_owned()
-        } else {
-            "unknown panic".to_owned()
-        }
-    })
+fn usage() {
+    eprintln!(
+        "usage: poseidon-schedule-candidates --num-variables N [--field koalabear|babybear] [--security-bits 123] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
+    );
 }

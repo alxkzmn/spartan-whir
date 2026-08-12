@@ -1,4 +1,19 @@
-use crate::{Evaluations, PcsStatement, SpartanWhirEngine, SpartanWhirError};
+use crate::{
+    Evaluations, MatrixClosingMode, PcsStatement, SpartanWhirEngine, SpartanWhirError,
+    WhirPcsConfig,
+};
+
+mod sealed {
+    pub trait SealedNoZkPcs {}
+}
+
+/// PCS families that may be composed with the ordinary, non-ZK Spartan IOP.
+///
+/// The capability is attached to the PCS family rather than an engine pairing,
+/// so future engines can reuse a supported plain PCS implementation.
+pub trait NoZkPcs: sealed::SealedNoZkPcs {}
+
+pub(crate) use sealed::SealedNoZkPcs;
 
 pub trait MlePcs<E: SpartanWhirEngine> {
     type Commitment;
@@ -30,6 +45,18 @@ pub trait MlePcs<E: SpartanWhirEngine> {
 
 pub trait ProtocolPcs<E: SpartanWhirEngine>: MlePcs<E> {
     type ParsedCommitment;
+
+    fn validate_spartan_config(
+        config: &WhirPcsConfig,
+        _matrix_closing: MatrixClosingMode,
+        _num_outer_rounds: usize,
+        _num_inner_rounds: usize,
+    ) -> Result<(), SpartanWhirError>
+    where
+        Self: MlePcs<E, Config = WhirPcsConfig>,
+    {
+        config.validate()
+    }
 
     fn prepare_committed_opening(
         config: &Self::Config,

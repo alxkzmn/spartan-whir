@@ -1,5 +1,7 @@
 use std::{
-    fmt, fs,
+    fmt,
+    fs::File,
+    io::Read,
     path::Path,
     string::{String, ToString},
     vec::Vec,
@@ -11,6 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::{engine::F, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix, SpartanWhirError};
 
 pub const KOALABEAR_MODULUS: u32 = 2_130_706_433;
+pub const MAX_CIRCOM_FILE_BYTES: usize = 1 << 30;
+pub const MAX_CIRCOM_SECTIONS: usize = 64;
+pub const MAX_CIRCOM_DIMENSION: usize = 1 << 24;
+pub const MAX_CIRCOM_TERMS: usize = 1 << 24;
 const R1CS_MAGIC: &[u8; 4] = b"r1cs";
 const WTNS_MAGIC: &[u8; 4] = b"wtns";
 
@@ -29,16 +35,38 @@ pub enum CircomAdapterError {
     Io(String),
     UnexpectedEof,
     InvalidMagic(&'static str),
-    UnsupportedVersion { format: &'static str, version: u32 },
+    UnsupportedVersion {
+        format: &'static str,
+        version: u32,
+    },
     MissingSection(u32),
     DuplicateSection(u32),
-    UnsupportedSection { id: u32 },
-    InvalidFieldSize { expected: u32, actual: u32 },
-    InvalidModulus { expected: u32, actual: Vec<u8> },
+    UnsupportedSection {
+        id: u32,
+    },
+    InvalidFieldSize {
+        expected: u32,
+        actual: u32,
+    },
+    InvalidModulus {
+        expected: u32,
+        actual: Vec<u8>,
+    },
     InvalidFieldElement,
-    InvalidWitnessLength { expected: usize, actual: usize },
+    InvalidWitnessLength {
+        expected: usize,
+        actual: usize,
+    },
+    ResourceLimitExceeded {
+        resource: &'static str,
+        limit: u64,
+        actual: u64,
+    },
+    AllocationFailed(&'static str),
     InvalidShape,
-    UnsatisfiedConstraint { row: usize },
+    UnsatisfiedConstraint {
+        row: usize,
+    },
 }
 
 impl fmt::Display for CircomAdapterError {
@@ -67,6 +95,17 @@ impl fmt::Display for CircomAdapterError {
                     "invalid witness length: expected {expected}, got {actual}"
                 )
             }
+            Self::ResourceLimitExceeded {
+                resource,
+                limit,
+                actual,
+            } => write!(
+                f,
+                "Circom {resource} exceeds limit: maximum {limit}, got {actual}"
+            ),
+            Self::AllocationFailed(resource) => {
+                write!(f, "failed to allocate memory for Circom {resource}")
+            }
             Self::InvalidShape => write!(f, "invalid R1CS shape"),
             Self::UnsatisfiedConstraint { row } => write!(f, "unsatisfied constraint at row {row}"),
         }
@@ -81,6 +120,48 @@ impl From<std::io::Error> for CircomAdapterError {
     }
 }
 
+fn ensure_limit(
+    resource: &'static str,
+    actual: usize,
+    limit: usize,
+) -> Result<(), CircomAdapterError> {
+    if actual > limit {
+        return Err(CircomAdapterError::ResourceLimitExceeded {
+            resource,
+            limit: limit as u64,
+            actual: actual as u64,
+        });
+    }
+    Ok(())
+}
+
+fn validate_file_size(bytes: &[u8], resource: &'static str) -> Result<(), CircomAdapterError> {
+    ensure_limit(resource, bytes.len(), MAX_CIRCOM_FILE_BYTES)
+}
+
+fn read_path_bounded(
+    path: impl AsRef<Path>,
+    resource: &'static str,
+) -> Result<Vec<u8>, CircomAdapterError> {
+    let file = File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CIRCOM_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    validate_file_size(&bytes, resource)?;
+    Ok(bytes)
+}
+
+fn try_vec_with_capacity<T>(
+    capacity: usize,
+    resource: &'static str,
+) -> Result<Vec<T>, CircomAdapterError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| CircomAdapterError::AllocationFailed(resource))?;
+    Ok(values)
+}
+
 /// Import a KoalaBear Circom `.r1cs` and `.wtns` pair.
 ///
 /// Import validates the file headers, remaps Circom wires into Spartan-WHIR's
@@ -90,23 +171,26 @@ pub fn import_paths(
     r1cs_path: impl AsRef<Path>,
     wtns_path: impl AsRef<Path>,
 ) -> Result<ImportedCircuit, CircomAdapterError> {
-    let r1cs = fs::read(r1cs_path)?;
-    let wtns = fs::read(wtns_path)?;
+    let r1cs = read_path_bounded(r1cs_path, "R1CS file")?;
+    let wtns = read_path_bounded(wtns_path, "witness file")?;
     import_bytes(&r1cs, &wtns)
 }
 
 pub fn import_bytes(r1cs: &[u8], wtns: &[u8]) -> Result<ImportedCircuit, CircomAdapterError> {
+    validate_file_size(r1cs, "R1CS file")?;
+    validate_file_size(wtns, "witness file")?;
     let r1cs = parse_r1cs(r1cs)?;
     let witness = parse_wtns(wtns)?;
     import_parsed(r1cs, witness)
 }
 
 pub fn import_r1cs_path(r1cs_path: impl AsRef<Path>) -> Result<CircomR1cs, CircomAdapterError> {
-    let r1cs = fs::read(r1cs_path)?;
+    let r1cs = read_path_bounded(r1cs_path, "R1CS file")?;
     import_r1cs_bytes(&r1cs)
 }
 
 pub fn import_r1cs_bytes(r1cs: &[u8]) -> Result<CircomR1cs, CircomAdapterError> {
+    validate_file_size(r1cs, "R1CS file")?;
     build_circom_r1cs(parse_r1cs(r1cs)?)
 }
 
@@ -114,7 +198,7 @@ pub fn import_witness_path(
     shape: &R1csShape<F>,
     wtns_path: impl AsRef<Path>,
 ) -> Result<ImportedWitness, CircomAdapterError> {
-    let wtns = fs::read(wtns_path)?;
+    let wtns = read_path_bounded(wtns_path, "witness file")?;
     import_witness_bytes(shape, &wtns)
 }
 
@@ -122,6 +206,7 @@ pub fn import_witness_bytes(
     shape: &R1csShape<F>,
     wtns: &[u8],
 ) -> Result<ImportedWitness, CircomAdapterError> {
+    validate_file_size(wtns, "witness file")?;
     let witness_values = parse_wtns(wtns)?;
     import_witness_values(shape, witness_values)
 }
@@ -132,6 +217,7 @@ pub fn import_witness_bytes_with_layout(
     num_io: usize,
     wtns: &[u8],
 ) -> Result<ImportedWitness, CircomAdapterError> {
+    validate_file_size(wtns, "witness file")?;
     let witness_values = parse_wtns(wtns)?;
     import_witness_values_with_layout(validation_shape, num_vars, num_io, witness_values)
 }
@@ -173,9 +259,13 @@ fn split_witness_values_with_layout(
     let one_plus_io = num_io
         .checked_add(1)
         .ok_or(CircomAdapterError::InvalidShape)?;
-    let public_inputs = witness_values[1..one_plus_io].to_vec();
+    let mut public_inputs = try_vec_with_capacity(num_io, "public inputs")?;
+    public_inputs.extend_from_slice(&witness_values[1..one_plus_io]);
+    let witness_len = witness_values.len() - one_plus_io;
+    let mut witness_values_out = try_vec_with_capacity(witness_len, "witness values")?;
+    witness_values_out.extend_from_slice(&witness_values[one_plus_io..]);
     let witness = R1csWitness {
-        w: witness_values[one_plus_io..].to_vec(),
+        w: witness_values_out,
     };
     Ok((witness, public_inputs))
 }
@@ -227,7 +317,17 @@ fn build_circom_r1cs(r1cs: ParsedR1cs) -> Result<CircomR1cs, CircomAdapterError>
     };
 
     let map_matrix = |lcs: &[LinearCombination]| -> Result<SparseMatrix<F>, CircomAdapterError> {
-        let mut entries = Vec::new();
+        let entry_count = lcs.iter().try_fold(0usize, |count, lc| {
+            count
+                .checked_add(lc.terms.len())
+                .ok_or(CircomAdapterError::ResourceLimitExceeded {
+                    resource: "matrix terms",
+                    limit: MAX_CIRCOM_TERMS as u64,
+                    actual: u64::MAX,
+                })
+        })?;
+        ensure_limit("matrix terms", entry_count, MAX_CIRCOM_TERMS)?;
+        let mut entries = try_vec_with_capacity(entry_count, "matrix terms")?;
         for (row, lc) in lcs.iter().enumerate() {
             for term in &lc.terms {
                 entries.push(SparseMatEntry {
@@ -298,7 +398,7 @@ struct ParsedR1cs {
     c: Vec<LinearCombination>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct R1csHeader {
     total_wires: usize,
     public_outputs: usize,
@@ -307,18 +407,18 @@ struct R1csHeader {
     number_of_constraints: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LinearCombination {
     terms: Vec<Term>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Term {
     wire: usize,
     coeff: F,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Section<'a> {
     id: u32,
     data: &'a [u8],
@@ -362,8 +462,20 @@ fn parse_r1cs_header(bytes: &[u8]) -> Result<R1csHeader, CircomAdapterError> {
     let public_outputs = reader.u32()? as usize;
     let public_inputs = reader.u32()? as usize;
     let private_inputs = reader.u32()? as usize;
-    let _number_of_labels = reader.u64()? as usize;
+    let number_of_labels = reader.u64()?;
     let number_of_constraints = reader.u32()? as usize;
+    ensure_limit("wires", total_wires, MAX_CIRCOM_DIMENSION)?;
+    ensure_limit("public outputs", public_outputs, MAX_CIRCOM_DIMENSION)?;
+    ensure_limit("public inputs", public_inputs, MAX_CIRCOM_DIMENSION)?;
+    ensure_limit("private inputs", private_inputs, MAX_CIRCOM_DIMENSION)?;
+    if number_of_labels > MAX_CIRCOM_DIMENSION as u64 {
+        return Err(CircomAdapterError::ResourceLimitExceeded {
+            resource: "labels",
+            limit: MAX_CIRCOM_DIMENSION as u64,
+            actual: number_of_labels,
+        });
+    }
+    ensure_limit("constraints", number_of_constraints, MAX_CIRCOM_DIMENSION)?;
     Ok(R1csHeader {
         total_wires,
         public_outputs,
@@ -384,20 +496,40 @@ fn parse_constraints(
     header: &R1csHeader,
 ) -> Result<ConstraintTriples, CircomAdapterError> {
     let mut reader = Reader::new(bytes);
-    let mut a = Vec::with_capacity(header.number_of_constraints);
-    let mut b = Vec::with_capacity(header.number_of_constraints);
-    let mut c = Vec::with_capacity(header.number_of_constraints);
+    if header.number_of_constraints > reader.remaining() / 12 {
+        return Err(CircomAdapterError::UnexpectedEof);
+    }
+    let mut a = try_vec_with_capacity(header.number_of_constraints, "A constraints")?;
+    let mut b = try_vec_with_capacity(header.number_of_constraints, "B constraints")?;
+    let mut c = try_vec_with_capacity(header.number_of_constraints, "C constraints")?;
+    let mut total_terms = 0usize;
     for _ in 0..header.number_of_constraints {
-        a.push(parse_lc(&mut reader)?);
-        b.push(parse_lc(&mut reader)?);
-        c.push(parse_lc(&mut reader)?);
+        a.push(parse_lc(&mut reader, &mut total_terms)?);
+        b.push(parse_lc(&mut reader, &mut total_terms)?);
+        c.push(parse_lc(&mut reader, &mut total_terms)?);
     }
     Ok((a, b, c))
 }
 
-fn parse_lc(reader: &mut Reader<'_>) -> Result<LinearCombination, CircomAdapterError> {
+fn parse_lc(
+    reader: &mut Reader<'_>,
+    total_terms: &mut usize,
+) -> Result<LinearCombination, CircomAdapterError> {
     let n = reader.u32()? as usize;
-    let mut terms = Vec::with_capacity(n);
+    let next_total =
+        total_terms
+            .checked_add(n)
+            .ok_or(CircomAdapterError::ResourceLimitExceeded {
+                resource: "linear-combination terms",
+                limit: MAX_CIRCOM_TERMS as u64,
+                actual: u64::MAX,
+            })?;
+    ensure_limit("linear-combination terms", next_total, MAX_CIRCOM_TERMS)?;
+    *total_terms = next_total;
+    if n > reader.remaining() / 8 {
+        return Err(CircomAdapterError::UnexpectedEof);
+    }
+    let mut terms = try_vec_with_capacity(n, "linear-combination terms")?;
     for _ in 0..n {
         terms.push(Term {
             wire: reader.u32()? as usize,
@@ -433,19 +565,36 @@ fn parse_wtns(bytes: &[u8]) -> Result<Vec<F>, CircomAdapterError> {
     }
     validate_modulus(header_reader.take(4)?)?;
     let n_witness = header_reader.u32()? as usize;
-    if witness.len() != n_witness * 4 {
+    ensure_limit("witness values", n_witness, MAX_CIRCOM_DIMENSION)?;
+    let expected_witness_bytes =
+        n_witness
+            .checked_mul(4)
+            .ok_or(CircomAdapterError::ResourceLimitExceeded {
+                resource: "witness bytes",
+                limit: MAX_CIRCOM_FILE_BYTES as u64,
+                actual: u64::MAX,
+            })?;
+    if witness.len() != expected_witness_bytes {
         return Err(CircomAdapterError::InvalidWitnessLength {
             expected: n_witness,
             actual: witness.len() / 4,
         });
     }
 
-    witness.chunks_exact(4).map(parse_field).collect()
+    let mut values = try_vec_with_capacity(n_witness, "witness values")?;
+    for bytes in witness.chunks_exact(4) {
+        values.push(parse_field(bytes)?);
+    }
+    Ok(values)
 }
 
 fn read_sections<'a>(reader: &mut Reader<'a>) -> Result<Vec<Section<'a>>, CircomAdapterError> {
     let n_sections = reader.u32()? as usize;
-    let mut sections = Vec::with_capacity(n_sections);
+    ensure_limit("sections", n_sections, MAX_CIRCOM_SECTIONS)?;
+    if n_sections > reader.remaining() / 12 {
+        return Err(CircomAdapterError::UnexpectedEof);
+    }
+    let mut sections = try_vec_with_capacity(n_sections, "sections")?;
     for _ in 0..n_sections {
         let id = reader.u32()?;
         if sections
@@ -454,7 +603,14 @@ fn read_sections<'a>(reader: &mut Reader<'a>) -> Result<Vec<Section<'a>>, Circom
         {
             return Err(CircomAdapterError::DuplicateSection(id));
         }
-        let len = reader.u64()? as usize;
+        let len_u64 = reader.u64()?;
+        let len =
+            usize::try_from(len_u64).map_err(|_| CircomAdapterError::ResourceLimitExceeded {
+                resource: "section bytes",
+                limit: MAX_CIRCOM_FILE_BYTES as u64,
+                actual: len_u64,
+            })?;
+        ensure_limit("section bytes", len, MAX_CIRCOM_FILE_BYTES)?;
         let data = reader.take(len)?;
         sections.push(Section { id, data });
     }
@@ -513,6 +669,10 @@ impl<'a> Reader<'a> {
         let out = &self.bytes[self.pos..end];
         self.pos = end;
         Ok(out)
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
     }
 
     fn u32(&mut self) -> Result<u32, CircomAdapterError> {
@@ -757,5 +917,84 @@ mod tests {
             import_bytes(&r1cs, &wtns),
             Err(CircomAdapterError::UnsupportedSection { id: 9 })
         ));
+    }
+
+    #[test]
+    fn rejects_oversized_section_count_before_allocation() {
+        let mut bytes = Vec::new();
+        u32_le(&mut bytes, (MAX_CIRCOM_SECTIONS + 1) as u32);
+        let mut reader = Reader::new(&bytes);
+
+        assert_eq!(
+            read_sections(&mut reader),
+            Err(CircomAdapterError::ResourceLimitExceeded {
+                resource: "sections",
+                limit: MAX_CIRCOM_SECTIONS as u64,
+                actual: (MAX_CIRCOM_SECTIONS + 1) as u64,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_r1cs_dimensions_before_allocation() {
+        let mut header = Vec::new();
+        u32_le(&mut header, 4);
+        field(&mut header, KOALABEAR_MODULUS);
+        u32_le(&mut header, 5);
+        u32_le(&mut header, 1);
+        u32_le(&mut header, 1);
+        u32_le(&mut header, 1);
+        u64_le(&mut header, 5);
+        u32_le(&mut header, (MAX_CIRCOM_DIMENSION + 1) as u32);
+
+        assert_eq!(
+            parse_r1cs_header(&header),
+            Err(CircomAdapterError::ResourceLimitExceeded {
+                resource: "constraints",
+                limit: MAX_CIRCOM_DIMENSION as u64,
+                actual: (MAX_CIRCOM_DIMENSION + 1) as u64,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_linear_combination_before_allocation() {
+        let mut bytes = Vec::new();
+        u32_le(&mut bytes, (MAX_CIRCOM_TERMS + 1) as u32);
+        let mut reader = Reader::new(&bytes);
+        let mut total_terms = 0;
+
+        assert_eq!(
+            parse_lc(&mut reader, &mut total_terms),
+            Err(CircomAdapterError::ResourceLimitExceeded {
+                resource: "linear-combination terms",
+                limit: MAX_CIRCOM_TERMS as u64,
+                actual: (MAX_CIRCOM_TERMS + 1) as u64,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_witness_count_before_allocation() {
+        let mut header = Vec::new();
+        u32_le(&mut header, 4);
+        field(&mut header, KOALABEAR_MODULUS);
+        u32_le(&mut header, (MAX_CIRCOM_DIMENSION + 1) as u32);
+
+        let mut wtns = Vec::new();
+        wtns.extend_from_slice(WTNS_MAGIC);
+        u32_le(&mut wtns, 2);
+        u32_le(&mut wtns, 2);
+        section(&mut wtns, 1, &header);
+        section(&mut wtns, 2, &[]);
+
+        assert_eq!(
+            parse_wtns(&wtns),
+            Err(CircomAdapterError::ResourceLimitExceeded {
+                resource: "witness values",
+                limit: MAX_CIRCOM_DIMENSION as u64,
+                actual: (MAX_CIRCOM_DIMENSION + 1) as u64,
+            })
+        );
     }
 }

@@ -1,31 +1,135 @@
 use alloc::vec::Vec;
-use p3_challenger::CanObserve;
+use core::marker::PhantomData;
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use rand::{
+    distr::{Distribution, StandardUniform},
+    CryptoRng, Rng,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     engine::{poseidon_challenger, ExtField, PoseidonChallenger, PoseidonEngine, F},
-    MatrixClosingMode, MlePcs, Plonky3WhirPcs, R1csInstance, R1csShape, R1csWitness,
-    SpartanProofKind, SpartanProtocol, SpartanSnarkConfig, SpartanWhirError,
+    plonky3_whir_pcs::{build_poseidon_full_zk_pcs, PoseidonCommitment},
+    protocol::{validate_canonical_verifying_shape, PoseidonZkSpartanProtocol},
+    r1cs::{DirectBindLayout, DirectMultiplyLayout},
+    DomainSeparator, MatrixClosingMode, MlePcs, Plonky3WhirPcs, R1csInstance, R1csShape,
+    R1csWitness, SecurityConfig, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
+    SpartanWhirError, WhirParams, ZkSpartanProof, ZkWhirPcsConfig,
 };
 
 pub type PoseidonSetupConfig = SpartanSnarkConfig;
 pub type PoseidonProofKind<Ext> = SpartanProofKind<PoseidonEngine<Ext>, Plonky3WhirPcs>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseidonZkSetupConfig {
+    pub matrix_closing: MatrixClosingMode,
+    pub security: SecurityConfig,
+    pub whir_params: WhirParams,
+    pub ell_zk: usize,
+    pub mask_log_inv_rate: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct PoseidonZkProvingKey<Ext: ExtField> {
+    pub(crate) shape_canonical: R1csShape<F>,
+    pub(crate) num_cons_unpadded: usize,
+    pub(crate) num_vars_unpadded: usize,
+    pub(crate) num_io: usize,
+    pub(crate) pcs_config: ZkWhirPcsConfig,
+    pub(crate) domain_separator: DomainSeparator,
+    #[serde(skip)]
+    pub(crate) direct_bind_layout: Option<DirectBindLayout<F>>,
+    #[serde(skip)]
+    pub(crate) direct_multiply_layout: Option<DirectMultiplyLayout>,
+    marker: PhantomData<Ext>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct PoseidonZkVerifyingKey<Ext: ExtField> {
+    pub(crate) shape_canonical: R1csShape<F>,
+    pub(crate) num_cons_unpadded: usize,
+    pub(crate) num_vars_unpadded: usize,
+    pub(crate) num_io: usize,
+    pub(crate) pcs_config: ZkWhirPcsConfig,
+    pub(crate) domain_separator: DomainSeparator,
+    marker: PhantomData<Ext>,
+}
+
+impl<Ext: ExtField> PoseidonZkProvingKey<Ext> {
+    pub fn prepare_for_proving(&mut self) -> Result<(), SpartanWhirError> {
+        self.direct_bind_layout = Some(self.shape_canonical.direct_bind_layout()?);
+        self.direct_multiply_layout = Some(self.shape_canonical.direct_multiply_layout()?);
+        Ok(())
+    }
+}
+
+impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
+    pub(crate) fn validate(&self) -> Result<(), SpartanWhirError> {
+        validate_canonical_verifying_shape(
+            &self.shape_canonical,
+            self.num_cons_unpadded,
+            self.num_vars_unpadded,
+            self.num_io,
+        )?;
+        self.pcs_config.validate()?;
+
+        let num_outer_rounds = self.shape_canonical.num_cons.ilog2() as usize;
+        if num_outer_rounds == 0
+            || self.pcs_config.base.num_variables != self.shape_canonical.num_vars.ilog2() as usize
+        {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        let expected_domain = DomainSeparator::new_full_zk(
+            &self.shape_canonical,
+            &self.pcs_config.base.security,
+            &self.pcs_config.base.whir,
+        );
+        if self.domain_separator != expected_domain {
+            return Err(SpartanWhirError::invalid_config());
+        }
+
+        Ok(())
+    }
+}
+
 /// Poseidon Spartan proof plus its public instance.
 ///
 /// Serialize this value with any serde-compatible encoding chosen by the
-/// deployment or benchmark layer.
+/// deployment or benchmark layer. This is the no-ZK Spartan IOP with plain
+/// WHIR. Use [`PoseidonZkProof`] when the application requires zero knowledge.
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
     serialize = "Ext: ExtField, R1csInstance<F, <Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>: Serialize, PoseidonProofKind<Ext>: Serialize",
     deserialize = "Ext: ExtField, R1csInstance<F, <Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>: Deserialize<'de>, PoseidonProofKind<Ext>: Deserialize<'de>"
 ))]
-pub struct PoseidonProof<Ext: ExtField> {
+pub struct PoseidonProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
     pub instance: R1csInstance<F, <Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
     pub proof: PoseidonProofKind<Ext>,
 }
 
-impl<Ext: ExtField> PoseidonProof<Ext> {
+/// Full witness-hiding DirectSparse Spartan-WHIR proof plus its public instance.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(
+    serialize = "Ext: ExtField, ZkSpartanProof<Ext>: Serialize",
+    deserialize = "Ext: ExtField, ZkSpartanProof<Ext>: Deserialize<'de>"
+))]
+pub struct PoseidonZkProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    pub instance: R1csInstance<F, PoseidonCommitment>,
+    pub proof: ZkSpartanProof<Ext>,
+}
+
+impl<Ext: ExtField> PoseidonProof<Ext>
+where
+    StandardUniform: Distribution<Ext>,
+{
     pub fn new(
         instance: R1csInstance<F, <Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
         proof: PoseidonProofKind<Ext>,
@@ -55,15 +159,84 @@ pub fn setup_poseidon<Ext>(
 >
 where
     Ext: ExtField,
-    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
+    StandardUniform: Distribution<Ext>,
+    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
 {
     SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::setup_with_config(&shape, &config)
+}
+
+pub fn setup_poseidon_zk<Ext>(
+    shape: R1csShape<F>,
+    config: PoseidonZkSetupConfig,
+) -> Result<(PoseidonZkProvingKey<Ext>, PoseidonZkVerifyingKey<Ext>), SpartanWhirError>
+where
+    Ext: ExtField,
+    StandardUniform: Distribution<Ext>,
+{
+    if config.matrix_closing != MatrixClosingMode::DirectSparse {
+        return Err(SpartanWhirError::UnsupportedFullZkMatrixClosing(
+            config.matrix_closing,
+        ));
+    }
+    config.security.validate()?;
+    shape.validate()?;
+
+    let shape_canonical = shape.pad_regular()?;
+    let num_variables = shape_canonical.num_vars.ilog2() as usize;
+    let num_outer_rounds = shape_canonical.num_cons.ilog2() as usize;
+    if num_outer_rounds == 0 {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let pcs_config = ZkWhirPcsConfig {
+        base: crate::WhirPcsConfig {
+            num_variables,
+            security: config.security,
+            whir: config.whir_params,
+        },
+        ell_zk: config.ell_zk,
+        mask_log_inv_rate: config.mask_log_inv_rate,
+    };
+    build_poseidon_full_zk_pcs::<Ext>(&pcs_config, num_outer_rounds, num_variables + 1)?;
+    let domain_separator = DomainSeparator::new_full_zk(
+        &shape_canonical,
+        &pcs_config.base.security,
+        &pcs_config.base.whir,
+    );
+    let mut pk = PoseidonZkProvingKey {
+        shape_canonical: shape_canonical.clone(),
+        num_cons_unpadded: shape.num_cons,
+        num_vars_unpadded: shape.num_vars,
+        num_io: shape.num_io,
+        pcs_config: pcs_config.clone(),
+        domain_separator: domain_separator.clone(),
+        direct_bind_layout: None,
+        direct_multiply_layout: None,
+        marker: PhantomData,
+    };
+    pk.prepare_for_proving()?;
+    let vk = PoseidonZkVerifyingKey {
+        shape_canonical,
+        num_cons_unpadded: shape.num_cons,
+        num_vars_unpadded: shape.num_vars,
+        num_io: shape.num_io,
+        pcs_config,
+        domain_separator,
+        marker: PhantomData,
+    };
+    Ok((pk, vk))
 }
 
 impl<Ext> crate::PoseidonProvingKey<Ext>
 where
     Ext: ExtField,
-    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
+    StandardUniform: Distribution<Ext>,
+    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
 {
     /// Set up a Poseidon Spartan proving/verifying key pair.
     ///
@@ -104,11 +277,81 @@ where
 impl<Ext> crate::PoseidonVerifyingKey<Ext>
 where
     Ext: ExtField,
-    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
+    StandardUniform: Distribution<Ext>,
+    PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
 {
     pub fn verify(&self, proof: &PoseidonProof<Ext>) -> Result<(), SpartanWhirError> {
         let mut challenger = poseidon_challenger();
         SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::verify_with_mode(
+            self,
+            &proof.instance,
+            &proof.proof,
+            &mut challenger,
+        )
+    }
+}
+
+impl<Ext> PoseidonZkProvingKey<Ext>
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<PoseidonCommitment>,
+{
+    pub fn setup(
+        shape: R1csShape<F>,
+        config: PoseidonZkSetupConfig,
+    ) -> Result<(Self, PoseidonZkVerifyingKey<Ext>), SpartanWhirError> {
+        setup_poseidon_zk(shape, config)
+    }
+
+    pub fn prove(
+        &self,
+        witness: R1csWitness<F>,
+        public_inputs: Vec<F>,
+    ) -> Result<PoseidonZkProof<Ext>, SpartanWhirError> {
+        let mut challenger = poseidon_challenger();
+        let (instance, proof) = PoseidonZkSpartanProtocol::<Ext>::prove(
+            self,
+            &public_inputs,
+            &witness,
+            &mut challenger,
+        )?;
+        Ok(PoseidonZkProof { instance, proof })
+    }
+
+    pub fn prove_with_rng<R>(
+        &self,
+        witness: R1csWitness<F>,
+        public_inputs: Vec<F>,
+        rng: &mut R,
+    ) -> Result<PoseidonZkProof<Ext>, SpartanWhirError>
+    where
+        R: Rng + CryptoRng,
+    {
+        let mut challenger = poseidon_challenger();
+        let (instance, proof) = PoseidonZkSpartanProtocol::<Ext>::prove_with_rng(
+            self,
+            &public_inputs,
+            &witness,
+            &mut challenger,
+            rng,
+        )?;
+        Ok(PoseidonZkProof { instance, proof })
+    }
+}
+
+impl<Ext> PoseidonZkVerifyingKey<Ext>
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<PoseidonCommitment>,
+{
+    pub fn verify(&self, proof: &PoseidonZkProof<Ext>) -> Result<(), SpartanWhirError> {
+        let mut challenger = poseidon_challenger();
+        PoseidonZkSpartanProtocol::<Ext>::verify(
             self,
             &proof.instance,
             &proof.proof,
@@ -178,11 +421,6 @@ mod witness_generator {
         generate: LinkedWitnessGeneratorFn,
         free: LinkedWitnessFreeCircuitFn,
     }
-
-    // The generated witness function allocates a fresh Circom_CalcWit per call.
-    // The shared circuit handle is read-only after loading.
-    unsafe impl Send for PoseidonWitnessGenerator {}
-    unsafe impl Sync for PoseidonWitnessGenerator {}
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum PoseidonWitnessGeneratorError {
@@ -254,7 +492,16 @@ mod witness_generator {
     }
 
     impl PoseidonWitnessGenerator {
-        pub fn linked(
+        /// Construct a witness generator from linked native callbacks.
+        ///
+        /// # Safety
+        ///
+        /// The callbacks must implement the documented ABI, must remain loaded
+        /// until this value is dropped, and must use the returned circuit handle
+        /// only through the supplied `generate` and `free` functions. `load` must
+        /// not retain `circuit_data`, `generate` must respect every pointer/length
+        /// pair, and `free` must accept the handle exactly once.
+        pub unsafe fn linked(
             name: &'static str,
             circuit_data: &[u8],
             load: LinkedWitnessLoadCircuitFn,
@@ -359,7 +606,11 @@ mod witness_generator {
     impl<Ext> crate::PoseidonProvingKey<Ext>
     where
         Ext: ExtField,
-        PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>,
+        StandardUniform: Distribution<Ext>,
+        PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>
+            + CanSampleUniformBits<F>
+            + FieldChallenger<F>
+            + GrindingChallenger<Witness = F>,
     {
         fn witness_from_generator(
             &self,
@@ -393,6 +644,40 @@ mod witness_generator {
             generator: &PoseidonWitnessGenerator,
             input: impl AsRef<[u8]>,
         ) -> Result<PoseidonProof<Ext>, PoseidonWitnessGeneratorError> {
+            let (witness, public_inputs) = self.witness_from_generator(generator, input)?;
+            validate_satisfaction(&self.shape_canonical, &witness, &public_inputs)?;
+            self.prove(witness, public_inputs).map_err(Into::into)
+        }
+    }
+
+    impl<Ext> PoseidonZkProvingKey<Ext>
+    where
+        Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+        StandardUniform: Distribution<Ext> + Distribution<F>,
+        PoseidonChallenger: CanObserve<PoseidonCommitment>,
+    {
+        fn witness_from_generator(
+            &self,
+            generator: &PoseidonWitnessGenerator,
+            input: impl AsRef<[u8]>,
+        ) -> Result<(R1csWitness<F>, Vec<F>), PoseidonWitnessGeneratorError> {
+            generator.generate_witness(input, self.num_vars_unpadded, self.num_io)
+        }
+
+        pub fn prove_from_witness_generator(
+            &self,
+            generator: &PoseidonWitnessGenerator,
+            input: impl AsRef<[u8]>,
+        ) -> Result<PoseidonZkProof<Ext>, PoseidonWitnessGeneratorError> {
+            let (witness, public_inputs) = self.witness_from_generator(generator, input)?;
+            self.prove(witness, public_inputs).map_err(Into::into)
+        }
+
+        pub fn prove_from_witness_generator_checked(
+            &self,
+            generator: &PoseidonWitnessGenerator,
+            input: impl AsRef<[u8]>,
+        ) -> Result<PoseidonZkProof<Ext>, PoseidonWitnessGeneratorError> {
             let (witness, public_inputs) = self.witness_from_generator(generator, input)?;
             validate_satisfaction(&self.shape_canonical, &witness, &public_inputs)?;
             self.prove(witness, public_inputs).map_err(Into::into)

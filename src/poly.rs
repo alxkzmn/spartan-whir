@@ -105,6 +105,12 @@ pub fn evaluate_mle_table<EF: Field>(table: &[EF], point: &[EF]) -> Result<EF, S
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CubicRoundPoly<F>(pub [F; 3]); // [h(0), h(2), h(3)]
 
+impl<F> AsRef<[F]> for CubicRoundPoly<F> {
+    fn as_ref(&self) -> &[F] {
+        &self.0
+    }
+}
+
 impl<F: Field> CubicRoundPoly<F> {
     pub fn eval_at_zero(&self) -> F {
         self.0[0]
@@ -142,6 +148,12 @@ impl<F: Field> CubicRoundPoly<F> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuadraticRoundPoly<F>(pub [F; 2]); // [h(0), h(2)]
+
+impl<F> AsRef<[F]> for QuadraticRoundPoly<F> {
+    fn as_ref(&self) -> &[F] {
+        &self.0
+    }
+}
 
 impl<F: Field> QuadraticRoundPoly<F> {
     pub fn eval_at_zero(&self) -> F {

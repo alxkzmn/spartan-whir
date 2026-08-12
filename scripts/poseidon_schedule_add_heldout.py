@@ -82,12 +82,7 @@ def recalibrate(calibration: dict[str, Any], rows: list[dict[str, Any]], prior_w
             base[name] = float(source)
     fixed = float(coefficients.get("fixed_overhead", 0.0))
     fixed_prior = fixed
-    usable = [
-        row
-        for row in rows
-        if float(row.get("measured_seconds") or 0.0) > 0
-        and all(metric in row for _name, metric in COMPONENTS)
-    ]
+    usable = usable_candidate_rows(rows)
     if not usable:
         raise SystemExit("no heldout rows have measured_seconds and component metrics")
 
@@ -167,7 +162,7 @@ def usable_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         row
         for row in rows
         if float(row.get("measured_seconds") or 0.0) > 0
-        and all(metric in row for _name, metric in COMPONENTS)
+        and all(row_metric(row, metric) is not None for _name, metric in COMPONENTS)
     ]
 
 
@@ -180,9 +175,29 @@ def contribution(base: dict[str, float], row: dict[str, Any], key: str) -> float
         extension = key.split(":", 1)[1]
         if row.get("extension") != extension:
             return 0.0
-        return base[key] * float(row.get("sumcheck_work") or 0.0)
+        return base[key] * float(row_metric(row, "sumcheck_work") or 0.0)
     metric = dict(COMPONENTS)[key]
-    return base[key] * float(row.get(metric) or 0.0)
+    return base[key] * float(row_metric(row, metric) or 0.0)
+
+
+def row_metric(row: dict[str, Any], metric: str) -> Any:
+    if row_uses_zk_metrics(row):
+        return row.get(zk_metric_name(metric), row.get(metric))
+    return row.get(metric)
+
+
+def row_uses_zk_metrics(row: dict[str, Any]) -> bool:
+    return row.get("proof_mode") == "full-zk"
+
+
+def zk_metric_name(metric: str) -> str:
+    return {
+        "dft_work": "zk_dft_work",
+        "merkle_work": "zk_merkle_work",
+        "merkle_path_work": "zk_merkle_path_work",
+        "row_work": "zk_row_work",
+        "sumcheck_work": "zk_sumcheck_work",
+    }.get(metric, metric)
 
 
 def read_json(path: Path) -> dict[str, Any]:

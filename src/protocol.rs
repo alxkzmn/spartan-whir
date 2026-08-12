@@ -2,29 +2,51 @@ use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_commit::ExtensionMmcs;
+use p3_field::{Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_multilinear_util::{point::Point, poly::Poly};
+use p3_sumcheck::{
+    product_polynomial::ProductPolynomial,
+    strategy::{SumcheckProver, VariableOrder},
+    zk::{mask_residual_covectors_from_shape, ZkSumcheckData, ZkVerifier},
+};
 use p3_symmetric::{CryptographicHasher, Hash};
+use p3_whir::pcs::zk::{
+    CommittedMaskGroup, CommittedMaskGroupProverData, CommittedRelation, HidingWhirProver,
+    HidingWhirVerifier,
+};
+use rand::{
+    distr::{Distribution, StandardUniform},
+    rngs::StdRng,
+    CryptoRng, Rng, RngExt,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
+use crate::engine::{ExtField, KeccakEngine, PoseidonChallenger, PoseidonEngine, F};
 use crate::error::InvalidConfigReason;
+use crate::plonky3_whir_pcs::{
+    build_poseidon_full_zk_pcs, observe_poseidon_relation_domain_separator, PoseidonCommitment,
+    PoseidonMmcs, PoseidonRelationProof,
+};
+use crate::poseidon::{PoseidonZkProvingKey, PoseidonZkVerifyingKey};
 use crate::profiling::profile_scope;
 use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
 use crate::sumcheck::{
     prove_inner_base_first_unchecked, prove_outer_split_eq_base_first_owned_unchecked,
+    prove_outer_zk_base_first_unchecked, verify_outer_zk,
 };
 use crate::{
     compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_outer,
     prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
     verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
-    EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver,
-    OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolPcs,
-    ProtocolStage, R1csInstance, R1csShape, R1csWitness, SecurityConfig,
+    EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoZkPcs,
+    NoopObserver, OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver,
+    ProtocolPcs, ProtocolStage, R1csInstance, R1csShape, R1csWitness, SecurityConfig,
     SparkBatchedMemoryProductsLeafClaims, SparkBatchedMemoryProductsProof,
     SparkFixedTableOpeningEvals, SparkReadTableOpeningEvals, SparkReadTables, SpartanWhirEngine,
-    SpartanWhirError, WhirParams, WhirPcsConfig,
+    SpartanWhirError, WhirParams, WhirPcsConfig, ZkOuterSumcheckProof, ZkWhirPcsConfig,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -110,6 +132,22 @@ pub struct SpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub pcs_proof: Pcs::Proof,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
+pub struct ZkSpartanProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    pub inner_mask_commitment: PoseidonCommitment,
+    pub outer_mask_commitment: PoseidonCommitment,
+    pub outer_sumcheck: ZkOuterSumcheckProof<Ext>,
+    pub outer_claims: (Ext, Ext, Ext),
+    pub outer_mask_evals: Vec<Ext>,
+    pub inner_sumcheck: ZkSumcheckData<F, Ext>,
+    pub inner_sumcheck_mask_commitment: PoseidonCommitment,
+    pub pcs_proof: PoseidonRelationProof<Ext>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
     serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
@@ -184,7 +222,6 @@ pub struct SpartanSnarkConfig {
     pub matrix_closing: MatrixClosingMode,
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
-    pub pcs_config: WhirPcsConfig,
     #[serde(default)]
     pub spark_whir_params: Option<SparkWhirParams>,
 }
@@ -334,11 +371,128 @@ pub struct SpartanProtocol<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
+pub struct PoseidonZkSpartanProtocol<Ext: ExtField> {
+    marker: PhantomData<Ext>,
+}
+
+pub(crate) fn validate_canonical_verifying_shape<F>(
+    shape: &R1csShape<F>,
+    num_cons_unpadded: usize,
+    num_vars_unpadded: usize,
+    num_io: usize,
+) -> Result<(), SpartanWhirError> {
+    if num_cons_unpadded == 0 || shape.num_io != num_io {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    let expected_num_cons = num_cons_unpadded
+        .checked_next_power_of_two()
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let min_num_vars = num_io
+        .checked_add(1)
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let expected_num_vars = core::cmp::max(num_vars_unpadded, min_num_vars)
+        .checked_next_power_of_two()
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let expected_num_cols = expected_num_vars
+        .checked_add(num_io)
+        .and_then(|value| value.checked_add(1))
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+
+    if shape.num_cons != expected_num_cons
+        || shape.num_vars != expected_num_vars
+        || num_io >= expected_num_vars
+        || shape.a.num_rows != expected_num_cons
+        || shape.b.num_rows != expected_num_cons
+        || shape.c.num_rows != expected_num_cons
+        || shape.a.num_cols != expected_num_cols
+        || shape.b.num_cols != expected_num_cols
+        || shape.c.num_cols != expected_num_cols
+    {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    Ok(())
+}
+
+fn validate_verifying_key<E, Pcs>(vk: &VerifyingKey<E, Pcs>) -> Result<(), SpartanWhirError>
+where
+    E: SpartanContextEngine,
+    E::EF: ExtField,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
+{
+    validate_canonical_verifying_shape(
+        &vk.shape_canonical,
+        vk.num_cons_unpadded,
+        vk.num_vars_unpadded,
+        vk.num_io,
+    )?;
+    vk.security.validate()?;
+    vk.pcs_config.validate()?;
+
+    if vk.pcs_config.num_variables != vk.shape_canonical.num_vars.ilog2() as usize
+        || vk.pcs_config.security != vk.security
+        || vk.pcs_config.whir != vk.whir_params
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let expected_domain = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+        &vk.shape_canonical,
+        &vk.security,
+        &vk.whir_params,
+        vk.matrix_closing,
+        vk.domain_separator.spark_whir_params.clone(),
+    );
+    if vk.domain_separator != expected_domain {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    match vk.matrix_closing {
+        MatrixClosingMode::DirectSparse => {
+            if vk.spark_fixed_commitments.is_some() || vk.spark_pcs_configs.is_some() {
+                return Err(SpartanWhirError::invalid_config());
+            }
+        }
+        MatrixClosingMode::Spark => {
+            if vk.spark_fixed_commitments.is_none() {
+                return Err(SpartanWhirError::invalid_config());
+            }
+            let configs = vk
+                .spark_pcs_configs
+                .as_ref()
+                .ok_or(SpartanWhirError::invalid_config())?;
+            configs.fixed_value.validate()?;
+            configs.fixed_audit.validate()?;
+            configs.read.validate()?;
+            if configs.fixed_value.security != vk.security
+                || configs.fixed_audit.security != vk.security
+                || configs.read.security != vk.security
+            {
+                return Err(SpartanWhirError::invalid_config());
+            }
+
+            match &vk.domain_separator.spark_whir_params {
+                Some(params)
+                    if configs.fixed_value.whir == params.fixed_value
+                        && configs.fixed_audit.whir == params.fixed_audit
+                        && configs.read.whir == params.read => {}
+                None if configs.fixed_value.whir == vk.whir_params
+                    && configs.fixed_audit.whir == vk.whir_params
+                    && configs.read.whir == vk.whir_params => {}
+                _ => return Err(SpartanWhirError::invalid_config()),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl<E, Pcs> SpartanProtocol<E, Pcs>
 where
     E: SpartanContextEngine,
     E::EF: ExtField,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
     Pcs::ProverData: Clone + CommittedPolynomialView<E::EF>,
     Pcs::Commitment: Clone + PartialEq,
     E::Challenger: FieldChallenger<F>,
@@ -347,7 +501,6 @@ where
         shape: &R1csShape<F>,
         security: &SecurityConfig,
         whir_params: &WhirParams,
-        pcs_config: &WhirPcsConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         // Defaults to SPARK setup; call `setup_with_config` with
         // `DirectSparse` to skip SPARK preprocessing.
@@ -357,7 +510,6 @@ where
                 matrix_closing: MatrixClosingMode::Spark,
                 security: *security,
                 whir_params: whir_params.clone(),
-                pcs_config: pcs_config.clone(),
                 spark_whir_params: None,
             },
         )
@@ -383,11 +535,20 @@ where
         let shape_canonical = shape.pad_regular()?;
         let num_variables = shape_canonical.num_vars.ilog2() as usize;
 
-        let mut canonical_pcs_config = config.pcs_config.clone();
-        canonical_pcs_config.num_variables = num_variables;
-        canonical_pcs_config.security = config.security;
-        canonical_pcs_config.whir = config.whir_params.clone();
+        let canonical_pcs_config = WhirPcsConfig {
+            num_variables,
+            security: config.security,
+            whir: config.whir_params.clone(),
+        };
         canonical_pcs_config.validate()?;
+        let num_outer_rounds = shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = num_variables + 1;
+        Pcs::validate_spartan_config(
+            &canonical_pcs_config,
+            config.matrix_closing,
+            num_outer_rounds,
+            num_inner_rounds,
+        )?;
 
         let transcript_spark_whir_params = match config.matrix_closing {
             MatrixClosingMode::DirectSparse => None,
@@ -670,6 +831,7 @@ where
         proof: &SpartanProof<E, Pcs>,
         challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
+        validate_verifying_key::<E, Pcs>(vk)?;
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
         Self::ensure_key_mode(vk.matrix_closing, MatrixClosingMode::DirectSparse)?;
@@ -694,12 +856,15 @@ where
 
         let num_rounds_x = vk.shape_canonical.num_cons.ilog2() as usize;
         let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
-        let (r_x, final_outer_claim) = verify_outer::<F, E::EF, _>(
-            &proof.outer_sumcheck,
-            E::EF::ZERO,
-            num_rounds_x,
-            challenger,
-        )?;
+        let (r_x, final_outer_claim) = {
+            let _profile = profile_scope("verify_outer_sumcheck");
+            verify_outer::<F, E::EF, _>(
+                &proof.outer_sumcheck,
+                E::EF::ZERO,
+                num_rounds_x,
+                challenger,
+            )?
+        };
 
         let expected_outer = eq_point_eval(&tau, &r_x.0)
             * (proof.outer_claims.0 * proof.outer_claims.1 - proof.outer_claims.2);
@@ -717,24 +882,38 @@ where
             proof.outer_claims.0 + r * proof.outer_claims.1 + r * r * proof.outer_claims.2;
 
         let num_rounds_y = vk.shape_canonical.num_vars.ilog2() as usize + 1;
-        let (r_y, inner_final_claim) = verify_inner::<F, E::EF, _>(
-            &proof.inner_sumcheck,
-            claim_inner_joint,
-            num_rounds_y,
-            challenger,
-        )?;
+        let (r_y, inner_final_claim) = {
+            let _profile = profile_scope("verify_inner_sumcheck");
+            verify_inner::<F, E::EF, _>(
+                &proof.inner_sumcheck,
+                claim_inner_joint,
+                num_rounds_y,
+                challenger,
+            )?
+        };
 
-        let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let t_y = EqPolynomial::evals_from_point(&r_y.0);
-        let (eval_a, eval_b, eval_c) = vk
-            .shape_canonical
-            .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
+        let t_x = {
+            let _profile = profile_scope("verify_eq_table_x");
+            EqPolynomial::evals_from_point(&r_x.0)
+        };
+        let t_y = {
+            let _profile = profile_scope("verify_eq_table_y");
+            EqPolynomial::evals_from_point(&r_y.0)
+        };
+        let (eval_a, eval_b, eval_c) = {
+            let _profile = profile_scope("verify_matrix_evals");
+            vk.shape_canonical
+                .evaluate_with_tables::<E::EF>(&t_x, &t_y)?
+        };
 
-        let eval_x = evaluate_public_half(
-            vk.shape_canonical.num_vars,
-            &instance.public_inputs,
-            &r_y.0[1..],
-        )?;
+        let eval_x = {
+            let _profile = profile_scope("verify_public_half");
+            evaluate_public_half(
+                vk.shape_canonical.num_vars,
+                &instance.public_inputs,
+                &r_y.0[1..],
+            )?
+        };
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let expected_inner = (eval_a + r * eval_b + r * r * eval_c) * eval_z;
         if inner_final_claim != expected_inner {
@@ -966,6 +1145,7 @@ where
         proof: &SparkSpartanProof<E, Pcs>,
         challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
+        validate_verifying_key::<E, Pcs>(vk)?;
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
         Self::ensure_key_mode(vk.matrix_closing, MatrixClosingMode::Spark)?;
@@ -1104,6 +1284,511 @@ where
 
         observer.on_stage(ProtocolStage::VerifyEnd);
         Ok(())
+    }
+}
+
+impl<Ext> PoseidonZkSpartanProtocol<Ext>
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<PoseidonCommitment>,
+{
+    pub fn prove(
+        pk: &PoseidonZkProvingKey<Ext>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError> {
+        let mut rng = rand::make_rng::<StdRng>();
+        Self::prove_with_rng(pk, public_inputs, witness, challenger, &mut rng)
+    }
+
+    pub fn prove_with_rng<R>(
+        pk: &PoseidonZkProvingKey<Ext>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut PoseidonChallenger,
+        rng: &mut R,
+    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError>
+    where
+        R: Rng + CryptoRng,
+    {
+        if public_inputs.len() != pk.num_io {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if witness.w.len() != pk.num_vars_unpadded {
+            return Err(SpartanWhirError::InvalidWitnessLength);
+        }
+
+        let num_outer_rounds = pk.shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = pk.shape_canonical.num_vars.ilog2() as usize + 1;
+        if num_outer_rounds == 0 {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        observe_poseidon_zk_context(
+            challenger,
+            &pk.domain_separator,
+            &pk.pcs_config,
+            num_outer_rounds,
+            num_inner_rounds,
+            public_inputs,
+        );
+
+        let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
+            build_poseidon_full_zk_pcs::<Ext>(&pk.pcs_config, num_outer_rounds, num_inner_rounds)?;
+        let relation_shapes = [inner_shape, outer_shape, inner_sumcheck_shape];
+        let whir_prover = HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+
+        let inner_messages = sample_inner_masks::<Ext, _>(num_outer_rounds, rng);
+        let mut inner_group = {
+            let _profile = profile_scope("zk_inner_mask_commit");
+            whir_prover
+                .commit_mask_group(inner_shape, inner_messages.clone(), challenger, rng)
+                .map_err(|_| SpartanWhirError::WhirCommitFailed)?
+        };
+        let inner_mask_commitment = inner_group.commitment.clone();
+
+        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        let mut witness_padded = witness.w.clone();
+        witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+        let (witness_commitment, witness_prover_data) = {
+            let _profile = profile_scope("zk_witness_commit");
+            whir_prover.commit(Poly::new(witness_padded.clone()), challenger, rng)
+        };
+        let instance = R1csInstance {
+            public_inputs: public_inputs.to_vec(),
+            witness_commitment: witness_commitment.clone(),
+        };
+
+        let outer_messages = sample_outer_masks::<Ext, _>(num_outer_rounds, rng);
+        let mut outer_group = {
+            let _profile = profile_scope("zk_outer_mask_commit");
+            whir_prover
+                .commit_mask_group(outer_shape, outer_messages.clone(), challenger, rng)
+                .map_err(|_| SpartanWhirError::WhirCommitFailed)?
+        };
+        let outer_mask_commitment = outer_group.commitment.clone();
+
+        let z_full = build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs);
+        let z_short = matrix_z_slice(&z_full, pk.shape_canonical.num_vars, public_inputs.len())?;
+        let layout = pk.direct_multiply_layout.as_ref().ok_or({
+            SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+        })?;
+        let (az, bz, cz) = {
+            let _profile = profile_scope("zk_r1cs_multiply_vec");
+            pk.shape_canonical
+                .multiply_vec_parallel_with_layout_unchecked(layout, z_short)?
+        };
+        let outer = {
+            let _profile = profile_scope("zk_outer_sumcheck");
+            prove_outer_zk_base_first_unchecked::<F, Ext, _>(
+                &pk.shape_canonical,
+                az,
+                bz,
+                cz,
+                &inner_messages,
+                &outer_messages,
+                challenger,
+            )?
+        };
+        challenger.observe_algebra_slice(&outer.outer_mask_evals);
+        challenger.observe_algebra_slice(&[
+            outer.masked_claims.0,
+            outer.masked_claims.1,
+            outer.masked_claims.2,
+        ]);
+
+        let rho = challenger.sample_algebra_element::<Ext>();
+        let batching = challenger.sample_algebra_element::<Ext>();
+        let t_x = EqPolynomial::evals_from_point_parallel(&outer.point.0);
+        let layout = pk.direct_bind_layout.as_ref().ok_or_else(|| {
+            SpartanWhirError::invalid_config_reason(InvalidConfigReason::MissingDerivedProverData)
+        })?;
+        let poly_abc = {
+            let _profile = profile_scope("zk_bind_row_vars_joint");
+            pk.shape_canonical
+                .bind_row_vars_joint_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+        };
+
+        let (inner_covectors, outer_covectors, joint_target) = application_relation(
+            num_outer_rounds,
+            &outer.point.0,
+            outer.masked_claims,
+            &outer.outer_mask_evals,
+            rho,
+            batching,
+        );
+        inner_group.covectors = inner_covectors;
+        outer_group.covectors = outer_covectors;
+        let application_aux = inner_group.claim() + outer_group.claim();
+        let source_claim = joint_target - application_aux;
+        let product = packed_inner_product::<Ext>(&z_full, poly_abc)?;
+        let sumcheck_prover = SumcheckProver::new(product, source_claim);
+        let extension_mmcs = ExtensionMmcs::new(pcs.mmcs.clone());
+        let encoding = pcs.config.sumcheck_mask.encoding::<Ext>();
+        let mut inner_sumcheck = ZkSumcheckData::default();
+        let handoff = {
+            let _profile = profile_scope("zk_inner_sumcheck");
+            sumcheck_prover.into_zk_sumcheck(
+                &mut inner_sumcheck,
+                &encoding,
+                &extension_mmcs,
+                num_inner_rounds,
+                0,
+                application_aux,
+                challenger,
+                rng,
+            )
+        };
+        let inner_sumcheck_mask_commitment = handoff.mask_oracle.0.clone();
+        let r_y = handoff.randomness.clone();
+        let inner_epsilon = handoff.eps;
+        let source_residual = handoff.residual_prover.claimed_sum();
+        let residual_weights = handoff.residual_prover.weights();
+        let [weighted_matrix_eval] = residual_weights.as_slice() else {
+            return Err(SpartanWhirError::InvalidRoundCount);
+        };
+        let weighted_matrix_eval = *weighted_matrix_eval;
+
+        let carry_scale = inner_epsilon * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+        scale_covectors(&mut inner_group.covectors, carry_scale);
+        scale_covectors(&mut outer_group.covectors, carry_scale);
+        let sumcheck_covectors = mask_residual_covectors_from_shape(
+            num_inner_rounds,
+            pcs.config.sumcheck_mask.message_len,
+            r_y.as_slice(),
+        );
+        let sumcheck_group = CommittedMaskGroupProverData {
+            shape: inner_sumcheck_shape,
+            commitment: inner_sumcheck_mask_commitment.clone(),
+            messages: handoff.mask_messages,
+            randomness: handoff.mask_randomness,
+            covectors: sumcheck_covectors,
+            prover_data: handoff.mask_oracle.1,
+        };
+
+        let selector = r_y.as_slice()[0];
+        let eval_public = evaluate_public_half(
+            pk.shape_canonical.num_vars,
+            public_inputs,
+            &r_y.as_slice()[1..],
+        )?;
+        let public_term = weighted_matrix_eval * selector * eval_public;
+        let joint_residual =
+            source_residual + inner_group.claim() + outer_group.claim() + sumcheck_group.claim();
+        let mut relation = CommittedRelation::empty();
+        relation.source.push_eq(
+            Point::new(r_y.as_slice()[1..].to_vec()),
+            weighted_matrix_eval * (Ext::ONE - selector),
+        );
+        relation.target = joint_residual - public_term;
+        let pcs_proof = {
+            let _profile = profile_scope("zk_pcs_relation");
+            whir_prover
+                .prove_relation(
+                    witness_prover_data,
+                    &relation,
+                    vec![inner_group, outer_group, sumcheck_group],
+                    challenger,
+                    rng,
+                )
+                .map_err(|_| SpartanWhirError::WhirOpenFailed)?
+        };
+
+        Ok((
+            instance,
+            ZkSpartanProof {
+                inner_mask_commitment,
+                outer_mask_commitment,
+                outer_sumcheck: outer.proof,
+                outer_claims: outer.masked_claims,
+                outer_mask_evals: outer.outer_mask_evals,
+                inner_sumcheck,
+                inner_sumcheck_mask_commitment,
+                pcs_proof,
+            },
+        ))
+    }
+
+    pub fn verify(
+        vk: &PoseidonZkVerifyingKey<Ext>,
+        instance: &R1csInstance<F, PoseidonCommitment>,
+        proof: &ZkSpartanProof<Ext>,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(), SpartanWhirError> {
+        vk.validate()?;
+        if instance.public_inputs.len() != vk.num_io {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        let num_outer_rounds = vk.shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = vk.shape_canonical.num_vars.ilog2() as usize + 1;
+        let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
+            build_poseidon_full_zk_pcs::<Ext>(&vk.pcs_config, num_outer_rounds, num_inner_rounds)?;
+        observe_poseidon_zk_context(
+            challenger,
+            &vk.domain_separator,
+            &vk.pcs_config,
+            num_outer_rounds,
+            num_inner_rounds,
+            &instance.public_inputs,
+        );
+        let relation_shapes = [inner_shape, outer_shape, inner_sumcheck_shape];
+        challenger.observe(proof.inner_mask_commitment.clone());
+        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        challenger.observe(instance.witness_commitment.clone());
+        challenger.observe(proof.outer_mask_commitment.clone());
+
+        let r_x = verify_outer_zk::<F, Ext, _>(
+            &proof.outer_sumcheck,
+            proof.outer_claims,
+            &proof.outer_mask_evals,
+            num_outer_rounds,
+            challenger,
+        )?;
+        challenger.observe_algebra_slice(&proof.outer_mask_evals);
+        challenger.observe_algebra_slice(&[
+            proof.outer_claims.0,
+            proof.outer_claims.1,
+            proof.outer_claims.2,
+        ]);
+        let rho = challenger.sample_algebra_element::<Ext>();
+        let batching = challenger.sample_algebra_element::<Ext>();
+        let (mut inner_covectors, mut outer_covectors, joint_target) = application_relation(
+            num_outer_rounds,
+            &r_x.0,
+            proof.outer_claims,
+            &proof.outer_mask_evals,
+            rho,
+            batching,
+        );
+        let handoff = ZkVerifier::<F, Ext>::verify_claim::<ExtensionMmcs<F, Ext, PoseidonMmcs>, _>(
+            &proof.inner_sumcheck,
+            &proof.inner_sumcheck_mask_commitment,
+            pcs.config.sumcheck_mask.message_len,
+            num_inner_rounds,
+            0,
+            joint_target,
+            challenger,
+        )
+        .map_err(|_| SpartanWhirError::SumcheckFailed)?;
+        let carry_scale = handoff.eps * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+        scale_covectors(&mut inner_covectors, carry_scale);
+        scale_covectors(&mut outer_covectors, carry_scale);
+        let sumcheck_covectors = mask_residual_covectors_from_shape(
+            num_inner_rounds,
+            pcs.config.sumcheck_mask.message_len,
+            handoff.randomness.as_slice(),
+        );
+
+        let t_x = EqPolynomial::evals_from_point(&r_x.0);
+        let t_y = EqPolynomial::evals_from_point(handoff.randomness.as_slice());
+        let (eval_a, eval_b, eval_c) =
+            vk.shape_canonical.evaluate_with_tables::<Ext>(&t_x, &t_y)?;
+        let matrix_eval = eval_a + rho * eval_b + rho * rho * eval_c;
+        let selector = handoff.randomness.as_slice()[0];
+        let eval_public = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &handoff.randomness.as_slice()[1..],
+        )?;
+        let mut relation = CommittedRelation::empty();
+        relation.source.push_eq(
+            Point::new(handoff.randomness.as_slice()[1..].to_vec()),
+            handoff.eps * matrix_eval * (Ext::ONE - selector),
+        );
+        relation.target =
+            handoff.claimed_residual - handoff.eps * matrix_eval * selector * eval_public;
+        let groups = vec![
+            CommittedMaskGroup {
+                shape: inner_shape,
+                commitment: proof.inner_mask_commitment.clone(),
+                covectors: inner_covectors,
+            },
+            CommittedMaskGroup {
+                shape: outer_shape,
+                commitment: proof.outer_mask_commitment.clone(),
+                covectors: outer_covectors,
+            },
+            CommittedMaskGroup {
+                shape: inner_sumcheck_shape,
+                commitment: proof.inner_sumcheck_mask_commitment.clone(),
+                covectors: sumcheck_covectors,
+            },
+        ];
+        let _profile = profile_scope("zk_pcs_relation_verify");
+        HidingWhirVerifier::new(&pcs.config, &pcs.mmcs)
+            .verify_relation(
+                &proof.pcs_proof,
+                &instance.witness_commitment,
+                relation,
+                groups,
+                challenger,
+            )
+            .map_err(|_| SpartanWhirError::WhirVerifyFailed)
+    }
+}
+
+fn observe_poseidon_zk_context(
+    challenger: &mut PoseidonChallenger,
+    domain_separator: &DomainSeparator,
+    pcs_config: &ZkWhirPcsConfig,
+    num_outer_rounds: usize,
+    num_inner_rounds: usize,
+    public_inputs: &[F],
+) {
+    for byte in domain_separator.to_bytes() {
+        challenger.observe(F::from_u8(byte));
+    }
+    for value in [
+        pcs_config.ell_zk,
+        pcs_config.mask_log_inv_rate,
+        num_outer_rounds,
+        num_inner_rounds,
+    ] {
+        for byte in (value as u64).to_le_bytes() {
+            challenger.observe(F::from_u8(byte));
+        }
+    }
+    for &input in public_inputs {
+        challenger.observe(input);
+    }
+}
+
+fn sample_inner_masks<Ext, R>(num_rounds: usize, rng: &mut R) -> Vec<Vec<Ext>>
+where
+    Ext: Field,
+    StandardUniform: Distribution<Ext>,
+    R: Rng + ?Sized,
+{
+    (0..3 * num_rounds)
+        .map(|_| {
+            let linear = rng.random::<Ext>();
+            let quadratic = rng.random::<Ext>();
+            vec![Ext::ZERO, linear, quadratic, -linear - quadratic]
+        })
+        .collect()
+}
+
+fn sample_outer_masks<Ext, R>(num_rounds: usize, rng: &mut R) -> Vec<Vec<Ext>>
+where
+    Ext: Field,
+    StandardUniform: Distribution<Ext>,
+    R: Rng + ?Sized,
+{
+    (0..num_rounds)
+        .map(|_| (0..8).map(|_| rng.random::<Ext>()).collect())
+        .collect()
+}
+
+fn power_covector<Ext: Field>(point: Ext, len: usize) -> Vec<Ext> {
+    let mut power = Ext::ONE;
+    (0..len)
+        .map(|_| {
+            let current = power;
+            power *= point;
+            current
+        })
+        .collect()
+}
+
+/// Batches the masked matrix claim, the inner-mask endpoint constraints, and
+/// the disclosed outer-mask evaluations into one committed linear relation.
+fn application_relation<Ext: Field>(
+    num_outer_rounds: usize,
+    outer_point: &[Ext],
+    masked_claims: (Ext, Ext, Ext),
+    outer_mask_evals: &[Ext],
+    rho: Ext,
+    batching: Ext,
+) -> (Vec<Vec<Ext>>, Vec<Vec<Ext>>, Ext) {
+    debug_assert_eq!(outer_point.len(), num_outer_rounds);
+    debug_assert_eq!(outer_mask_evals.len(), num_outer_rounds);
+
+    let matrix_coefficients = [Ext::ONE, rho, rho.square()];
+    let mut inner_covectors = Vec::with_capacity(3 * num_outer_rounds);
+    for matrix_coefficient in matrix_coefficients {
+        for &point in outer_point {
+            let mut covector = power_covector(point, 4);
+            for value in &mut covector {
+                *value *= matrix_coefficient;
+            }
+            inner_covectors.push(covector);
+        }
+    }
+
+    let mut target = masked_claims.0 + rho * masked_claims.1 + rho.square() * masked_claims.2;
+    let at_zero = power_covector(Ext::ZERO, 4);
+    let at_one = power_covector(Ext::ONE, 4);
+    let mut coefficient = batching;
+    for covector in &mut inner_covectors {
+        for (value, endpoint) in covector.iter_mut().zip(&at_zero) {
+            *value += coefficient * *endpoint;
+        }
+        coefficient *= batching;
+        for (value, endpoint) in covector.iter_mut().zip(&at_one) {
+            *value += coefficient * *endpoint;
+        }
+        coefficient *= batching;
+    }
+
+    let mut outer_covectors = Vec::with_capacity(num_outer_rounds);
+    for (&point, &evaluation) in outer_point.iter().zip(outer_mask_evals) {
+        let mut covector = power_covector(point, 8);
+        for value in &mut covector {
+            *value *= coefficient;
+        }
+        target += coefficient * evaluation;
+        coefficient *= batching;
+        outer_covectors.push(covector);
+    }
+
+    (inner_covectors, outer_covectors, target)
+}
+
+fn scale_covectors<Ext: Field>(covectors: &mut [Vec<Ext>], scale: Ext) {
+    for covector in covectors {
+        for value in covector {
+            *value *= scale;
+        }
+    }
+}
+
+fn packed_inner_product<Ext>(
+    evaluations: &[F],
+    weights: Vec<Ext>,
+) -> Result<ProductPolynomial<F, Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    if evaluations.len() != weights.len()
+        || evaluations.is_empty()
+        || !evaluations.len().is_power_of_two()
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let packing_width = <F as Field>::Packing::WIDTH;
+    if evaluations.len() > packing_width {
+        let packed_evaluations = <F as Field>::Packing::pack_slice(evaluations)
+            .iter()
+            .copied()
+            .map(Ext::ExtensionPacking::from)
+            .collect();
+        let packed_weights = weights
+            .chunks_exact(packing_width)
+            .map(Ext::ExtensionPacking::from_ext_slice)
+            .collect();
+        Ok(ProductPolynomial::new_packed(
+            VariableOrder::Prefix,
+            Poly::new(packed_evaluations),
+            Poly::new(packed_weights),
+        ))
+    } else {
+        Ok(ProductPolynomial::new_unpacked(
+            VariableOrder::Prefix,
+            Poly::new(evaluations.iter().copied().map(Ext::from).collect()),
+            Poly::new(weights),
+        ))
     }
 }
 
@@ -2689,11 +3374,118 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 #[cfg(test)]
 mod tests {
     use super::{
-        build_matrix_z, build_public_half, build_z_full, evaluate_public_half, matrix_z_slice,
-        recover_witness_eval,
+        application_relation, build_matrix_z, build_public_half, build_z_full,
+        evaluate_public_half, matrix_z_slice, power_covector, recover_witness_eval,
+        sample_inner_masks,
     };
     use crate::{engine::F, QuarticBinExtension};
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{HornerIter, PrimeCharacteristicRing};
+    use rand::{rngs::StdRng, SeedableRng};
+
+    type EF = QuarticBinExtension;
+
+    fn dot(lhs: &[EF], rhs: &[EF]) -> EF {
+        lhs.iter().zip(rhs).map(|(&a, &b)| a * b).sum()
+    }
+
+    #[test]
+    fn zk_application_relation_matches_separate_equations() {
+        let num_rounds = 2;
+        let point = [EF::from_u32(2), EF::from_u32(3)];
+        let rho = EF::from_u32(5);
+        let batching = EF::from_u32(7);
+        let inner_messages = [
+            vec![EF::ZERO, EF::ONE, EF::from_u32(2), -EF::from_u32(3)],
+            vec![EF::ZERO, EF::from_u32(4), EF::from_u32(5), -EF::from_u32(9)],
+            vec![
+                EF::ZERO,
+                EF::from_u32(6),
+                EF::from_u32(7),
+                -EF::from_u32(13),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(8),
+                EF::from_u32(9),
+                -EF::from_u32(17),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(10),
+                EF::from_u32(11),
+                -EF::from_u32(21),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(12),
+                EF::from_u32(13),
+                -EF::from_u32(25),
+            ],
+        ];
+        let outer_messages = [
+            (1..=8).map(EF::from_u32).collect::<Vec<_>>(),
+            (11..=18).map(EF::from_u32).collect::<Vec<_>>(),
+        ];
+        let unmasked = (EF::from_u32(19), EF::from_u32(23), EF::from_u32(29));
+        let mut masked = [unmasked.0, unmasked.1, unmasked.2];
+        for matrix in 0..3 {
+            for round in 0..num_rounds {
+                masked[matrix] += inner_messages[matrix * num_rounds + round]
+                    .iter()
+                    .copied()
+                    .horner::<EF, EF>(point[round]);
+            }
+        }
+        let outer_evals = outer_messages
+            .iter()
+            .zip(point)
+            .map(|(message, x)| message.iter().copied().horner::<EF, EF>(x))
+            .collect::<Vec<_>>();
+        let (inner_covectors, outer_covectors, target) = application_relation(
+            num_rounds,
+            &point,
+            (masked[0], masked[1], masked[2]),
+            &outer_evals,
+            rho,
+            batching,
+        );
+        let source = unmasked.0 + rho * unmasked.1 + rho.square() * unmasked.2;
+        let inner_claim = inner_messages
+            .iter()
+            .zip(&inner_covectors)
+            .map(|(message, covector)| dot(message, covector))
+            .sum::<EF>();
+        let outer_claim = outer_messages
+            .iter()
+            .zip(&outer_covectors)
+            .map(|(message, covector)| dot(message, covector))
+            .sum::<EF>();
+
+        assert_eq!(source + inner_claim + outer_claim, target);
+        assert_eq!(power_covector(EF::ONE, 4), vec![EF::ONE; 4]);
+    }
+
+    #[test]
+    fn zk_inner_masks_shift_every_disclosed_matrix_claim() {
+        let num_rounds = 3;
+        let point = [EF::from_u32(2), EF::from_u32(3), EF::from_u32(4)];
+        let unmasked = [EF::from_u32(17), EF::from_u32(19), EF::from_u32(23)];
+        for seed in 0..16 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let masks = sample_inner_masks::<EF, _>(num_rounds, &mut rng);
+            for matrix in 0..3 {
+                let shift = (0..num_rounds)
+                    .map(|round| {
+                        masks[matrix * num_rounds + round]
+                            .iter()
+                            .copied()
+                            .horner::<EF, EF>(point[round])
+                    })
+                    .sum::<EF>();
+                assert_ne!(unmasked[matrix] + shift, unmasked[matrix]);
+            }
+        }
+    }
 
     #[test]
     fn recover_witness_eval_rejects_non_invertible_denominator() {

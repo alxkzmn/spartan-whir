@@ -14,7 +14,6 @@ use spartan_whir::{
     circom::import_paths, compare_spark_layouts, engine::F, MatrixClosingMode, Plonky3WhirPcs,
     PoseidonQuarticEngine as PoseidonEngine, R1csShape, R1csWitness, SecurityConfig,
     SoundnessAssumption, SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig, WhirParams,
-    WhirPcsConfig,
 };
 
 const INPUT_BYTES: usize = 512;
@@ -338,12 +337,7 @@ fn protocol_config(matrix_closing: MatrixClosingMode) -> SpartanSnarkConfig {
     SpartanSnarkConfig {
         matrix_closing,
         security,
-        whir_params: whir_params.clone(),
-        pcs_config: WhirPcsConfig {
-            num_variables: 0,
-            security,
-            whir: whir_params,
-        },
+        whir_params,
         spark_whir_params: None,
     }
 }

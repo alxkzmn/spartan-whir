@@ -1,6 +1,7 @@
 mod common;
 
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use rand::distr::{Distribution, StandardUniform};
 
 use spartan_whir::{
     engine::{ExtField, F},
@@ -16,7 +17,7 @@ fn test_whir_config(num_variables: usize) -> WhirPcsConfig {
         whir: WhirParams {
             pow_bits: 0,
             folding_factor: 1,
-            starting_log_inv_rate: 1,
+            starting_log_inv_rate: 2,
             rs_domain_initial_reduction_factor: 1,
             ..WhirParams::default()
         },
@@ -56,6 +57,7 @@ fn whir_pcs_supports_quartic_and_quintic_extensions() {
     fn run<Ext>()
     where
         Ext: ExtField,
+        StandardUniform: Distribution<Ext>,
     {
         let config = test_whir_config(6);
         let poly = sample_poly(config.num_variables);
@@ -96,6 +98,7 @@ fn spartan_protocol_supports_quartic_and_quintic_extensions() {
     fn run<Ext>()
     where
         Ext: ExtField,
+        StandardUniform: Distribution<Ext>,
     {
         let shape = common::koala_shape_single_constraint(2);
         let (pk, vk) = SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::setup_with_config(
@@ -104,7 +107,6 @@ fn spartan_protocol_supports_quartic_and_quintic_extensions() {
                 matrix_closing: MatrixClosingMode::DirectSparse,
                 security: common::phase3_security(),
                 whir_params: common::phase3_whir_params(),
-                pcs_config: common::phase3_pcs_config(),
                 spark_whir_params: None,
             },
         )

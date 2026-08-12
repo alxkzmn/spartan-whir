@@ -1,9 +1,12 @@
 mod common;
 
+use rand::{rngs::StdRng, SeedableRng};
 use spartan_whir::{
-    generate_satisfiable_fixture, setup_poseidon, InvalidConfigReason, MatrixClosingMode,
-    PoseidonProof, PoseidonProvingKey, PoseidonSetupConfig, PoseidonVerifyingKey,
-    QuarticBinExtension, SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig,
+    generate_satisfiable_fixture, setup_poseidon, setup_poseidon_zk, InvalidConfigReason,
+    MatrixClosingMode, PoseidonProof, PoseidonProvingKey, PoseidonSetupConfig,
+    PoseidonVerifyingKey, PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig,
+    PoseidonZkVerifyingKey, QuarticBinExtension, SpartanSnarkConfig, SpartanWhirError,
+    SyntheticR1csConfig,
 };
 
 fn config(mode: MatrixClosingMode) -> PoseidonSetupConfig {
@@ -11,8 +14,17 @@ fn config(mode: MatrixClosingMode) -> PoseidonSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
-        pcs_config: common::phase3_pcs_config(),
         spark_whir_params: None,
+    }
+}
+
+fn zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
+    PoseidonZkSetupConfig {
+        matrix_closing: mode,
+        security: common::phase3_security(),
+        whir_params: common::phase3_whir_params(),
+        ell_zk: spartan_whir::DEFAULT_ZK_ELL,
+        mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
     }
 }
 
@@ -110,8 +122,145 @@ fn poseidon_deployment_types_are_serializable() {
 }
 
 #[test]
+fn poseidon_verifier_rejects_malformed_serialized_key_without_panicking() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
+        fixture.shape,
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("prove succeeds");
+
+    let mut encoded = serde_json::to_value(&vk).expect("verifying key serializes");
+    encoded["shape_canonical"]["num_cons"] = serde_json::json!(0);
+    let malformed: PoseidonVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
+
+    assert_eq!(
+        malformed.verify(&proof),
+        Err(SpartanWhirError::InvalidR1csShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_deployment_api_is_serializable() {
+    let fixture = fixture();
+    let witness = fixture.witness.clone();
+    let public_inputs = fixture.public_inputs.clone();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("full-ZK setup succeeds");
+    let proof = pk
+        .prove(witness.clone(), public_inputs.clone())
+        .expect("full-ZK proof succeeds");
+    let pk_bytes = bincode::serialize(&pk).expect("full-ZK proving key serializes");
+    let vk_bytes = bincode::serialize(&vk).expect("full-ZK verifying key serializes");
+    let bytes = bincode::serialize(&proof).expect("full-ZK proof serializes");
+    let decoded: PoseidonZkProof<QuarticBinExtension> =
+        bincode::deserialize(&bytes).expect("full-ZK proof deserializes");
+    let mut pk_roundtrip: PoseidonZkProvingKey<QuarticBinExtension> =
+        bincode::deserialize(&pk_bytes).expect("full-ZK proving key deserializes");
+    let vk_roundtrip: PoseidonZkVerifyingKey<QuarticBinExtension> =
+        bincode::deserialize(&vk_bytes).expect("full-ZK verifying key deserializes");
+
+    vk.verify(&decoded)
+        .expect("deserialized full-ZK proof verifies");
+    vk_roundtrip
+        .verify(&decoded)
+        .expect("deserialized full-ZK verifying key verifies");
+    let error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
+        Ok(_) => panic!("deserialized full-ZK key must require layout preparation"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+    );
+    pk_roundtrip
+        .prepare_for_proving()
+        .expect("full-ZK derived layouts rebuild");
+    let replay = pk_roundtrip
+        .prove(witness, public_inputs)
+        .expect("deserialized full-ZK proving key proves");
+    vk_roundtrip
+        .verify(&replay)
+        .expect("deserialized full-ZK key pair remains reusable");
+}
+
+#[test]
+fn poseidon_full_zk_verifier_rejects_malformed_serialized_key_without_panicking() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("full-ZK setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("full-ZK proof succeeds");
+
+    let mut encoded = serde_json::to_value(&vk).expect("full-ZK verifying key serializes");
+    encoded["shape_canonical"]["num_cons"] = serde_json::json!(0);
+    let malformed: PoseidonZkVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
+
+    assert_eq!(
+        malformed.verify(&proof),
+        Err(SpartanWhirError::InvalidR1csShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_deployment_api_accepts_seeded_rng() {
+    let fixture = fixture();
+    let witness = fixture.witness.clone();
+    let public_inputs = fixture.public_inputs.clone();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let mut first_rng = StdRng::seed_from_u64(0x5EED_0001);
+    let mut replay_rng = StdRng::seed_from_u64(0x5EED_0001);
+    let first = pk
+        .prove_with_rng(witness.clone(), public_inputs.clone(), &mut first_rng)
+        .expect("seeded full-ZK proof succeeds");
+    let replay = pk
+        .prove_with_rng(witness, public_inputs, &mut replay_rng)
+        .expect("replayed full-ZK proof succeeds");
+
+    assert_eq!(
+        bincode::serialize(&first).expect("first proof serializes"),
+        bincode::serialize(&replay).expect("replayed proof serializes")
+    );
+    vk.verify(&first).expect("seeded full-ZK proof verifies");
+}
+
+#[test]
+fn poseidon_full_zk_spark_is_rejected_at_setup() {
+    let fixture = fixture();
+    let err = match setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::Spark),
+    ) {
+        Ok(_) => panic!("full-ZK Spark setup must be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        err,
+        SpartanWhirError::UnsupportedFullZkMatrixClosing(MatrixClosingMode::Spark)
+    );
+}
+
+#[test]
 fn poseidon_spark_proving_key_is_serializable() {
     let fixture = fixture();
+    let witness = fixture.witness.clone();
+    let public_inputs = fixture.public_inputs.clone();
     let (direct_pk, _direct_vk) = setup_poseidon::<QuarticBinExtension>(
         fixture.shape.clone(),
         config(MatrixClosingMode::DirectSparse),
@@ -131,12 +280,32 @@ fn poseidon_spark_proving_key_is_serializable() {
         direct_pk_bytes.len() < pk_bytes.len(),
         "Spark proving key should carry fixed prover data and cached Spark tables"
     );
-    let pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
+    let first = spark_pk
+        .prove(witness.clone(), public_inputs.clone())
+        .expect("first proof from reusable Spark key succeeds");
+    let second = spark_pk
+        .prove(witness.clone(), public_inputs.clone())
+        .expect("second proof from reusable Spark key succeeds");
+    spark_vk.verify(&first).expect("first Spark proof verifies");
+    spark_vk
+        .verify(&second)
+        .expect("second Spark proof verifies");
+
+    let mut pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("spark proving key deserializes");
     let vk_roundtrip: PoseidonVerifyingKey<QuarticBinExtension> =
         bincode::deserialize(&vk_bytes).expect("spark verifying key deserializes");
     assert_eq!(pk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
     assert_eq!(vk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
+    pk_roundtrip
+        .prepare_for_proving()
+        .expect("deserialized Spark key prepares for proving");
+    let roundtrip_proof = pk_roundtrip
+        .prove(witness, public_inputs)
+        .expect("deserialized Spark key proves");
+    vk_roundtrip
+        .verify(&roundtrip_proof)
+        .expect("proof from deserialized Spark key verifies");
 }
 
 #[cfg(feature = "circom")]
@@ -153,13 +322,17 @@ fn poseidon_can_prove_from_linked_witness_generator() {
     )
     .expect("setup succeeds");
 
-    let generator = PoseidonWitnessGenerator::linked(
-        "tiny_arithmetic",
-        b"tiny.dat",
-        tiny_load_circuit,
-        tiny_arithmetic_witness,
-        tiny_free_circuit,
-    )
+    // SAFETY: these test callbacks implement the linked witness ABI and remain
+    // available for the generator's full lifetime.
+    let generator = unsafe {
+        PoseidonWitnessGenerator::linked(
+            "tiny_arithmetic",
+            b"tiny.dat",
+            tiny_load_circuit,
+            tiny_arithmetic_witness,
+            tiny_free_circuit,
+        )
+    }
     .expect("linked generator loads circuit");
     let proof = pk
         .prove_from_witness_generator(&generator, b"\x05")
@@ -183,13 +356,17 @@ fn linked_witness_generator_errors_are_reported() {
     )
     .expect("setup succeeds");
 
-    let failing = PoseidonWitnessGenerator::linked(
-        "failing",
-        b"tiny.dat",
-        tiny_load_circuit,
-        failing_witness,
-        tiny_free_circuit,
-    )
+    // SAFETY: these test callbacks implement the linked witness ABI and remain
+    // available for the generator's full lifetime.
+    let failing = unsafe {
+        PoseidonWitnessGenerator::linked(
+            "failing",
+            b"tiny.dat",
+            tiny_load_circuit,
+            failing_witness,
+            tiny_free_circuit,
+        )
+    }
     .expect("linked generator loads circuit");
     assert!(matches!(
         pk.prove_from_witness_generator(&failing, b""),
@@ -200,13 +377,17 @@ fn linked_witness_generator_errors_are_reported() {
         })
     ));
 
-    let noncanonical = PoseidonWitnessGenerator::linked(
-        "noncanonical",
-        b"tiny.dat",
-        tiny_load_circuit,
-        noncanonical_tiny_arithmetic_witness,
-        tiny_free_circuit,
-    )
+    // SAFETY: these test callbacks implement the linked witness ABI and remain
+    // available for the generator's full lifetime.
+    let noncanonical = unsafe {
+        PoseidonWitnessGenerator::linked(
+            "noncanonical",
+            b"tiny.dat",
+            tiny_load_circuit,
+            noncanonical_tiny_arithmetic_witness,
+            tiny_free_circuit,
+        )
+    }
     .expect("linked generator loads circuit");
     assert!(matches!(
         pk.prove_from_witness_generator(&noncanonical, b"\x05"),
@@ -231,13 +412,17 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
     )
     .expect("setup succeeds");
 
-    let bad = PoseidonWitnessGenerator::linked(
-        "bad_satisfaction",
-        b"tiny.dat",
-        tiny_load_circuit,
-        bad_satisfaction_witness,
-        tiny_free_circuit,
-    )
+    // SAFETY: these test callbacks implement the linked witness ABI and remain
+    // available for the generator's full lifetime.
+    let bad = unsafe {
+        PoseidonWitnessGenerator::linked(
+            "bad_satisfaction",
+            b"tiny.dat",
+            tiny_load_circuit,
+            bad_satisfaction_witness,
+            tiny_free_circuit,
+        )
+    }
     .expect("linked generator loads circuit");
 
     let proof = pk

@@ -215,7 +215,6 @@ fn setup_keys_with_mode(
             matrix_closing,
             security: common::phase3_security(),
             whir_params: common::phase3_whir_params(),
-            pcs_config: common::phase3_pcs_config(),
             spark_whir_params: None,
         },
     )
@@ -269,7 +268,6 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         matrix_closing: MatrixClosingMode::DirectSparse,
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
-        pcs_config: common::phase3_pcs_config(),
         spark_whir_params: None,
     };
     let (direct_pk, direct_vk) =
@@ -304,7 +302,6 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         matrix_closing: MatrixClosingMode::Spark,
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
-        pcs_config: common::phase3_pcs_config(),
         spark_whir_params: None,
     };
     let (spark_pk, spark_vk) =
@@ -976,13 +973,11 @@ fn protocol_tampered_pcs_proof_fails() {
     )
     .expect("prove succeeds");
 
-    if let Some(first) = proof.pcs_proof.initial_ood_answers.first_mut() {
-        *first += EF::ONE;
-    } else if let Some(final_poly) = proof.pcs_proof.final_poly.as_mut() {
-        final_poly.as_mut_slice()[0] += EF::ONE;
-    } else {
-        proof.pcs_proof.final_pow_witness += F::ONE;
-    }
+    *proof
+        .pcs_proof
+        .initial_ood_answers
+        .first_mut()
+        .expect("plain WHIR proof has an initial OOD answer") += EF::ONE;
 
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify(
         &vk,

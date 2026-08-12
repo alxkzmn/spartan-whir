@@ -20,7 +20,6 @@ fn direct_config() -> SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
-        pcs_config: common::phase3_pcs_config(),
         spark_whir_params: None,
     }
 }

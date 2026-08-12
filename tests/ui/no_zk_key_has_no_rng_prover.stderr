@@ -1,0 +1,5 @@
+error[E0599]: no method named `prove_with_rng` found for reference `&ProvingKey<PoseidonEngine<p3_field::extension::ExtField<p3_monty_31::monty_31::MontyField31<p3_koala_bear::koala_bear::KoalaBearParameters>, 4, p3_field::extension::Binomial<p3_monty_31::monty_31::MontyField31<p3_koala_bear::koala_bear::KoalaBearParameters>>>>, Plonky3WhirPcs>` in the current scope
+  --> tests/ui/no_zk_key_has_no_rng_prover.rs:12:16
+   |
+12 |     let _ = pk.prove_with_rng(witness, public_inputs, &mut rng);
+   |                ^^^^^^^^^^^^^^ method not found in `&ProvingKey<PoseidonEngine<p3_field::extension::ExtField<p3_monty_31::monty_31::MontyField31<p3_koala_bear::koala_bear::KoalaBearParameters>, 4, p3_field::extension::Binomial<p3_monty_31::monty_31::MontyField31<p3_koala_bear::koala_bear::KoalaBearParameters>>>>, Plonky3WhirPcs>`

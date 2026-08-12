@@ -141,6 +141,10 @@ pub fn recommended_octic_schedule(num_variables: usize) -> WhirFoldingSchedule {
     }
 }
 
+/// Plain-WHIR octic parameters from the historical schedule table.
+///
+/// These parameters are not checked against full-ZK mask slack limits. Use
+/// [`recommended_octic_zk_whir_params`] for the full-ZK DirectSparse protocol.
 pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
     let schedule = recommended_octic_schedule(num_variables);
     let folding_factor = schedule.first_round();
@@ -155,5 +159,124 @@ pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
         rs_domain_initial_reduction_factor: 8.min(folding_factor),
         folding_schedule,
         round_log_inv_rates: Vec::new(),
+    }
+}
+
+/// Octic parameters that satisfy the default full-ZK WHIR configuration.
+///
+/// These are conservative fallback parameters. For benchmarked circuits, prefer
+/// a schedule selected by `poseidon-schedule-candidates --proof-mode full-zk`.
+pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
+    if num_variables <= 8 {
+        return recommended_octic_whir_params(num_variables);
+    }
+
+    if num_variables == 20 {
+        let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+        // SHA-2048 ZK heldouts treat the top candidates as tied by median; this
+        // PoW-8 row is the smallest-proof member of the tied cluster. Revisit
+        // the PoW-free tied row if p99 proving latency becomes more important
+        // than per-proof size.
+        return WhirParams {
+            pow_bits: 8,
+            folding_factor: 8,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 5,
+            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 5),
+            folding_schedule: Some(schedule),
+        };
+    }
+
+    if num_variables <= 21 {
+        let schedule = WhirFoldingSchedule::Constant(1);
+        return WhirParams {
+            pow_bits: 0,
+            folding_factor: 1,
+            starting_log_inv_rate: 2,
+            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 2, 1),
+            folding_schedule: Some(schedule),
+        };
+    }
+
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+    WhirParams {
+        pow_bits: 0,
+        folding_factor: 8,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 7,
+        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 7),
+        folding_schedule: Some(schedule),
+    }
+}
+
+fn derived_round_log_inv_rates(
+    num_variables: usize,
+    schedule: &WhirFoldingSchedule,
+    starting_log_inv_rate: usize,
+    rs_domain_initial_reduction_factor: usize,
+) -> Vec<usize> {
+    let num_rounds = compute_number_of_rounds(num_variables, schedule);
+    let mut rate = starting_log_inv_rate;
+    let mut out = Vec::with_capacity(num_rounds);
+    for round in 0..num_rounds {
+        let Some(folding) = schedule.at_round(round) else {
+            break;
+        };
+        let reduction = if round == 0 {
+            rs_domain_initial_reduction_factor
+        } else {
+            1
+        };
+        rate = rate + folding - reduction;
+        out.push(rate);
+    }
+    out
+}
+
+fn compute_number_of_rounds(num_variables: usize, schedule: &WhirFoldingSchedule) -> usize {
+    compute_folding_schedule(num_variables, schedule)
+        .len()
+        .saturating_sub(1)
+}
+
+fn compute_folding_schedule(num_variables: usize, schedule: &WhirFoldingSchedule) -> Vec<usize> {
+    match schedule {
+        WhirFoldingSchedule::Constant(factor) => {
+            let mut remaining = num_variables;
+            let mut out = Vec::new();
+            loop {
+                let round_factor = (*factor).min(remaining);
+                out.push(round_factor);
+                remaining -= round_factor;
+                if remaining <= FINAL_SUMCHECK_MAX_VARIABLES {
+                    return out;
+                }
+            }
+        }
+        WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => {
+            let mut remaining = num_variables;
+            let mut out = Vec::new();
+            out.push(*first);
+            remaining -= *first;
+            while remaining > FINAL_SUMCHECK_MAX_VARIABLES {
+                let round_factor = (*rest).min(remaining);
+                out.push(round_factor);
+                remaining -= round_factor;
+            }
+            out
+        }
+        WhirFoldingSchedule::PerRound(factors) => {
+            let mut remaining = num_variables;
+            let mut out = Vec::new();
+            for factor in factors {
+                out.push(*factor);
+                remaining -= *factor;
+                if remaining <= FINAL_SUMCHECK_MAX_VARIABLES {
+                    return out;
+                }
+            }
+            out
+        }
     }
 }

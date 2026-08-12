@@ -26,6 +26,7 @@ pub mod security;
 pub mod spark;
 pub mod statement;
 pub mod sumcheck;
+mod sumcheck_replay;
 pub mod whir_params;
 
 pub use canonical_challenger::CanonicalSerializingChallenger32;
@@ -41,7 +42,9 @@ pub use circom::{
     validate_satisfaction as validate_circom_satisfaction, CircomR1cs, ImportedWitness,
 };
 pub use config::SpartanWhirEngine;
-pub use domain_separator::{DomainSeparator, MatrixClosingMode};
+pub use domain_separator::{
+    DomainSeparator, MatrixClosingMode, FULL_ZK_PROTOCOL_ID, NO_ZK_PROTOCOL_ID,
+};
 pub use engine::{
     keccak_challenger, poseidon_challenger, poseidon_merkle_compress, poseidon_merkle_hash,
     KeccakChallenger, KeccakEngine, KeccakFieldHash, KeccakNodeCompress, KeccakOcticEngine,
@@ -60,18 +63,24 @@ pub use hashers::{
     KECCAK_DIGEST_ELEMS,
 };
 pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
-pub use pcs::{CommittedPolynomialView, MlePcs, ProtocolPcs};
-pub use pcs_config::WhirPcsConfig;
+pub(crate) use pcs::SealedNoZkPcs;
+pub use pcs::{CommittedPolynomialView, MlePcs, NoZkPcs, ProtocolPcs};
+pub use pcs_config::{
+    WhirPcsConfig, ZkWhirPcsConfig, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
+};
 pub use plonky3_whir_pcs::{
-    Plonky3WhirPcs, Plonky3WhirProverData, PoseidonProvingKey, PoseidonSparkSpartanProof,
-    PoseidonSpartanProof, PoseidonSpartanProtocol, PoseidonSpartanSnarkConfig,
-    PoseidonVerifyingKey,
+    Plonky3HidingWhirPcs, Plonky3WhirPcs, Plonky3WhirProverData, PoseidonProvingKey,
+    PoseidonSparkSpartanProof, PoseidonSpartanProof, PoseidonSpartanProtocol,
+    PoseidonSpartanSnarkConfig, PoseidonVerifyingKey,
 };
 pub use poly::{
     evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,
     QuadraticRoundPoly,
 };
-pub use poseidon::{setup_poseidon, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig};
+pub use poseidon::{
+    setup_poseidon, setup_poseidon_zk, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig,
+    PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
+};
 #[cfg(feature = "circom")]
 pub use poseidon::{
     LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
@@ -82,12 +91,12 @@ pub use profiling::{
     ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
-    ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof, SparkPcsConfigs,
-    SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof, SpartanProofKind,
-    SpartanProtocol, SpartanSnarkConfig, VerifyingKey,
+    PoseidonZkSpartanProtocol, ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof,
+    SparkPcsConfigs, SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof,
+    SpartanProofKind, SpartanProtocol, SpartanSnarkConfig, VerifyingKey, ZkSpartanProof,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
-pub use security::{SecurityConfig, SoundnessAssumption, MIN_SECURITY_BITS};
+pub use security::{SecurityConfig, SoundnessAssumption, MAX_SECURITY_BITS, MIN_SECURITY_BITS};
 pub use spark::{
     check_spark_memory_product_equations, compare_spark_layout_profile, compare_spark_layouts,
     compute_spark_read_tables, preprocess_joint_spark_tables,
@@ -122,8 +131,9 @@ pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, Po
 pub use sumcheck::{
     prove_inner, prove_inner_base_first, prove_outer, prove_outer_split_eq_base_first_owned,
     prove_outer_split_eq_owned, verify_inner, verify_outer, InnerSumcheckProof, OuterSumcheckProof,
+    ZkOuterSumcheckProof,
 };
 pub use whir_params::{
-    recommended_octic_schedule, recommended_octic_whir_params, WhirFoldingSchedule, WhirParams,
-    FINAL_SUMCHECK_MAX_VARIABLES,
+    recommended_octic_schedule, recommended_octic_whir_params, recommended_octic_zk_whir_params,
+    WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES,
 };

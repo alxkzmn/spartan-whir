@@ -14,20 +14,23 @@ use sha2::{Digest, Sha256};
 use spartan_whir::{
     circom::import_r1cs_path, compare_spark_layouts, engine::F, recommended_octic_whir_params,
     MatrixClosingMode, OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator,
-    R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SparkWhirParams,
-    SpartanSnarkConfig, WhirFoldingSchedule, WhirParams, WhirPcsConfig,
+    PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, R1csShape,
+    SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanSnarkConfig,
+    WhirFoldingSchedule, WhirParams,
 };
 use spartan_whir::{
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
     spark::spark_col_memory_size,
 };
-
 const DEFAULT_SIZES: &[usize] = &[128, 256, 512, 1024, 2048];
-const POSEIDON_DIRECT_SCHEDULE: &str = "octic_constant_pow0_ff8_lir1_rsv8";
+const POSEIDON_DIRECT_SCHEDULE: &str = "octic_cfsr_pow8_ff8_rest6_lir1_rsv5";
 const POSEIDON_DIRECT_FOLDING_FACTOR: usize = 8;
 const POSEIDON_DIRECT_STARTING_LOG_INV_RATE: usize = 1;
-const POSEIDON_DIRECT_RS_REDUCTION_FACTOR: usize = 8;
-const POSEIDON_SECURITY_BITS: u32 = 128;
+const POSEIDON_DIRECT_RS_REDUCTION_FACTOR: usize = 5;
+const POSEIDON_DIRECT_REST_FOLDING_FACTOR: usize = 6;
+const POSEIDON_DIRECT_ROUND_LOG_INV_RATES: &[usize] = &[4];
+const POSEIDON_DIRECT_POW_BITS: u32 = 8;
+const POSEIDON_SECURITY_BITS: u32 = 123;
 
 #[derive(Debug)]
 struct ArtifactPaths {
@@ -48,16 +51,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workdir = env::var_os("SHA256_BENCH_WORKDIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| env::temp_dir().join("spartan-whir-sha256-bench"));
+        .unwrap_or_else(|| manifest_dir.join("target/sha256-circom-cache"));
     let sizes = parse_sizes()?;
+    let proof_modes = parse_proof_modes()?;
     let modes = parse_modes()?;
     let repeats = parse_repeats()?;
 
     println!("security: {POSEIDON_SECURITY_BITS}-bit JohnsonBound");
     println!("poseidon_direct_schedule: {POSEIDON_DIRECT_SCHEDULE}");
     println!("sizes: {:?}", sizes);
+    println!("proof_modes: {:?}", proof_modes);
     println!("modes: {:?}", modes);
     println!("repeats: {repeats}");
+    if proof_modes.len() > 1 && repeats > 1 {
+        println!("proof_mode_order: alternating_per_sample");
+    }
     if reuse_circom_artifacts() {
         println!("reuse_circom_artifacts: enabled");
     }
@@ -66,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     for size in sizes {
-        run_size(&manifest_dir, &workdir, size, &modes, repeats)?;
+        run_size(&manifest_dir, &workdir, size, &proof_modes, &modes, repeats)?;
     }
 
     Ok(())
@@ -76,17 +84,25 @@ fn init_profile_tracing() {
     if !spartan_whir::profiling::profile_enabled() {
         return;
     }
-    let _ = tracing_subscriber::fmt()
-        .with_target(false)
-        .without_time()
-        .with_level(false)
-        .try_init();
+    if spartan_whir::profiling::profile_detail_enabled() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::fmt()
+            .with_target(false)
+            .without_time()
+            .with_level(false)
+            .try_init();
+    }
 }
 
 fn run_size(
     manifest_dir: &Path,
     workdir: &Path,
     size: usize,
+    proof_modes: &[ProofMode],
     modes: &[BenchMode],
     repeats: usize,
 ) -> Result<(), Box<dyn Error>> {
@@ -159,11 +175,7 @@ fn run_size(
         selected_layout.union_nnz,
         selected_layout.max_matrix_nnz_padded
     );
-    let direct_config = protocol_config(
-        MatrixClosingMode::DirectSparse,
-        poseidon_direct_whir_params(),
-        None,
-    );
+    let direct_configs = poseidon_direct_configs(shape.num_vars)?;
     let spark_config = {
         let spark_folding_factor = spark_folding_factor(selected_layout.value_domain_size)?;
         protocol_config(
@@ -179,29 +191,44 @@ fn run_size(
         if repeats > 1 {
             println!("sample: {}", sample + 1);
         }
-        for &mode in modes {
-            match mode {
-                BenchMode::Direct => prove_and_verify(
-                    "direct_sparse_octic_constant_pow0_ff8_lir1_rsv8",
-                    &direct_config,
-                    &shape,
-                    &loaded_generator.generator,
-                    &input_binary,
-                )?,
-                BenchMode::Spark => prove_and_verify(
-                    "spark",
-                    &spark_config,
-                    &shape,
-                    &loaded_generator.generator,
-                    &input_binary,
-                )?,
-                BenchMode::SparkIndependent => prove_and_verify(
-                    "spark_independent_whir_schedules",
-                    &spark_independent_config,
-                    &shape,
-                    &loaded_generator.generator,
-                    &input_binary,
-                )?,
+        for proof_mode_position in 0..proof_modes.len() {
+            let proof_mode_index = if sample.is_multiple_of(2) {
+                proof_mode_position
+            } else {
+                proof_modes.len() - 1 - proof_mode_position
+            };
+            let proof_mode = proof_modes[proof_mode_index];
+            for &mode in modes {
+                match mode {
+                    BenchMode::Direct => {
+                        for direct in &direct_configs {
+                            prove_and_verify(
+                                proof_mode,
+                                &format!("direct_sparse_{}", direct.label),
+                                &direct.config,
+                                &shape,
+                                &loaded_generator.generator,
+                                &input_binary,
+                            )?;
+                        }
+                    }
+                    BenchMode::Spark => prove_and_verify(
+                        proof_mode,
+                        "spark",
+                        &spark_config,
+                        &shape,
+                        &loaded_generator.generator,
+                        &input_binary,
+                    )?,
+                    BenchMode::SparkIndependent => prove_and_verify(
+                        proof_mode,
+                        "spark_independent_whir_schedules",
+                        &spark_independent_config,
+                        &shape,
+                        &loaded_generator.generator,
+                        &input_binary,
+                    )?,
+                }
             }
         }
     }
@@ -355,13 +382,17 @@ fn load_linked_witness_generator(
     let generate =
         unsafe { *library.get::<spartan_whir::LinkedWitnessGeneratorFn>(&generate_symbol)? };
     let free = unsafe { *library.get::<spartan_whir::LinkedWitnessFreeCircuitFn>(&free_symbol)? };
-    let generator = PoseidonWitnessGenerator::linked(
-        "sha256_circom_bench",
-        &artifacts.circuit_data,
-        load,
-        generate,
-        free,
-    )?;
+    // SAFETY: the symbols come from `library`, which is retained in the return
+    // value and dropped after the generator.
+    let generator = unsafe {
+        PoseidonWitnessGenerator::linked(
+            "sha256_circom_bench",
+            &artifacts.circuit_data,
+            load,
+            generate,
+            free,
+        )
+    }?;
     Ok(LoadedWitnessGenerator {
         generator,
         _library: library,
@@ -377,6 +408,92 @@ fn dynamic_library_name(size: usize) -> String {
 }
 
 fn prove_and_verify(
+    proof_mode: ProofMode,
+    label: &str,
+    config: &SpartanSnarkConfig,
+    shape: &R1csShape<F>,
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    match proof_mode {
+        ProofMode::NoZk => {
+            prove_and_verify_poseidon_no_zk(label, config, shape, generator, input_binary)
+        }
+        ProofMode::FullZk => {
+            prove_and_verify_poseidon_plonky3_full_zk(label, config, shape, generator, input_binary)
+        }
+    }
+}
+
+fn prove_and_verify_poseidon_plonky3_full_zk(
+    label: &str,
+    config: &SpartanSnarkConfig,
+    shape: &R1csShape<F>,
+    generator: &PoseidonWitnessGenerator,
+    input_binary: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    type Protocol = PoseidonZkSpartanProtocol<OcticBinExtension>;
+
+    let _profile_context =
+        spartan_whir::profiling::set_profile_context("poseidon-plonky3-full-zk", label);
+    let setup_start = Instant::now();
+    let _setup_profile = spartan_whir::profiling::profile_scope("setup");
+    let (pk, vk) = PoseidonZkProvingKey::<OcticBinExtension>::setup(
+        shape.clone(),
+        full_zk_setup_config(config),
+    )
+    .map_err(|err| format!("{label} full-ZK Poseidon setup failed: {err}"))?;
+    drop(_setup_profile);
+    let setup_ms = setup_start.elapsed().as_millis();
+
+    let witness_and_prove_start = Instant::now();
+    let _prove_profile = spartan_whir::profiling::profile_scope("witness_and_prove");
+    let (witness, public_inputs) = {
+        let _profile = spartan_whir::profiling::profile_scope("linked_witness_generation");
+        generator.generate_witness(input_binary, shape.num_vars, shape.num_io)?
+    };
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = Protocol::prove(&pk, &public_inputs, &witness, &mut prover_challenger)
+        .map_err(|err| format!("{label} full-ZK Poseidon prove failed: {err}"))?;
+    drop(_prove_profile);
+    let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
+
+    let verify_start = Instant::now();
+    let _verify_profile = spartan_whir::profiling::profile_scope("verify");
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    Protocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
+        .map_err(|err| format!("{label} full-ZK Poseidon verify failed: {err}"))?;
+    drop(_verify_profile);
+    let verify_ms = verify_start.elapsed().as_millis();
+    let proof_size_bytes = bincode::serialize(&proof)?.len();
+    let application_mask_commitments_bytes = bincode::serialize(&(
+        proof.inner_mask_commitment.clone(),
+        proof.outer_mask_commitment.clone(),
+    ))?
+    .len();
+    let outer_iop_bytes = bincode::serialize(&(
+        &proof.outer_sumcheck,
+        proof.outer_claims,
+        &proof.outer_mask_evals,
+    ))?
+    .len();
+    let inner_iop_bytes = bincode::serialize(&(
+        &proof.inner_sumcheck,
+        proof.inner_sumcheck_mask_commitment.clone(),
+    ))?
+    .len();
+    let pcs_relation_bytes = bincode::serialize(&proof.pcs_proof)?.len();
+
+    println!(
+        "proof_mode: full-zk matrix_closing: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms} proof_size_bytes={proof_size_bytes}"
+    );
+    println!(
+        "full_zk_proof_sections: application_mask_commitments_bytes={application_mask_commitments_bytes} outer_iop_bytes={outer_iop_bytes} inner_iop_bytes={inner_iop_bytes} pcs_relation_bytes={pcs_relation_bytes}"
+    );
+    Ok(())
+}
+
+fn prove_and_verify_poseidon_no_zk(
     label: &str,
     config: &SpartanSnarkConfig,
     shape: &R1csShape<F>,
@@ -386,11 +503,11 @@ fn prove_and_verify(
     type Protocol = PoseidonSpartanProtocol<OcticBinExtension>;
 
     let _profile_context =
-        spartan_whir::profiling::set_profile_context("poseidon-plonky3-whir", label);
+        spartan_whir::profiling::set_profile_context("poseidon-plonky3-no-zk", label);
     let setup_start = Instant::now();
     let _setup_profile = spartan_whir::profiling::profile_scope("setup");
     let (pk, vk) = Protocol::setup_with_config(shape, config)
-        .map_err(|err| format!("{label} Poseidon Plonky3 setup failed: {err}"))?;
+        .map_err(|err| format!("{label} no-ZK Poseidon setup failed: {err}"))?;
     drop(_setup_profile);
     let setup_ms = setup_start.elapsed().as_millis();
 
@@ -408,7 +525,7 @@ fn prove_and_verify(
         config.matrix_closing,
         &mut prover_challenger,
     )
-    .map_err(|err| format!("{label} Poseidon Plonky3 prove failed: {err}"))?;
+    .map_err(|err| format!("{label} no-ZK Poseidon prove failed: {err}"))?;
     drop(_prove_profile);
     let witness_and_prove_ms = witness_and_prove_start.elapsed().as_millis();
 
@@ -416,16 +533,16 @@ fn prove_and_verify(
     let _verify_profile = spartan_whir::profiling::profile_scope("verify");
     let mut verifier_challenger = spartan_whir::poseidon_challenger();
     Protocol::verify_with_mode(&vk, &instance, &proof, &mut verifier_challenger)
-        .map_err(|err| format!("{label} Poseidon Plonky3 verify failed: {err}"))?;
+        .map_err(|err| format!("{label} no-ZK Poseidon verify failed: {err}"))?;
     drop(_verify_profile);
     let verify_ms = verify_start.elapsed().as_millis();
+    let proof_size_bytes = bincode::serialize(&proof)?.len();
 
     println!(
-        "engine: poseidon-plonky3-whir mode: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms}"
+        "proof_mode: no-zk matrix_closing: {label} setup_ms={setup_ms} witness_and_prove_ms={witness_and_prove_ms} verify_ms={verify_ms} proof_size_bytes={proof_size_bytes}"
     );
     Ok(())
 }
-
 fn run(command: &mut Command) -> Result<(), Box<dyn Error>> {
     let status = command.status()?;
     if status.success() {
@@ -454,6 +571,33 @@ fn parse_sizes() -> Result<Vec<usize>, Box<dyn Error>> {
         return Err("SHA256_BENCH_SIZES must not be empty".into());
     }
     Ok(sizes)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProofMode {
+    NoZk,
+    FullZk,
+}
+
+fn parse_proof_modes() -> Result<Vec<ProofMode>, Box<dyn Error>> {
+    let Some(raw) = env::var_os("SHA256_BENCH_PROOF_MODES") else {
+        return Ok(vec![ProofMode::NoZk]);
+    };
+    let raw = raw
+        .into_string()
+        .map_err(|_| "SHA256_BENCH_PROOF_MODES must be valid UTF-8")?;
+    let mut proof_modes = Vec::new();
+    for part in raw.split(',') {
+        match part.trim() {
+            "no-zk" => proof_modes.push(ProofMode::NoZk),
+            "full-zk" => proof_modes.push(ProofMode::FullZk),
+            other => return Err(format!("unsupported SHA proof mode: {other}").into()),
+        }
+    }
+    if proof_modes.is_empty() {
+        return Err("SHA256_BENCH_PROOF_MODES must not be empty".into());
+    }
+    Ok(proof_modes)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -574,24 +718,161 @@ fn protocol_config(
     SpartanSnarkConfig {
         matrix_closing,
         security,
-        whir_params: whir_params.clone(),
-        pcs_config: WhirPcsConfig {
-            num_variables: 0,
-            security,
-            whir: whir_params,
-        },
+        whir_params,
         spark_whir_params,
     }
 }
 
+fn full_zk_setup_config(config: &SpartanSnarkConfig) -> PoseidonZkSetupConfig {
+    PoseidonZkSetupConfig {
+        matrix_closing: config.matrix_closing,
+        security: config.security,
+        whir_params: config.whir_params.clone(),
+        ell_zk: env_usize("SHA256_BENCH_ZK_ELL", spartan_whir::DEFAULT_ZK_ELL),
+        mask_log_inv_rate: env_usize(
+            "SHA256_BENCH_ZK_MASK_LOG_INV_RATE",
+            spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
+        ),
+    }
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    match env::var(name) {
+        Ok(raw) => raw
+            .parse()
+            .unwrap_or_else(|err| panic!("{name} must be a usize: {err}")),
+        Err(env::VarError::NotPresent) => default,
+        Err(env::VarError::NotUnicode(_)) => panic!("{name} must be valid UTF-8"),
+    }
+}
+
+struct DirectBenchConfig {
+    label: String,
+    config: SpartanSnarkConfig,
+}
+
+fn poseidon_direct_configs(num_vars: usize) -> Result<Vec<DirectBenchConfig>, Box<dyn Error>> {
+    let num_variables = num_vars.next_power_of_two().ilog2() as usize;
+    let labels = match env::var_os("SHA256_BENCH_DIRECT_SCHEDULES") {
+        Some(raw) => raw
+            .into_string()
+            .map_err(|_| "SHA256_BENCH_DIRECT_SCHEDULES must be valid UTF-8")?
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>(),
+        None => vec![POSEIDON_DIRECT_SCHEDULE.to_owned()],
+    };
+    if labels.is_empty() {
+        return Err("SHA256_BENCH_DIRECT_SCHEDULES must not be empty".into());
+    }
+
+    labels
+        .into_iter()
+        .map(|label| {
+            let whir_params = poseidon_direct_whir_params_from_label(&label, num_variables)?;
+            Ok(DirectBenchConfig {
+                label,
+                config: protocol_config(MatrixClosingMode::DirectSparse, whir_params, None),
+            })
+        })
+        .collect()
+}
+
 fn poseidon_direct_whir_params() -> WhirParams {
     WhirParams {
-        pow_bits: 0,
+        pow_bits: POSEIDON_DIRECT_POW_BITS,
         folding_factor: POSEIDON_DIRECT_FOLDING_FACTOR,
         starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
         rs_domain_initial_reduction_factor: POSEIDON_DIRECT_RS_REDUCTION_FACTOR,
+        folding_schedule: Some(WhirFoldingSchedule::ConstantFromSecondRound {
+            first: POSEIDON_DIRECT_FOLDING_FACTOR,
+            rest: POSEIDON_DIRECT_REST_FOLDING_FACTOR,
+        }),
+        round_log_inv_rates: POSEIDON_DIRECT_ROUND_LOG_INV_RATES.to_vec(),
         ..WhirParams::default()
     }
+}
+
+fn poseidon_direct_whir_params_from_label(
+    label: &str,
+    num_variables: usize,
+) -> Result<WhirParams, Box<dyn Error>> {
+    if label == POSEIDON_DIRECT_SCHEDULE {
+        return Ok(poseidon_direct_whir_params());
+    }
+    let parts = label.split('_').collect::<Vec<_>>();
+    if parts.len() != 7 || parts[0] != "octic" || parts[1] != "cfsr" {
+        return Err(format!("unsupported direct schedule label: {label}").into());
+    }
+    let pow_bits = parse_labeled_usize(parts[2], "pow")? as u32;
+    let first = parse_labeled_usize(parts[3], "ff")?;
+    let rest = parse_labeled_usize(parts[4], "rest")?;
+    let starting_log_inv_rate = parse_labeled_usize(parts[5], "lir")?;
+    let rs_domain_initial_reduction_factor = parse_labeled_usize(parts[6], "rsv")?;
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first, rest };
+    Ok(WhirParams {
+        pow_bits,
+        folding_factor: first,
+        starting_log_inv_rate,
+        rs_domain_initial_reduction_factor,
+        folding_schedule: Some(schedule.clone()),
+        round_log_inv_rates: derive_round_log_inv_rates(
+            num_variables,
+            &schedule,
+            starting_log_inv_rate,
+            rs_domain_initial_reduction_factor,
+        ),
+        ..WhirParams::default()
+    })
+}
+
+fn parse_labeled_usize(value: &str, prefix: &str) -> Result<usize, Box<dyn Error>> {
+    let raw = value
+        .strip_prefix(prefix)
+        .ok_or_else(|| format!("expected {prefix} component, got {value}"))?;
+    Ok(raw.parse()?)
+}
+
+fn derive_round_log_inv_rates(
+    num_variables: usize,
+    schedule: &WhirFoldingSchedule,
+    starting_log_inv_rate: usize,
+    rs_domain_initial_reduction_factor: usize,
+) -> Vec<usize> {
+    let num_rounds = derived_folding_schedule_len(num_variables, schedule).saturating_sub(1);
+    let mut rate = starting_log_inv_rate;
+    let mut out = Vec::with_capacity(num_rounds);
+    for round in 0..num_rounds {
+        let Some(folding) = schedule.at_round(round) else {
+            break;
+        };
+        let reduction = if round == 0 {
+            rs_domain_initial_reduction_factor
+        } else {
+            1
+        };
+        rate += folding - reduction;
+        out.push(rate);
+    }
+    out
+}
+
+fn derived_folding_schedule_len(num_variables: usize, schedule: &WhirFoldingSchedule) -> usize {
+    let mut remaining = num_variables;
+    let mut len = 0;
+    for round in 0.. {
+        let Some(folding) = schedule.at_round(round) else {
+            break;
+        };
+        len += 1;
+        remaining = remaining.saturating_sub(folding.min(remaining));
+        if remaining <= spartan_whir::FINAL_SUMCHECK_MAX_VARIABLES {
+            break;
+        }
+    }
+    len
 }
 
 fn legacy_spark_whir_params(folding_factor: usize) -> WhirParams {

@@ -7,6 +7,7 @@ use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::profiling::profile_scope;
+use crate::sumcheck_replay::{observe_sumcheck_claim, replay_compact_rounds};
 use crate::{
     engine::F, evaluate_mle_table, CubicRoundPoly, EqPolynomial, MultilinearPoint, R1csShape,
     SparseMatrix, SpartanWhirError,
@@ -178,6 +179,12 @@ pub struct SparkSolidityGasEstimate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueRoundPoly<EF>(pub Vec<EF>);
+
+impl<EF> AsRef<[EF]> for SparkValueRoundPoly<EF> {
+    fn as_ref(&self) -> &[EF] {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueSumcheckProof<EF> {
@@ -985,6 +992,7 @@ where
     let num_rounds = log2_power_of_two(tables.value_domain_size);
     let mut rounds = Vec::with_capacity(num_rounds);
     let mut alpha = Vec::with_capacity(num_rounds);
+    observe_sumcheck_claim::<F, EF, C>(challenger, claim);
 
     for _ in 0..num_rounds {
         let round = compute_value_round(
@@ -1043,21 +1051,17 @@ where
     if proof.rounds.len() != expected_rounds {
         return Err(SpartanWhirError::InvalidRoundCount);
     }
-    for round in &proof.rounds {
-        if !matches!(round.0.len(), 3 | 4) {
-            return Err(SpartanWhirError::InvalidRoundPolynomial);
-        }
+    let degree = proof.rounds.first().map_or(3, |round| round.0.len());
+    if !matches!(degree, 3 | 4) {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
-
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(expected_rounds);
-
-    for round in &proof.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
+    let (alpha, claim) = replay_compact_rounds::<F, EF, C, _>(
+        &proof.rounds,
+        initial_claim,
+        expected_rounds,
+        degree,
+        challenger,
+    )?;
 
     let expected_final = proof.final_evals.selector
         * proof.final_evals.val
@@ -1067,7 +1071,7 @@ where
         return Err(SpartanWhirError::SumcheckFailed);
     }
 
-    Ok((MultilinearPoint(alpha), claim))
+    Ok((alpha, claim))
 }
 
 pub fn verify_spark_value_sumcheck_with_tables<EF, C>(
@@ -2158,6 +2162,7 @@ where
 
         let mut rounds = Vec::with_capacity(parent_point.len());
         let mut alpha = Vec::with_capacity(parent_point.len());
+        observe_sumcheck_claim::<F, EF, C>(challenger, claim);
         for _ in 0..parent_point.len() {
             let round = compute_batched_product_round(
                 &eq,
@@ -2675,18 +2680,13 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    if layer.rounds.len() != expected_rounds {
-        return Err(SpartanWhirError::InvalidRoundCount);
-    }
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(expected_rounds);
-    for round in &layer.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
-    Ok((MultilinearPoint(alpha), claim))
+    replay_compact_rounds::<F, EF, C, _>(
+        &layer.rounds,
+        initial_claim,
+        expected_rounds,
+        3,
+        challenger,
+    )
 }
 
 fn observe_batched_product_layer_and_sample<EF, C>(
@@ -3233,6 +3233,7 @@ where
     let mut claim = initial_claim;
     let mut rounds = Vec::with_capacity(parent_point.len());
     let mut alpha = Vec::with_capacity(parent_point.len());
+    observe_sumcheck_claim::<F, EF, C>(challenger, claim);
     for _ in 0..parent_point.len() {
         let round = compute_grand_product_layer_round(&eq, &left, &right)?;
         challenger.observe_algebra_slice(&round.0);
@@ -3273,19 +3274,13 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    if proof.rounds.len() != parent_point.len() {
-        return Err(SpartanWhirError::InvalidRoundCount);
-    }
-
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(parent_point.len());
-    for round in &proof.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
-    Ok((MultilinearPoint(alpha), claim))
+    replay_compact_rounds::<F, EF, C, _>(
+        &proof.rounds,
+        initial_claim,
+        parent_point.len(),
+        3,
+        challenger,
+    )
 }
 
 fn compute_grand_product_layer_round<EF>(

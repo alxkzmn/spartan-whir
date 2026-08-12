@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 
 pub const MIN_SECURITY_BITS: u32 = 80;
 pub const DEFAULT_SECURITY_BITS: u32 = 100;
+/// Maximum target supported by the current eight-element KoalaBear Poseidon digest.
+///
+/// TODO: Raise this to 128 after widening the Poseidon Merkle digest and its
+/// compression construction to provide at least 128 bits of collision security.
+pub const MAX_SECURITY_BITS: u32 = 123;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SoundnessAssumption {
@@ -33,8 +38,14 @@ impl SecurityConfig {
         if self.security_level_bits < MIN_SECURITY_BITS {
             return Err(SpartanWhirError::SecurityBelowMinimum);
         }
+        if self.security_level_bits > MAX_SECURITY_BITS {
+            return Err(SpartanWhirError::SecurityAboveMaximum);
+        }
         if self.merkle_security_bits < MIN_SECURITY_BITS {
             return Err(SpartanWhirError::MerkleSecurityBelowMinimum);
+        }
+        if self.merkle_security_bits > MAX_SECURITY_BITS {
+            return Err(SpartanWhirError::MerkleSecurityAboveMaximum);
         }
         Ok(())
     }

@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_POW_BITS = 22
+DEFAULT_ZK_ELL_SWEEP = [3, 4, 8, 16]
+DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP = [1, 2, 3, 4, 5]
 DEFAULT_VALIDATION_TOLERANCE = 0.20
+DEFAULT_SHORTLIST_MARGIN_RATIO = 0.01
 
 COMPONENTS = (
     ("spartan", "constraint_work"),
@@ -39,6 +42,48 @@ def main() -> None:
     parser.add_argument("--constraint-work", type=int, help="Circuit constraint count for full-prover scoring")
     parser.add_argument("--case-label", help="Optional case label copied into report rows")
     parser.add_argument("--cargo", default="cargo", help="Cargo binary used when --num-variables is set")
+    parser.add_argument(
+        "--proof-mode",
+        choices=("no-zk", "full-zk"),
+        default="no-zk",
+        help="Proof mode used for candidate validation and cost estimates",
+    )
+    parser.add_argument(
+        "--zk-ell-values",
+        help=(
+            "Comma-separated ell_zk values to sweep in full-zk mode; "
+            f"default: {','.join(map(str, DEFAULT_ZK_ELL_SWEEP))}"
+        ),
+    )
+    parser.add_argument(
+        "--zk-mask-log-inv-rate-values",
+        help=(
+            "Comma-separated mask_log_inv_rate values to sweep in full-zk mode; "
+            f"default: {','.join(map(str, DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP))}"
+        ),
+    )
+    parser.add_argument(
+        "--max-report-rows",
+        type=int,
+        help="Limit stored score rows after ranking; selection still uses all rows",
+    )
+    parser.add_argument(
+        "--measurement-shortlist-margin-seconds",
+        type=float,
+        help="Include accepted rows within this many projected seconds of the model best",
+    )
+    parser.add_argument(
+        "--measurement-shortlist-margin-ratio",
+        type=float,
+        help=(
+            "Include accepted rows within this fraction of the model best projected time; "
+            f"default derives from heldout residuals or falls back to {DEFAULT_SHORTLIST_MARGIN_RATIO:g}"
+        ),
+    )
+    parser.add_argument(
+        "--measurements",
+        help="Heldout JSON from poseidon-schedule-heldout; adds selected_measured while keeping selected model-based",
+    )
     args = parser.parse_args()
 
     if bool(args.candidates) == bool(args.num_variables):
@@ -47,11 +92,28 @@ def main() -> None:
     candidates = (
         read_json(Path(args.candidates))
         if args.candidates
-        else generate_candidates(args.cargo, args.num_variables, args.max_pow_bits, args.field)
+        else generate_candidates(
+            args.cargo,
+            args.num_variables,
+            args.max_pow_bits,
+            args.field,
+            args.proof_mode,
+            parse_int_list(args.zk_ell_values),
+            parse_int_list(args.zk_mask_log_inv_rate_values),
+        )
     )
     apply_case_metrics(candidates, args.constraint_work, args.case_label)
     calibration = read_json(Path(args.calibration))
-    report = score_dump(candidates, calibration, args.max_pow_bits)
+    measurements = read_json(Path(args.measurements)) if args.measurements else None
+    report = score_dump(
+        candidates,
+        calibration,
+        args.max_pow_bits,
+        args.max_report_rows,
+        args.measurement_shortlist_margin_seconds,
+        args.measurement_shortlist_margin_ratio,
+        measurements,
+    )
 
     write_json(Path(args.out_report), report)
     selected = report.get("selected")
@@ -60,7 +122,7 @@ def main() -> None:
     write_json(Path(args.out_config), selected["setup_config"])
 
     trust = "trusted" if report["model_validation"]["trusted"] else "untrusted"
-    print(
+    message = (
         "selected "
         f"label={selected['label']} "
         f"extension={selected['extension']} "
@@ -69,13 +131,32 @@ def main() -> None:
         f"max_pow_bits={selected['max_derived_pow_bits']} "
         f"model={trust}"
     )
+    if report.get("selected_measured") is not None:
+        measured = report["selected_measured"]
+        message += (
+            " measured_selected="
+            f"{measured['label']} measured_seconds={measured['measured_seconds']:.9g}"
+        )
+    print(message)
 
 
 def score_dump(
-    dump: dict[str, Any], calibration: dict[str, Any], max_pow_bits: int
+    dump: dict[str, Any],
+    calibration: dict[str, Any],
+    max_pow_bits: int,
+    max_report_rows: int | None = None,
+    measurement_shortlist_margin_seconds: float | None = None,
+    measurement_shortlist_margin_ratio: float | None = None,
+    measurements: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     coeffs = normalized_coefficients(calibration)
     validation = validate_model(calibration, coeffs)
+    proof_mode = dump.get("proof_mode")
+    if proof_mode not in ("no-zk", "full-zk"):
+        raise SystemExit("candidate dump must declare proof_mode as no-zk or full-zk")
+    if measurements is not None and measurements.get("proof_mode") != proof_mode:
+        raise SystemExit("heldout measurements must use the scorer report's proof_mode")
+    use_zk_metrics = proof_mode == "full-zk"
     scored = []
     for candidate in dump.get("candidates", []):
         row = dict(candidate)
@@ -89,9 +170,9 @@ def score_dump(
             rejection_reasons.append(f"derived PoW {derived_pow} exceeds max {max_pow_bits}")
         if candidate.get("setup_config") is None:
             rejection_reasons.append("missing setup config")
-        projected = projected_seconds(candidate, coeffs)
+        projected = projected_seconds(candidate, coeffs, use_zk_metrics)
         row["projected_seconds"] = projected
-        row["cost_breakdown"] = cost_breakdown(candidate, coeffs)
+        row["cost_breakdown"] = cost_breakdown(candidate, coeffs, use_zk_metrics)
         row["accepted_for_ranking"] = not rejection_reasons
         row["rejection_reasons"] = rejection_reasons
         scored.append(row)
@@ -101,10 +182,31 @@ def score_dump(
         key=lambda row: (
             float(row["projected_seconds"]),
             proof_size_key(row),
+            pow_tie_break_key(row),
             str(row.get("label") or ""),
         )
     )
     selected = accepted[0] if accepted else None
+    measurement_shortlist, shortlist_meta = build_measurement_shortlist(
+        accepted,
+        validation,
+        measurement_shortlist_margin_seconds,
+        measurement_shortlist_margin_ratio,
+    )
+    selected_measured, measurement_summary = measured_selection(measurements)
+
+    sorted_scores = sorted(
+        scored,
+        key=lambda row: (
+            not row["accepted_for_ranking"],
+            float(row["projected_seconds"]),
+            proof_size_key(row),
+            pow_tie_break_key(row),
+            str(row.get("label") or ""),
+        ),
+    )
+    if max_report_rows is not None:
+        sorted_scores = sorted_scores[:max_report_rows]
 
     return {
         "schema_version": 1,
@@ -112,17 +214,15 @@ def score_dump(
         "num_variables": dump.get("num_variables"),
         "target_security_bits": dump.get("target_security_bits"),
         "max_pow_bits": max_pow_bits,
+        "proof_mode": proof_mode,
         "model_validation": validation,
         "coefficients": coeffs,
         "selected": selected,
-        "scores": sorted(
-            scored,
-            key=lambda row: (
-                not row["accepted_for_ranking"],
-                float(row["projected_seconds"]),
-                str(row.get("label") or ""),
-            ),
-        ),
+        "selected_measured": selected_measured,
+        "measurement_summary": measurement_summary,
+        "measurement_shortlist": measurement_shortlist,
+        "measurement_shortlist_meta": shortlist_meta,
+        "scores": sorted_scores,
     }
 
 
@@ -147,24 +247,33 @@ def normalized_coefficients(calibration: dict[str, Any]) -> dict[str, Any]:
     return coeffs
 
 
-def projected_seconds(candidate: dict[str, Any], coeffs: dict[str, Any]) -> float:
+def projected_seconds(
+    candidate: dict[str, Any], coeffs: dict[str, Any], use_zk_metrics: bool = False
+) -> float:
     total = float(coeffs["fixed_overhead"])
     for name, metric in COMPONENTS:
-        total += component_seconds(candidate, coeffs, name, metric)
+        total += component_seconds(candidate, coeffs, name, metric, use_zk_metrics)
     return total
 
 
-def cost_breakdown(candidate: dict[str, Any], coeffs: dict[str, Any]) -> dict[str, float]:
+def cost_breakdown(
+    candidate: dict[str, Any], coeffs: dict[str, Any], use_zk_metrics: bool = False
+) -> dict[str, float]:
     out = {"fixed_overhead": float(coeffs["fixed_overhead"])}
     for name, metric in COMPONENTS:
-        out[name] = component_seconds(candidate, coeffs, name, metric)
+        out[name] = component_seconds(candidate, coeffs, name, metric, use_zk_metrics)
     return out
 
 
 def component_seconds(
-    candidate: dict[str, Any], coeffs: dict[str, Any], name: str, metric: str
+    candidate: dict[str, Any],
+    coeffs: dict[str, Any],
+    name: str,
+    metric: str,
+    use_zk_metrics: bool = False,
 ) -> float:
-    work = float(candidate.get(metric) or 0.0)
+    metric_name = zk_metric_name(metric) if use_zk_metrics else metric
+    work = float(candidate.get(metric_name) or candidate.get(metric) or 0.0)
     if work == 0.0:
         return 0.0
     return coefficient_for(candidate, coeffs, name) * work
@@ -180,10 +289,191 @@ def coefficient_for(candidate: dict[str, Any], coeffs: dict[str, Any], name: str
     return float(coeff)
 
 
+def zk_metric_name(metric: str) -> str:
+    return {
+        "dft_work": "zk_dft_work",
+        "merkle_work": "zk_merkle_work",
+        "merkle_path_work": "zk_merkle_path_work",
+        "row_work": "zk_row_work",
+        "sumcheck_work": "zk_sumcheck_work",
+    }.get(metric, metric)
+
+
 def proof_size_key(row: dict[str, Any]) -> int:
     # `proof_size_score` is kept only for candidate JSONs emitted before
     # `proof_size_bytes_estimate` became the canonical tie-breaker.
     return int(row.get("proof_size_bytes_estimate") or row.get("proof_size_score") or 0)
+
+
+def pow_tie_break_key(row: dict[str, Any]) -> tuple[int, int]:
+    return (
+        int(row.get("max_derived_pow_bits") or 0),
+        int(row.get("pow_work_units") or 0),
+    )
+
+
+def build_measurement_shortlist(
+    accepted: list[dict[str, Any]],
+    validation: dict[str, Any],
+    margin_seconds: float | None,
+    margin_ratio: float | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not accepted:
+        return [], {
+            "margin_seconds": 0.0,
+            "margin_source": "empty",
+            "pre_dedup_count": 0,
+            "dedup_count": 0,
+        }
+    if margin_seconds is not None and margin_seconds < 0:
+        raise SystemExit("--measurement-shortlist-margin-seconds must be non-negative")
+    if margin_ratio is not None and margin_ratio < 0:
+        raise SystemExit("--measurement-shortlist-margin-ratio must be non-negative")
+
+    best = float(accepted[0]["projected_seconds"])
+    if margin_seconds is not None:
+        margin = margin_seconds
+        source = "cli_seconds"
+    elif margin_ratio is not None:
+        margin = best * margin_ratio
+        source = "cli_ratio"
+    else:
+        diagnostic = validation.get("ordering_diagnostic") or {}
+        derived = diagnostic.get("model_resolution_seconds")
+        if derived is not None and float(derived) > 0.0:
+            margin = float(derived)
+            source = "heldout_residuals"
+        else:
+            margin = best * DEFAULT_SHORTLIST_MARGIN_RATIO
+            source = "default_ratio"
+
+    cutoff = best + margin
+    candidates = [
+        row
+        for row in accepted
+        if float(row["projected_seconds"]) <= cutoff
+    ]
+    deduped = dedup_measurement_shortlist(candidates)
+    return deduped, {
+        "best_projected_seconds": best,
+        "cutoff_projected_seconds": cutoff,
+        "margin_seconds": margin,
+        "margin_source": source,
+        "pre_dedup_count": len(candidates),
+        "dedup_count": len(deduped),
+        "deduplication": "collapse ell_zk variants by schedule and mask_log_inv_rate",
+    }
+
+
+def dedup_measurement_shortlist(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = measurement_shortlist_key(row)
+        old = selected.get(key)
+        if old is None or shortlist_preferred(row) < shortlist_preferred(old):
+            selected[key] = row
+    return sorted(
+        selected.values(),
+        key=lambda row: (
+            float(row["projected_seconds"]),
+            proof_size_key(row),
+            pow_tie_break_key(row),
+            int(row.get("zk_ell") or 0),
+            str(row.get("label") or ""),
+        ),
+    )
+
+
+def shortlist_preferred(row: dict[str, Any]) -> tuple[int, tuple[int, int], int, float, str]:
+    return (
+        proof_size_key(row),
+        pow_tie_break_key(row),
+        int(row.get("zk_ell") or 0),
+        float(row.get("projected_seconds") or 0.0),
+        str(row.get("label") or ""),
+    )
+
+
+def measurement_shortlist_key(row: dict[str, Any]) -> str:
+    setup = json.loads(json.dumps(row.get("setup_config") or {}, sort_keys=True))
+    setup.pop("ell_zk", None)
+    key = {
+        "label": row.get("label"),
+        "extension": row.get("extension"),
+        "zk_mask_log_inv_rate": row.get("zk_mask_log_inv_rate"),
+        "setup_without_ell_zk": setup,
+    }
+    return json.dumps(key, sort_keys=True)
+
+
+def measured_selection(
+    measurements: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if measurements is None:
+        return None, None
+    rows = [
+        row
+        for row in measurements.get("rows", [])
+        if float(row.get("measured_seconds") or 0.0) > 0.0
+    ]
+    if not rows:
+        return None, {
+            "source_measurements": measurements.get("source_report"),
+            "measured_rows": 0,
+        }
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            float(row["measured_seconds"]),
+            proof_size_key(row),
+            pow_tie_break_key(row),
+            str(row.get("label") or ""),
+        ),
+    )
+    selected = dict(ranked[0])
+    selected["measured_rank"] = 1
+    ties = measured_ties_with_best(ranked)
+    return selected, {
+        "source_measurements": measurements.get("source_report"),
+        "measured_rows": len(rows),
+        "selection": "measured_argmin",
+        "tied_with_best_count": len(ties),
+        "tied_with_best": ties,
+    }
+
+
+def measured_ties_with_best(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    best = rows[0]
+    best_ci = median_ci(best)
+    tied = []
+    for rank, row in enumerate(rows, 1):
+        ci = median_ci(row)
+        if best_ci is not None and ci is not None and not intervals_overlap(best_ci, ci):
+            continue
+        tied.append(
+            {
+                "measured_rank": rank,
+                "label": row.get("label"),
+                "zk_ell": row.get("zk_ell"),
+                "zk_mask_log_inv_rate": row.get("zk_mask_log_inv_rate"),
+                "measured_seconds": row.get("measured_seconds"),
+                "heldout_median_ci_seconds": row.get("heldout_median_ci_seconds"),
+            }
+        )
+    return tied
+
+
+def median_ci(row: dict[str, Any]) -> tuple[float, float] | None:
+    raw = row.get("heldout_median_ci_seconds")
+    if not isinstance(raw, list) or len(raw) != 2:
+        return None
+    return float(raw[0]), float(raw[1])
+
+
+def intervals_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
+    return max(left[0], right[0]) <= min(left[1], right[1])
 
 
 def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[str, Any]:
@@ -194,7 +484,7 @@ def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[
     trusted = bool(heldout)
     for row in heldout:
         measured = float(row.get("measured_seconds") or 0.0)
-        projected = projected_seconds(row, coeffs)
+        projected = projected_seconds(row, coeffs, row_uses_zk_metrics(row))
         rel_error = abs(projected - measured) / measured if measured > 0 else float("inf")
         ok = rel_error <= tolerance
         trusted = trusted and ok
@@ -207,15 +497,147 @@ def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[
                 "ok": ok,
             }
         )
+    ordering = ordering_diagnostic(rows)
     return {
         "trusted": trusted,
         "max_relative_error": tolerance,
         "heldout": rows,
+        "ordering_diagnostic": ordering,
     }
 
 
+def ordering_diagnostic(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    usable = [
+        row
+        for row in rows
+        if float(row.get("measured_seconds") or 0.0) > 0.0
+        and float(row.get("projected_seconds") or 0.0) > 0.0
+    ]
+    if len(usable) < 2:
+        resolution = (
+            abs(float(usable[0]["projected_seconds"]) - float(usable[0]["measured_seconds"]))
+            if usable
+            else None
+        )
+        measured = float(usable[0]["measured_seconds"]) if usable else None
+        return {
+            "comparable_pairs": 0,
+            "model_resolution_seconds": resolution,
+            "model_resolution_relative": (resolution / measured if resolution and measured else None),
+        }
+
+    projected_order = {
+        id(row): rank
+        for rank, row in enumerate(
+            sorted(usable, key=lambda row: float(row["projected_seconds"])),
+            1,
+        )
+    }
+    measured_order = {
+        id(row): rank
+        for rank, row in enumerate(
+            sorted(usable, key=lambda row: float(row["measured_seconds"])),
+            1,
+        )
+    }
+    concordant = 0
+    discordant = 0
+    for left_index in range(len(usable)):
+        for right_index in range(left_index + 1, len(usable)):
+            left = usable[left_index]
+            right = usable[right_index]
+            projected_delta = projected_order[id(left)] - projected_order[id(right)]
+            measured_delta = measured_order[id(left)] - measured_order[id(right)]
+            product = projected_delta * measured_delta
+            if product > 0:
+                concordant += 1
+            elif product < 0:
+                discordant += 1
+    comparable = concordant + discordant
+    tau = (concordant - discordant) / comparable if comparable else None
+    residuals = [
+        abs(float(row["projected_seconds"]) - float(row["measured_seconds"]))
+        for row in usable
+    ]
+    measured_values = sorted(float(row["measured_seconds"]) for row in usable)
+    median_measured = measured_values[len(measured_values) // 2]
+    resolution = max(residuals)
+    return {
+        "comparable_pairs": comparable,
+        "kendall_tau": tau,
+        "concordant_pairs": concordant,
+        "discordant_pairs": discordant,
+        "projected_span_seconds": max(float(row["projected_seconds"]) for row in usable)
+        - min(float(row["projected_seconds"]) for row in usable),
+        "measured_span_seconds": max(float(row["measured_seconds"]) for row in usable)
+        - min(float(row["measured_seconds"]) for row in usable),
+        "model_resolution_seconds": resolution,
+        "model_resolution_relative": resolution / median_measured if median_measured > 0 else None,
+    }
+
+
+def row_uses_zk_metrics(row: dict[str, Any]) -> bool:
+    return row.get("proof_mode") == "full-zk"
+
+
 def generate_candidates(
-    cargo: str, num_variables: int, max_pow_bits: int, field: str
+    cargo: str,
+    num_variables: int,
+    max_pow_bits: int,
+    field: str,
+    proof_mode: str,
+    zk_ell_values: list[int] | None,
+    zk_mask_log_inv_rate_values: list[int] | None,
+) -> dict[str, Any]:
+    if proof_mode == "no-zk":
+        return generate_candidate_dump(
+            cargo,
+            num_variables,
+            max_pow_bits,
+            field,
+            proof_mode,
+            None,
+            None,
+        )
+    ell_values = zk_ell_values or DEFAULT_ZK_ELL_SWEEP
+    mask_rate_values = zk_mask_log_inv_rate_values or DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP
+    dumps = []
+    for zk_ell in ell_values:
+        for zk_mask_log_inv_rate in mask_rate_values:
+            dumps.append(
+                generate_candidate_dump(
+                    cargo,
+                    num_variables,
+                    max_pow_bits,
+                    field,
+                    proof_mode,
+                    zk_ell,
+                    zk_mask_log_inv_rate,
+                )
+            )
+    merged = dict(dumps[0])
+    merged["candidates"] = []
+    merged["zk_ell_sweep"] = [value for value in ell_values if value is not None]
+    merged["zk_mask_log_inv_rate_sweep"] = [
+        value for value in mask_rate_values if value is not None
+    ]
+    for dump in dumps:
+        for candidate in dump.get("candidates", []):
+            row = dict(candidate)
+            row["zk_ell"] = dump.get("zk_ell")
+            row["zk_mask_log_inv_rate"] = dump.get("zk_mask_log_inv_rate")
+            merged["candidates"].append(row)
+    return merged
+
+
+def generate_candidate_dump(
+    cargo: str,
+    num_variables: int,
+    max_pow_bits: int,
+    field: str,
+    proof_mode: str,
+    zk_ell: int | None,
+    zk_mask_log_inv_rate: int | None,
 ) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
@@ -233,9 +655,24 @@ def generate_candidates(
         field,
         "--max-pow-bits",
         str(max_pow_bits),
+        "--proof-mode",
+        proof_mode,
     ]
+    if zk_ell is not None:
+        cmd.extend(["--zk-ell", str(zk_ell)])
+    if zk_mask_log_inv_rate is not None:
+        cmd.extend(["--zk-mask-log-inv-rate", str(zk_mask_log_inv_rate)])
     output = subprocess.check_output(cmd, text=True)
     return json.loads(output)
+
+
+def parse_int_list(raw: str | None) -> list[int] | None:
+    if raw is None:
+        return None
+    values = [int(part.strip()) for part in raw.split(",") if part.strip()]
+    if not values:
+        raise SystemExit("integer list must not be empty")
+    return values
 
 
 def apply_case_metrics(
