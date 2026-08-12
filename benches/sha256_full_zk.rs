@@ -1,11 +1,11 @@
-#[path = "support/sha256_circom.rs"]
-mod sha256_circom;
+#[path = "support/sha256.rs"]
+mod sha256;
 
 use std::{env, time::Duration};
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, SeedableRng};
-use sha256_circom::{input_binary, message, Sha256CircomFixture};
+use sha256::{input_binary, message, Sha256Fixture};
 use spartan_whir::{
     engine::F, recommended_octic_zk_whir_params, MatrixClosingMode, MlePcs, OcticBinExtension,
     Plonky3WhirPcs, PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey,
@@ -31,7 +31,7 @@ type PlainProof = SpartanProofKind<Engine, Plonky3WhirPcs>;
 type FullZkProof = ZkSpartanProof<OcticBinExtension>;
 
 fn benchmark_sha256_full_zk(c: &mut Criterion) {
-    let fixture = Sha256CircomFixture::load(SHA256_SIZE)
+    let fixture = Sha256Fixture::load(SHA256_SIZE)
         .unwrap_or_else(|error| panic!("failed to load SHA-256 benchmark fixture: {error}"));
     let corpus_size = env_usize("SHA256_ZK_BENCH_CORPUS_SIZE", DEFAULT_CORPUS_SIZE);
     assert!(
@@ -76,7 +76,7 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
 
 fn benchmark_setup(
     c: &mut Criterion,
-    fixture: &Sha256CircomFixture,
+    fixture: &Sha256Fixture,
     plain_config: &SpartanSnarkConfig,
     full_zk_config: &PoseidonZkSetupConfig,
 ) {
@@ -106,7 +106,7 @@ fn benchmark_setup(
 
 fn benchmark_proving(
     c: &mut Criterion,
-    fixture: &Sha256CircomFixture,
+    fixture: &Sha256Fixture,
     config: &SpartanSnarkConfig,
     plain_pk: &PlainProvingKey,
     full_zk_pk: &FullZkProvingKey,
@@ -170,7 +170,7 @@ fn benchmark_proving(
 }
 
 fn build_proof_corpus(
-    fixture: &Sha256CircomFixture,
+    fixture: &Sha256Fixture,
     messages: &[Vec<u8>],
     inputs: &[Vec<u8>],
     config: &SpartanSnarkConfig,

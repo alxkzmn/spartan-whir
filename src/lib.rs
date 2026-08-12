@@ -1,11 +1,6 @@
-#![cfg_attr(not(test), no_std)]
-
 extern crate alloc;
-#[cfg(feature = "circom")]
-extern crate std;
 
 mod canonical_challenger;
-#[cfg(feature = "circom")]
 pub mod circom;
 pub mod config;
 pub mod domain_separator;
@@ -30,16 +25,11 @@ mod sumcheck_replay;
 pub mod whir_params;
 
 pub use canonical_challenger::CanonicalSerializingChallenger32;
-#[cfg(feature = "circom")]
 pub use circom::{
-    import_bytes as import_circom_bytes, import_paths as import_circom_paths,
-    import_r1cs_bytes as import_circom_r1cs_bytes, import_r1cs_path as import_circom_r1cs_path,
-    import_witness_bytes as import_circom_witness_bytes,
-    import_witness_bytes_with_layout as import_circom_witness_bytes_with_layout,
-    import_witness_path as import_circom_witness_path,
-    import_witness_values as import_circom_witness_values,
-    import_witness_values_with_layout as import_circom_witness_values_with_layout,
-    validate_satisfaction as validate_circom_satisfaction, CircomR1cs, ImportedWitness,
+    import_bytes, import_paths, import_r1cs_bytes, import_r1cs_path, import_witness_bytes,
+    import_witness_bytes_with_layout, import_witness_path, import_witness_values,
+    import_witness_values_with_layout, validate_satisfaction, CircomAdapterError, CircomR1cs,
+    ImportedWitness,
 };
 pub use config::SpartanWhirEngine;
 pub use domain_separator::{
@@ -81,7 +71,6 @@ pub use poseidon::{
     setup_poseidon, setup_poseidon_zk, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig,
     PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
 };
-#[cfg(feature = "circom")]
 pub use poseidon::{
     LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
     PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,

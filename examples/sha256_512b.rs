@@ -11,7 +11,7 @@ use std::{
 use p3_field::PrimeField32;
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_paths, compare_spark_layouts, engine::F, MatrixClosingMode, Plonky3WhirPcs,
+    compare_spark_layouts, engine::F, import_paths, MatrixClosingMode, Plonky3WhirPcs,
     PoseidonQuarticEngine as PoseidonEngine, R1csShape, R1csWitness, SecurityConfig,
     SoundnessAssumption, SparkLayoutDecision, SpartanProtocol, SpartanSnarkConfig, WhirParams,
 };
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         env::var_os("SHA256_512B_WTNS"),
     ) {
         (Some(r1cs), Some(wtns)) => (PathBuf::from(r1cs), PathBuf::from(wtns)),
-        _ => generate_circom_artifacts(&manifest_dir, &circuit, &workdir)?,
+        _ => generate_artifacts(&manifest_dir, &circuit, &workdir)?,
     };
 
     let message = reference_message();
@@ -141,7 +141,7 @@ fn prove_and_verify(
     Ok(())
 }
 
-fn generate_circom_artifacts(
+fn generate_artifacts(
     manifest_dir: &Path,
     circuit: &Path,
     workdir: &Path,

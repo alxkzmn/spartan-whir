@@ -308,16 +308,15 @@ fn poseidon_spark_proving_key_is_serializable() {
         .expect("proof from deserialized Spark key verifies");
 }
 
-#[cfg(feature = "circom")]
 #[test]
 fn poseidon_can_prove_from_linked_witness_generator() {
-    use spartan_whir::{circom::import_r1cs_bytes, PoseidonWitnessGenerator};
+    use spartan_whir::{import_r1cs_bytes, PoseidonWitnessGenerator};
 
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 
-    let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
+    let imported = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
     let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
-        circom.shape,
+        imported.shape,
         config(MatrixClosingMode::DirectSparse),
     )
     .expect("setup succeeds");
@@ -340,18 +339,17 @@ fn poseidon_can_prove_from_linked_witness_generator() {
     vk.verify(&proof).expect("proof verifies");
 }
 
-#[cfg(feature = "circom")]
 #[test]
 fn linked_witness_generator_errors_are_reported() {
     use spartan_whir::{
-        circom::import_r1cs_bytes, PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
+        import_r1cs_bytes, PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
     };
 
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 
-    let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
+    let imported = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
     let (pk, _vk) = setup_poseidon::<QuarticBinExtension>(
-        circom.shape,
+        imported.shape,
         config(MatrixClosingMode::DirectSparse),
     )
     .expect("setup succeeds");
@@ -395,19 +393,18 @@ fn linked_witness_generator_errors_are_reported() {
     ));
 }
 
-#[cfg(feature = "circom")]
 #[test]
 fn linked_witness_generator_rejects_unsatisfied_witness() {
     use spartan_whir::{
-        circom::{import_r1cs_bytes, CircomAdapterError},
-        PoseidonWitnessGenerator, PoseidonWitnessGeneratorError,
+        import_r1cs_bytes, CircomAdapterError, PoseidonWitnessGenerator,
+        PoseidonWitnessGeneratorError,
     };
 
     const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 
-    let circom = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
+    let imported = import_r1cs_bytes(TINY_R1CS).expect("shape imports");
     let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
-        circom.shape,
+        imported.shape,
         config(MatrixClosingMode::DirectSparse),
     )
     .expect("setup succeeds");
@@ -441,7 +438,6 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
     ));
 }
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn tiny_load_circuit(
     circuit_ptr: *const u8,
     circuit_len: usize,
@@ -456,10 +452,8 @@ unsafe extern "C" fn tiny_load_circuit(
     }
 }
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn tiny_free_circuit(_circuit: *mut core::ffi::c_void) {}
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn tiny_arithmetic_witness(
     circuit: *mut core::ffi::c_void,
     input_ptr: *const u8,
@@ -490,7 +484,6 @@ unsafe extern "C" fn tiny_arithmetic_witness(
     spartan_whir::LINKED_WITNESS_GENERATOR_OK
 }
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn noncanonical_tiny_arithmetic_witness(
     circuit: *mut core::ffi::c_void,
     input_ptr: *const u8,
@@ -519,7 +512,6 @@ unsafe extern "C" fn noncanonical_tiny_arithmetic_witness(
     code
 }
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn bad_satisfaction_witness(
     circuit: *mut core::ffi::c_void,
     input_ptr: *const u8,
@@ -548,7 +540,6 @@ unsafe extern "C" fn bad_satisfaction_witness(
     code
 }
 
-#[cfg(feature = "circom")]
 unsafe extern "C" fn failing_witness(
     _circuit: *mut core::ffi::c_void,
     _input_ptr: *const u8,
@@ -564,7 +555,6 @@ unsafe extern "C" fn failing_witness(
     7
 }
 
-#[cfg(feature = "circom")]
 unsafe fn write_error(error_msg: *mut u8, error_msg_len: usize, message: &[u8]) {
     if error_msg.is_null() || error_msg_len == 0 {
         return;

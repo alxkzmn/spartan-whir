@@ -457,9 +457,6 @@ fn enabled_features() -> String {
     if cfg!(feature = "parallel") {
         features.push("parallel");
     }
-    if cfg!(feature = "circom") {
-        features.push("circom");
-    }
     features.join(",")
 }
 

@@ -1,4 +1,4 @@
-#### Circom Test Circuits
+#### Test Circuits
 
 `tiny_arithmetic.circom` and `non_power_of_two.circom` have fixed generated
 fixtures under `../fixtures/circom/`. Regenerate them with:
@@ -29,7 +29,7 @@ import, prove, and verify smoke flow with:
 
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
-  cargo run --release -p spartan-whir --features circom --example sha256_512b_circom
+  cargo run --release -p spartan-whir --example sha256_512b
 ```
 
 When the example generates artifacts itself, it removes the previous
@@ -49,7 +49,7 @@ Run the size-range benchmark with:
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
   SHA256_BENCH_SIZES=128,256,512,1024,2048 \
-  cargo run --release -p spartan-whir --features circom,parallel --example sha256_circom_bench
+  cargo run --release -p spartan-whir --features parallel --example sha256_bench
 ```
 
 The benchmark reports constraints, constraints per SHA block, wires,

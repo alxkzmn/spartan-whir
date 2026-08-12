@@ -12,13 +12,13 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::Serialize;
 use serde_json::Value;
 use spartan_whir::{
-    circom::{import_paths, import_r1cs_path, validate_satisfaction},
     engine::{ExtField, F},
-    setup_poseidon_zk, LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn,
-    LinkedWitnessLoadCircuitFn, MatrixClosingMode, MlePcs, Plonky3WhirPcs, PoseidonChallenger,
-    PoseidonEngine, PoseidonProvingKey, PoseidonSetupConfig, PoseidonSpartanProtocol,
-    PoseidonVerifyingKey, PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig,
-    PoseidonZkVerifyingKey, QuarticBinExtension, R1csShape, R1csWitness,
+    import_paths, import_r1cs_path, setup_poseidon_zk, validate_satisfaction,
+    LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
+    MatrixClosingMode, MlePcs, Plonky3WhirPcs, PoseidonChallenger, PoseidonEngine,
+    PoseidonProvingKey, PoseidonSetupConfig, PoseidonSpartanProtocol, PoseidonVerifyingKey,
+    PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
+    QuarticBinExtension, R1csShape, R1csWitness,
 };
 
 type OcticBinExtension = spartan_whir::OcticBinExtension;
@@ -215,7 +215,7 @@ fn load_input_source(args: &Args) -> Result<(R1csShape<F>, InputSource), String>
         load_linked_input_source(args)
     } else {
         let (shape, witness, public_inputs) = import_paths(&args.r1cs, &args.wtns)
-            .map_err(|err| format!("failed to import circom artifacts: {err}"))?;
+            .map_err(|err| format!("failed to import frontend artifacts: {err}"))?;
         Ok((
             shape,
             InputSource::Static {
@@ -227,7 +227,7 @@ fn load_input_source(args: &Args) -> Result<(R1csShape<F>, InputSource), String>
 }
 
 fn load_linked_input_source(args: &Args) -> Result<(R1csShape<F>, InputSource), String> {
-    let circom = import_r1cs_path(&args.r1cs)
+    let imported = import_r1cs_path(&args.r1cs)
         .map_err(|err| format!("failed to import {}: {err}", args.r1cs.display()))?;
     let circuit_data = fs::read(&args.linked_circuit_data).map_err(|err| {
         format!(
@@ -288,28 +288,28 @@ fn load_linked_input_source(args: &Args) -> Result<(R1csShape<F>, InputSource), 
     }
     .map_err(|err| format!("failed to initialize linked witness generator: {err}"))?;
     let (witness, public_inputs) = generator
-        .generate_witness(&base_input, circom.shape.num_vars, circom.shape.num_io)
+        .generate_witness(&base_input, imported.shape.num_vars, imported.shape.num_io)
         .map_err(|err| format!("linked witness generation failed: {err}"))?;
-    validate_satisfaction(&circom.shape, &witness, &public_inputs)
+    validate_satisfaction(&imported.shape, &witness, &public_inputs)
         .map_err(|err| format!("linked witness does not satisfy R1CS: {err}"))?;
     if args.randomize_linked_input_bits {
         let randomized_input = randomize_binary_field_input(&base_input, 0);
         let (randomized_witness, randomized_public_inputs) = generator
             .generate_witness(
                 &randomized_input,
-                circom.shape.num_vars,
-                circom.shape.num_io,
+                imported.shape.num_vars,
+                imported.shape.num_io,
             )
             .map_err(|err| format!("randomized linked witness generation failed: {err}"))?;
         validate_satisfaction(
-            &circom.shape,
+            &imported.shape,
             &randomized_witness,
             &randomized_public_inputs,
         )
         .map_err(|err| format!("randomized linked witness does not satisfy R1CS: {err}"))?;
     }
     Ok((
-        circom.shape,
+        imported.shape,
         InputSource::Linked(LinkedInputSource {
             generator,
             _library: library,

@@ -3,20 +3,20 @@ use std::{env, error::Error, fs, path::PathBuf};
 use libloading::Library;
 use p3_field::PrimeField32;
 use sha2::{Digest, Sha256};
-use spartan_whir::{circom::import_r1cs_path, engine::F, PoseidonWitnessGenerator, R1csShape};
+use spartan_whir::{engine::F, import_r1cs_path, PoseidonWitnessGenerator, R1csShape};
 
-pub struct Sha256CircomFixture {
+pub struct Sha256Fixture {
     pub shape: R1csShape<F>,
     pub generator: PoseidonWitnessGenerator,
     _library: Library,
 }
 
-impl Sha256CircomFixture {
+impl Sha256Fixture {
     pub fn load(size: usize) -> Result<Self, Box<dyn Error>> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let cache_root = env::var_os("SHA256_BENCH_WORKDIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| manifest_dir.join("target/sha256-circom-cache"));
+            .unwrap_or_else(|| manifest_dir.join("target/sha256-cache"));
         let workdir = cache_root.join(format!("sha256_{size}b"));
         let r1cs = workdir.join(format!("sha256_{size}b.r1cs"));
         let linked_library = workdir.join(dynamic_library_name(size));
@@ -27,7 +27,7 @@ impl Sha256CircomFixture {
         for path in [&r1cs, &linked_library, &circuit_data_path] {
             if !path.is_file() {
                 return Err(format!(
-                    "missing cached Circom artifact {}; generate it with the sha256_circom_bench example before running Criterion",
+                    "missing cached SHA-256 artifact {}; generate it with the sha256_bench example before running Criterion",
                     path.display()
                 )
                 .into());

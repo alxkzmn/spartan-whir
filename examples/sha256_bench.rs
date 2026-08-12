@@ -12,7 +12,7 @@ use libloading::Library;
 use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    circom::import_r1cs_path, compare_spark_layouts, engine::F, recommended_octic_whir_params,
+    compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_whir_params,
     MatrixClosingMode, OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator,
     PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, R1csShape,
     SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanSnarkConfig,
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workdir = env::var_os("SHA256_BENCH_WORKDIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("target/sha256-circom-cache"));
+        .unwrap_or_else(|| manifest_dir.join("target/sha256-cache"));
     let sizes = parse_sizes()?;
     let proof_modes = parse_proof_modes()?;
     let modes = parse_modes()?;
@@ -66,8 +66,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     if proof_modes.len() > 1 && repeats > 1 {
         println!("proof_mode_order: alternating_per_sample");
     }
-    if reuse_circom_artifacts() {
-        println!("reuse_circom_artifacts: enabled");
+    if reuse_artifacts() {
+        println!("reuse_artifacts: enabled");
     }
     if spartan_whir::profiling::profile_enabled() {
         println!("profile: enabled");
@@ -116,29 +116,29 @@ fn run_size(
     println!("size_bytes: {size}");
 
     let compile_start = Instant::now();
-    let artifacts = generate_circom_artifacts(manifest_dir, &circuit, &size_workdir, size)?;
+    let artifacts = generate_artifacts(manifest_dir, &circuit, &size_workdir, size)?;
     let compile_elapsed = compile_start.elapsed();
     if artifacts.reused {
-        println!("reuse_circom_artifacts: true");
+        println!("reuse_artifacts: true");
         println!("compile_and_build_ms: 0");
         spartan_whir::profiling::record_profile_phase(
-            "circom_compile_build",
+            "frontend_compile_build",
             Duration::from_secs(0),
         );
-        spartan_whir::profiling::record_profile_phase("circom_artifact_load", compile_elapsed);
+        spartan_whir::profiling::record_profile_phase("artifact_load", compile_elapsed);
     } else {
         println!("compile_and_build_ms: {}", compile_elapsed.as_millis());
-        spartan_whir::profiling::record_profile_phase("circom_compile_build", compile_elapsed);
+        spartan_whir::profiling::record_profile_phase("frontend_compile_build", compile_elapsed);
     }
 
     let import_start = Instant::now();
-    let circom = import_r1cs_path(&artifacts.r1cs)?;
-    let shape = circom.shape;
+    let imported = import_r1cs_path(&artifacts.r1cs)?;
+    let shape = imported.shape;
     let input_binary = input_binary(&message);
     let loaded_generator = load_linked_witness_generator(&artifacts)?;
     let import_elapsed = import_start.elapsed();
     println!("shape_import_ms: {}", import_elapsed.as_millis());
-    spartan_whir::profiling::record_profile_phase("circom_shape_import", import_elapsed);
+    spartan_whir::profiling::record_profile_phase("shape_import", import_elapsed);
 
     let (_validation_witness, validation_public_inputs) = loaded_generator
         .generator
@@ -236,7 +236,7 @@ fn run_size(
     Ok(())
 }
 
-fn generate_circom_artifacts(
+fn generate_artifacts(
     manifest_dir: &Path,
     circuit: &Path,
     workdir: &Path,
@@ -247,8 +247,8 @@ fn generate_circom_artifacts(
         .unwrap_or_else(|| manifest_dir.join("../circom/target/debug/circom"));
     fs::create_dir_all(workdir)?;
 
-    if reuse_circom_artifacts() {
-        if let Some(artifacts) = load_existing_circom_artifacts(workdir, size)? {
+    if reuse_artifacts() {
+        if let Some(artifacts) = load_existing_artifacts(workdir, size)? {
             return Ok(artifacts);
         }
     }
@@ -278,7 +278,7 @@ fn generate_circom_artifacts(
     })
 }
 
-fn load_existing_circom_artifacts(
+fn load_existing_artifacts(
     workdir: &Path,
     size: usize,
 ) -> Result<Option<ArtifactPaths>, Box<dyn Error>> {
@@ -301,7 +301,7 @@ fn load_existing_circom_artifacts(
     }))
 }
 
-fn reuse_circom_artifacts() -> bool {
+fn reuse_artifacts() -> bool {
     env_flag("SHA256_BENCH_REUSE_ARTIFACTS")
 }
 
@@ -386,7 +386,7 @@ fn load_linked_witness_generator(
     // value and dropped after the generator.
     let generator = unsafe {
         PoseidonWitnessGenerator::linked(
-            "sha256_circom_bench",
+            "sha256_bench",
             &artifacts.circuit_data,
             load,
             generate,

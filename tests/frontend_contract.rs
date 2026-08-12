@@ -1,11 +1,9 @@
-#![cfg(feature = "circom")]
-
 mod common;
 
 use p3_field::PrimeCharacteristicRing;
 
 use spartan_whir::{
-    circom::import_bytes, engine::F, MatrixClosingMode, Plonky3WhirPcs,
+    engine::F, import_bytes, MatrixClosingMode, Plonky3WhirPcs,
     PoseidonQuarticEngine as PoseidonEngine, SpartanProtocol, SpartanSnarkConfig, SpartanWhirError,
 };
 

@@ -47,8 +47,8 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
 - Keep schedule calibration, candidate search, heldout validation, Pareto exploration, and model-interpretation workflows in this file rather than `README.md`.
 - Keep benchmark commands, benchmark target names, environment knobs, and output examples aligned with the code.
 - For SHA256 plain/full-ZK performance comparisons, use the Criterion target with native CPU tuning:
-  `RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo bench --features circom,parallel --bench sha256_full_zk`.
-- The Criterion target only loads existing Circom artifacts from `target/sha256-circom-cache`; it must not compile Circom as part of a benchmark run. Use `sha256_circom_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
+  `RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo bench --features parallel --bench sha256_full_zk`.
+- The Criterion target only loads existing circuit artifacts from `target/sha256-cache`; it must not compile the circuit as part of a benchmark run. Use `sha256_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
 - Benchmark/profiling output intended for direct human inspection should be stable and human-readable. Prefer labeled `key: value` fields and clear tree/group structure over raw debug dumps.
 - If a benchmark fixture is only shape-similar to a real circuit, document that approximation explicitly instead of describing it as the real circuit.
 - Keep `README.md` focused on the current codebase state rather than changelog-style history; describe the format and behavior that exist now.
@@ -128,7 +128,7 @@ the backend slack checks reject invalid rows.
 
 ```bash
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
-cargo run --release --features circom,parallel \
+cargo run --release --features parallel \
   --bin poseidon-schedule-heldout -- \
   --r1cs circuit.r1cs \
   --wtns witness.wtns \
@@ -146,11 +146,11 @@ For cached SHA-256 linked-witness artifacts:
 
 ```bash
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
-cargo run --release --features circom,parallel \
+cargo run --release --features parallel \
   --bin poseidon-schedule-heldout -- \
-  --r1cs target/sha256-circom-cache/sha256_2048b/sha256_2048b.r1cs \
-  --linked-witness-library target/sha256-circom-cache/sha256_2048b/libsha256_2048b_witness.dylib \
-  --linked-circuit-data target/sha256-circom-cache/sha256_2048b/sha256_2048b_cpp/sha256_2048b.dat \
+  --r1cs target/sha256-cache/sha256_2048b/sha256_2048b.r1cs \
+  --linked-witness-library target/sha256-cache/sha256_2048b/libsha256_2048b_witness.dylib \
+  --linked-circuit-data target/sha256-cache/sha256_2048b/sha256_2048b_cpp/sha256_2048b.dat \
   --linked-input target/poseidon-schedule/sha256_2048b_input.bin \
   --linked-run-name sha256_2048b \
   --report /tmp/poseidon-report.json \

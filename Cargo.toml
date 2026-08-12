@@ -32,7 +32,6 @@ tracing = { version = "0.1.44", default-features = false }
 
 [features]
 default = []
-circom = []
 # Enables data-parallelism in hot paths via rayon (currently affects the
 # grinding loop in `CanonicalSerializingChallenger32::grind`, plus any
 # `into_par_iter` calls reachable from this crate). Without this feature,
@@ -42,32 +41,26 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bin]]
 name = "circom-adapter-check"
 path = "src/bin/circom-adapter-check.rs"
-required-features = ["circom"]
 
 [[bin]]
 name = "poseidon-schedule-heldout"
 path = "src/bin/poseidon-schedule-heldout.rs"
-required-features = ["circom"]
 
 [[bin]]
 name = "spark-sha256-layouts"
 path = "src/bin/spark-sha256-layouts.rs"
-required-features = ["circom"]
 
 [[example]]
-name = "sha256_512b_circom"
-path = "examples/sha256_512b_circom.rs"
-required-features = ["circom"]
+name = "sha256_512b"
+path = "examples/sha256_512b.rs"
 
 [[example]]
-name = "sha256_circom_bench"
-path = "examples/sha256_circom_bench.rs"
-required-features = ["circom"]
+name = "sha256_bench"
+path = "examples/sha256_bench.rs"
 
 [[example]]
 name = "end_to_end"
 path = "examples/end_to_end.rs"
-required-features = ["circom"]
 
 [dev-dependencies]
 bincode = "1.3"
@@ -84,4 +77,4 @@ harness = false
 [[bench]]
 name = "sha256_full_zk"
 harness = false
-required-features = ["circom", "parallel"]
+required-features = ["parallel"]

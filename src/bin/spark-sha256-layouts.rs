@@ -9,7 +9,7 @@ use p3_field::TwoAdicField;
 use spartan_whir::{
     compare_spark_layouts,
     engine::F,
-    import_circom_r1cs_path,
+    import_r1cs_path,
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
     spark::spark_col_memory_size,
     OcticBinExtension, QuarticBinExtension, SparkLayoutDecision,
@@ -77,8 +77,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn layout_row(path: &Path) -> Result<Row, Box<dyn Error>> {
     let size_bytes = parse_size_bytes(path)?;
-    let circom = import_circom_r1cs_path(path)?;
-    let shape = circom.shape;
+    let imported = import_r1cs_path(path)?;
+    let shape = imported.shape;
     let padded_shape = shape
         .pad_regular()
         .map_err(|err| format!("padding failed for {}: {err}", path.display()))?;

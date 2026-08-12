@@ -360,7 +360,6 @@ where
     }
 }
 
-#[cfg(feature = "circom")]
 mod witness_generator {
     use alloc::{string::String, vec};
     use core::{
@@ -685,7 +684,6 @@ mod witness_generator {
     }
 }
 
-#[cfg(feature = "circom")]
 pub use witness_generator::{
     LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
     PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,

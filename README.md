@@ -90,21 +90,21 @@ build/example_cpp/example input.json build/example.wtns
 Generate the proving and verifying keys:
 
 ```bash
-cargo run --release --features circom,parallel --example end_to_end -- \
+cargo run --release --features parallel --example end_to_end -- \
   setup build/example.r1cs build/proving-key.bin build/verifying-key.bin
 ```
 
 Generate a proof from the witness:
 
 ```bash
-cargo run --release --features circom,parallel --example end_to_end -- \
+cargo run --release --features parallel --example end_to_end -- \
   prove build/proving-key.bin build/example.wtns build/proof.bin
 ```
 
 Verify the proof:
 
 ```bash
-cargo run --release --features circom,parallel --example end_to_end -- \
+cargo run --release --features parallel --example end_to_end -- \
   verify build/verifying-key.bin build/proof.bin
 ```
 
@@ -116,8 +116,8 @@ rebuilds derived proving-key caches after loading the proving key.
 ## SNARK Instantiations
 
 `PoseidonEngine<Ext>` is the client-side SNARK instantiation. It uses the
-KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. The Circom frontend
-circuits are written over KoalaBear.
+KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. Circuits are written
+over KoalaBear.
 
 ### Linked Witness Generation
 
@@ -336,16 +336,16 @@ cargo test protocol_e2e_target_2_pow_22 -- --ignored
 ### SHA-256 No-ZK and Full-ZK
 
 The `sha256_full_zk` Criterion target compares the no-ZK and full-ZK paths on
-the cached 2048-byte Circom circuit. It measures setup, linked witness
+the cached 2048-byte SHA-256 circuit. It measures setup, linked witness
 generation plus proving, and verification separately. Proving rotates through
 valid SHA-256 inputs, verification rotates through a corpus of valid proofs,
 and proof size is reported outside the timed intervals. The target only loads
-existing artifacts from `target/sha256-circom-cache`; it never compiles Circom.
+existing artifacts from `target/sha256-cache`; it never compiles the circuit.
 It uses a 123-bit Johnson-bound target and
 `recommended_octic_zk_whir_params`; `SHA256_BENCH_ZK_ELL` and
 `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the default ZK mask parameters.
 
-The `sha256_circom_bench` example exposes privacy and matrix closing as separate
+The `sha256_bench` example exposes privacy and matrix closing as separate
 axes. Set `SHA256_BENCH_PROOF_MODES=no-zk,full-zk` and
 `SHA256_BENCH_MODES=direct,spark` for diagnostic schedule screening. Full-ZK
 Spark reports the setup-time unsupported error. The example's `Instant` output
@@ -353,7 +353,7 @@ is diagnostic; use Criterion results for performance comparisons.
 
 ```sh
 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
-cargo bench --features circom,parallel --bench sha256_full_zk
+cargo bench --features parallel --bench sha256_full_zk
 ```
 
 Criterion retains the raw estimates and sample data under
