@@ -185,18 +185,26 @@ pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
         };
     }
 
-    if num_variables == 20 {
-        let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
-        // SHA-2048 ZK heldouts treat the top candidates as tied by median; this
-        // PoW-8 row is the smallest-proof member of the tied cluster. Revisit
-        // the PoW-free tied row if p99 proving latency becomes more important
-        // than per-proof size.
+    if num_variables == 19 {
+        let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 5 };
         return WhirParams {
-            pow_bits: 8,
+            pow_bits: 4,
             folding_factor: 8,
             starting_log_inv_rate: 1,
-            rs_domain_initial_reduction_factor: 5,
-            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 5),
+            rs_domain_initial_reduction_factor: 7,
+            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 7),
+            folding_schedule: Some(schedule),
+        };
+    }
+
+    if num_variables == 20 {
+        let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+        return WhirParams {
+            pow_bits: 4,
+            folding_factor: 8,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 6,
+            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 6),
             folding_schedule: Some(schedule),
         };
     }

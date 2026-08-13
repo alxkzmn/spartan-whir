@@ -233,10 +233,10 @@ each receive a two-bit reserve over the requested security level.
 `SecurityConfig` accepts targets from 80 through 123 bits because the
 eight-element KoalaBear Poseidon digest provides about 123.95 bits of collision
 security. Targets above 123 bits are rejected before extension-specific checks.
-At the 123-bit maximum, the full-ZK bound rejects the quartic extension, so
-callers must use the octic extension. Setup also validates the length-4 and
-length-8 application-mask domains against the extension two-adicity before
-constructing or allocating their encodings.
+At the 123-bit maximum, the full-ZK bound rejects the quartic extension; the
+quintic and octic extensions satisfy the bound. Setup also validates the
+length-4 and length-8 application-mask domains against the extension two-adicity
+before constructing or allocating their encodings.
 
 The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 
@@ -336,14 +336,18 @@ cargo test protocol_e2e_target_2_pow_22 -- --ignored
 ### SHA-256 No-ZK and Full-ZK
 
 The `sha256_full_zk` Criterion target compares the no-ZK and full-ZK paths on
-the cached 2048-byte SHA-256 circuit. It measures setup, linked witness
+a cached SHA-256 circuit. It measures setup, linked witness
 generation plus proving, and verification separately. Proving rotates through
 valid SHA-256 inputs, verification rotates through a corpus of valid proofs,
 and proof size is reported outside the timed intervals. The target only loads
 existing artifacts from `target/sha256-cache`; it never compiles the circuit.
-It uses a 123-bit Johnson-bound target and
-`recommended_octic_zk_whir_params`; `SHA256_BENCH_ZK_ELL` and
-`SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the default ZK mask parameters.
+The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
+another cached circuit. The default extension is octic; set
+`SHA256_ZK_BENCH_EXTENSION=quintic` to benchmark the quintic extension. A
+non-octic run must also set `SHA256_ZK_BENCH_SCHEDULE` to its selected schedule
+label. The benchmark uses a 123-bit Johnson-bound target.
+`SHA256_BENCH_ZK_ELL` and `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the
+default ZK mask parameters.
 
 The `sha256_bench` example exposes privacy and matrix closing as separate
 axes. Set `SHA256_BENCH_PROOF_MODES=no-zk,full-zk` and
@@ -357,8 +361,9 @@ cargo bench --features parallel --bench sha256_full_zk
 ```
 
 Criterion retains the raw estimates and sample data under
-`target/criterion/sha256_2048b_*`. Set `SHA256_ZK_BENCH_CORPUS_SIZE` to change
-the proof/input corpus size; the default is 16.
+`target/criterion/sha256_<size>b_<extension>_*`. Set
+`SHA256_ZK_BENCH_CORPUS_SIZE` to change the proof/input corpus size; the default
+is 16.
 
 ### Sumcheck Replay
 

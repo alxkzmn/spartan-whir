@@ -36,6 +36,10 @@ pub enum InvalidConfigReason {
         log_domain_size: usize,
         two_adicity: usize,
     },
+    IncompatibleApplicationMaskDomains {
+        inner_domain_size: usize,
+        outer_domain_size: usize,
+    },
     FullZkSecurityExceedsExtensionField {
         requested_bits: u32,
         extension_field_bits: usize,
@@ -106,6 +110,13 @@ impl core::fmt::Display for InvalidConfigReason {
             } => write!(
                 f,
                 "ZK WHIR mask domain 2^{log_domain_size} exceeds extension-field two-adicity 2^{two_adicity}"
+            ),
+            Self::IncompatibleApplicationMaskDomains {
+                inner_domain_size,
+                outer_domain_size,
+            } => write!(
+                f,
+                "inner and outer application masks require different domains ({inner_domain_size} and {outer_domain_size})"
             ),
             Self::FullZkSecurityExceedsExtensionField {
                 requested_bits,

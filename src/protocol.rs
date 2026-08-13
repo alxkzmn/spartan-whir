@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::ExtensionMmcs;
-use p3_field::{Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::{point::Point, poly::Poly};
 use p3_sumcheck::{
@@ -14,7 +14,7 @@ use p3_sumcheck::{
 use p3_symmetric::{CryptographicHasher, Hash};
 use p3_whir::pcs::zk::{
     CommittedMaskGroup, CommittedMaskGroupProverData, CommittedRelation, HidingWhirProver,
-    HidingWhirVerifier,
+    HidingWhirVerifier, MaskGroupShape,
 };
 use rand::{
     distr::{Distribution, StandardUniform},
@@ -138,8 +138,7 @@ pub struct ZkSpartanProof<Ext: ExtField>
 where
     StandardUniform: Distribution<Ext>,
 {
-    pub inner_mask_commitment: PoseidonCommitment,
-    pub outer_mask_commitment: PoseidonCommitment,
+    pub application_mask_commitment: PoseidonCommitment,
     pub outer_sumcheck: ZkOuterSumcheckProof<Ext>,
     pub outer_claims: (Ext, Ext, Ext),
     pub outer_mask_evals: Vec<Ext>,
@@ -1336,17 +1335,30 @@ where
 
         let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
             build_poseidon_full_zk_pcs::<Ext>(&pk.pcs_config, num_outer_rounds, num_inner_rounds)?;
-        let relation_shapes = [inner_shape, outer_shape, inner_sumcheck_shape];
+        let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
+        let relation_shapes = [application_shape, inner_sumcheck_shape];
         let whir_prover = HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
 
-        let inner_messages = sample_inner_masks::<Ext, _>(num_outer_rounds, rng);
-        let mut inner_group = {
-            let _profile = profile_scope("zk_inner_mask_commit");
+        let inner_messages = {
+            let _profile = profile_scope("zk_inner_mask_sample");
+            sample_inner_masks::<Ext, _>(num_outer_rounds, rng)
+        };
+        let outer_messages = {
+            let _profile = profile_scope("zk_outer_mask_sample");
+            sample_outer_masks::<Ext, _>(num_outer_rounds, rng)
+        };
+        let application_messages = combine_application_mask_vectors(
+            inner_messages.clone(),
+            outer_messages.clone(),
+            application_shape.shape.message_len,
+        )?;
+        let mut application_group = {
+            let _profile = profile_scope("zk_application_mask_commit");
             whir_prover
-                .commit_mask_group(inner_shape, inner_messages.clone(), challenger, rng)
+                .commit_mask_group(application_shape, application_messages, challenger, rng)
                 .map_err(|_| SpartanWhirError::WhirCommitFailed)?
         };
-        let inner_mask_commitment = inner_group.commitment.clone();
+        let application_mask_commitment = application_group.commitment.clone();
 
         observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
         let mut witness_padded = witness.w.clone();
@@ -1360,16 +1372,10 @@ where
             witness_commitment: witness_commitment.clone(),
         };
 
-        let outer_messages = sample_outer_masks::<Ext, _>(num_outer_rounds, rng);
-        let mut outer_group = {
-            let _profile = profile_scope("zk_outer_mask_commit");
-            whir_prover
-                .commit_mask_group(outer_shape, outer_messages.clone(), challenger, rng)
-                .map_err(|_| SpartanWhirError::WhirCommitFailed)?
+        let z_full = {
+            let _profile = profile_scope("zk_build_z_full");
+            build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs)
         };
-        let outer_mask_commitment = outer_group.commitment.clone();
-
-        let z_full = build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs);
         let z_short = matrix_z_slice(&z_full, pk.shape_canonical.num_vars, public_inputs.len())?;
         let layout = pk.direct_multiply_layout.as_ref().ok_or({
             SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
@@ -1391,38 +1397,62 @@ where
                 challenger,
             )?
         };
-        challenger.observe_algebra_slice(&outer.outer_mask_evals);
-        challenger.observe_algebra_slice(&[
-            outer.masked_claims.0,
-            outer.masked_claims.1,
-            outer.masked_claims.2,
-        ]);
-
-        let rho = challenger.sample_algebra_element::<Ext>();
-        let batching = challenger.sample_algebra_element::<Ext>();
-        let t_x = EqPolynomial::evals_from_point_parallel(&outer.point.0);
+        let (rho, batching) = {
+            let _profile = profile_scope("zk_outer_claim_observe");
+            challenger.observe_algebra_slice(&outer.outer_mask_evals);
+            challenger.observe_algebra_slice(&[
+                outer.masked_claims.0,
+                outer.masked_claims.1,
+                outer.masked_claims.2,
+            ]);
+            (
+                challenger.sample_algebra_element::<Ext>(),
+                challenger.sample_algebra_element::<Ext>(),
+            )
+        };
+        let t_x = {
+            let _profile = profile_scope("zk_outer_eq_table");
+            EqPolynomial::evals_from_point_parallel(&outer.point.0)
+        };
         let layout = pk.direct_bind_layout.as_ref().ok_or_else(|| {
             SpartanWhirError::invalid_config_reason(InvalidConfigReason::MissingDerivedProverData)
         })?;
-        let poly_abc = {
-            let _profile = profile_scope("zk_bind_row_vars_joint");
-            pk.shape_canonical
-                .bind_row_vars_joint_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+        let product = if z_full.len() > <F as Field>::Packing::WIDTH {
+            let packed_weights = {
+                let _profile = profile_scope("zk_bind_row_vars_joint");
+                pk.shape_canonical
+                    .bind_row_vars_joint_packed_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+            };
+            let _profile = profile_scope("zk_inner_product_build");
+            ProductPolynomial::new_base_packed(Poly::new(z_full), Poly::new(packed_weights))
+        } else {
+            let weights = {
+                let _profile = profile_scope("zk_bind_row_vars_joint");
+                pk.shape_canonical
+                    .bind_row_vars_joint_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+            };
+            let _profile = profile_scope("zk_inner_product_build");
+            unpacked_inner_product::<Ext>(z_full, weights)?
         };
 
-        let (inner_covectors, outer_covectors, joint_target) = application_relation(
-            num_outer_rounds,
-            &outer.point.0,
-            outer.masked_claims,
-            &outer.outer_mask_evals,
-            rho,
-            batching,
-        );
-        inner_group.covectors = inner_covectors;
-        outer_group.covectors = outer_covectors;
-        let application_aux = inner_group.claim() + outer_group.claim();
+        let (inner_covectors, outer_covectors, joint_target) = {
+            let _profile = profile_scope("zk_application_relation");
+            application_relation(
+                num_outer_rounds,
+                &outer.point.0,
+                outer.masked_claims,
+                &outer.outer_mask_evals,
+                rho,
+                batching,
+            )
+        };
+        application_group.covectors = combine_application_mask_vectors(
+            inner_covectors,
+            outer_covectors,
+            application_shape.shape.message_len,
+        )?;
+        let application_aux = application_group.claim();
         let source_claim = joint_target - application_aux;
-        let product = packed_inner_product::<Ext>(&z_full, poly_abc)?;
         let sumcheck_prover = SumcheckProver::new(product, source_claim);
         let extension_mmcs = ExtensionMmcs::new(pcs.mmcs.clone());
         let encoding = pcs.config.sumcheck_mask.encoding::<Ext>();
@@ -1440,55 +1470,58 @@ where
                 rng,
             )
         };
-        let inner_sumcheck_mask_commitment = handoff.mask_oracle.0.clone();
-        let r_y = handoff.randomness.clone();
-        let inner_epsilon = handoff.eps;
-        let source_residual = handoff.residual_prover.claimed_sum();
-        let residual_weights = handoff.residual_prover.weights();
-        let [weighted_matrix_eval] = residual_weights.as_slice() else {
-            return Err(SpartanWhirError::InvalidRoundCount);
-        };
-        let weighted_matrix_eval = *weighted_matrix_eval;
+        let (inner_sumcheck_mask_commitment, sumcheck_group, relation) = {
+            let _profile = profile_scope("zk_inner_sumcheck_finalize");
+            let inner_sumcheck_mask_commitment = handoff.mask_oracle.0.clone();
+            let r_y = handoff.randomness.clone();
+            let inner_epsilon = handoff.eps;
+            let source_residual = handoff.residual_prover.claimed_sum();
+            let residual_weights = handoff.residual_prover.weights();
+            let [weighted_matrix_eval] = residual_weights.as_slice() else {
+                return Err(SpartanWhirError::InvalidRoundCount);
+            };
+            let weighted_matrix_eval = *weighted_matrix_eval;
 
-        let carry_scale = inner_epsilon * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
-        scale_covectors(&mut inner_group.covectors, carry_scale);
-        scale_covectors(&mut outer_group.covectors, carry_scale);
-        let sumcheck_covectors = mask_residual_covectors_from_shape(
-            num_inner_rounds,
-            pcs.config.sumcheck_mask.message_len,
-            r_y.as_slice(),
-        );
-        let sumcheck_group = CommittedMaskGroupProverData {
-            shape: inner_sumcheck_shape,
-            commitment: inner_sumcheck_mask_commitment.clone(),
-            messages: handoff.mask_messages,
-            randomness: handoff.mask_randomness,
-            covectors: sumcheck_covectors,
-            prover_data: handoff.mask_oracle.1,
-        };
+            let carry_scale = inner_epsilon * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+            scale_covectors(&mut application_group.covectors, carry_scale);
+            let sumcheck_covectors = mask_residual_covectors_from_shape(
+                num_inner_rounds,
+                pcs.config.sumcheck_mask.message_len,
+                r_y.as_slice(),
+            );
+            let sumcheck_group = CommittedMaskGroupProverData {
+                shape: inner_sumcheck_shape,
+                commitment: inner_sumcheck_mask_commitment.clone(),
+                messages: handoff.mask_messages,
+                randomness: handoff.mask_randomness,
+                covectors: sumcheck_covectors,
+                prover_data: handoff.mask_oracle.1,
+            };
 
-        let selector = r_y.as_slice()[0];
-        let eval_public = evaluate_public_half(
-            pk.shape_canonical.num_vars,
-            public_inputs,
-            &r_y.as_slice()[1..],
-        )?;
-        let public_term = weighted_matrix_eval * selector * eval_public;
-        let joint_residual =
-            source_residual + inner_group.claim() + outer_group.claim() + sumcheck_group.claim();
-        let mut relation = CommittedRelation::empty();
-        relation.source.push_eq(
-            Point::new(r_y.as_slice()[1..].to_vec()),
-            weighted_matrix_eval * (Ext::ONE - selector),
-        );
-        relation.target = joint_residual - public_term;
+            let selector = r_y.as_slice()[0];
+            let eval_public = evaluate_public_half(
+                pk.shape_canonical.num_vars,
+                public_inputs,
+                &r_y.as_slice()[1..],
+            )?;
+            let public_term = weighted_matrix_eval * selector * eval_public;
+            let joint_residual =
+                source_residual + application_group.claim() + sumcheck_group.claim();
+            let mut relation = CommittedRelation::empty();
+            relation.source.push_eq(
+                Point::new(r_y.as_slice()[1..].to_vec()),
+                weighted_matrix_eval * (Ext::ONE - selector),
+            );
+            relation.target = joint_residual - public_term;
+            (inner_sumcheck_mask_commitment, sumcheck_group, relation)
+        };
         let pcs_proof = {
             let _profile = profile_scope("zk_pcs_relation");
             whir_prover
                 .prove_relation(
                     witness_prover_data,
                     &relation,
-                    vec![inner_group, outer_group, sumcheck_group],
+                    vec![application_group, sumcheck_group],
                     challenger,
                     rng,
                 )
@@ -1498,8 +1531,7 @@ where
         Ok((
             instance,
             ZkSpartanProof {
-                inner_mask_commitment,
-                outer_mask_commitment,
+                application_mask_commitment,
                 outer_sumcheck: outer.proof,
                 outer_claims: outer.masked_claims,
                 outer_mask_evals: outer.outer_mask_evals,
@@ -1524,6 +1556,7 @@ where
         let num_inner_rounds = vk.shape_canonical.num_vars.ilog2() as usize + 1;
         let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
             build_poseidon_full_zk_pcs::<Ext>(&vk.pcs_config, num_outer_rounds, num_inner_rounds)?;
+        let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
         observe_poseidon_zk_context(
             challenger,
             &vk.domain_separator,
@@ -1532,11 +1565,10 @@ where
             num_inner_rounds,
             &instance.public_inputs,
         );
-        let relation_shapes = [inner_shape, outer_shape, inner_sumcheck_shape];
-        challenger.observe(proof.inner_mask_commitment.clone());
+        let relation_shapes = [application_shape, inner_sumcheck_shape];
+        challenger.observe(proof.application_mask_commitment.clone());
         observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
         challenger.observe(instance.witness_commitment.clone());
-        challenger.observe(proof.outer_mask_commitment.clone());
 
         let r_x = verify_outer_zk::<F, Ext, _>(
             &proof.outer_sumcheck,
@@ -1553,7 +1585,7 @@ where
         ]);
         let rho = challenger.sample_algebra_element::<Ext>();
         let batching = challenger.sample_algebra_element::<Ext>();
-        let (mut inner_covectors, mut outer_covectors, joint_target) = application_relation(
+        let (inner_covectors, outer_covectors, joint_target) = application_relation(
             num_outer_rounds,
             &r_x.0,
             proof.outer_claims,
@@ -1572,8 +1604,12 @@ where
         )
         .map_err(|_| SpartanWhirError::SumcheckFailed)?;
         let carry_scale = handoff.eps * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
-        scale_covectors(&mut inner_covectors, carry_scale);
-        scale_covectors(&mut outer_covectors, carry_scale);
+        let mut application_covectors = combine_application_mask_vectors(
+            inner_covectors,
+            outer_covectors,
+            application_shape.shape.message_len,
+        )?;
+        scale_covectors(&mut application_covectors, carry_scale);
         let sumcheck_covectors = mask_residual_covectors_from_shape(
             num_inner_rounds,
             pcs.config.sumcheck_mask.message_len,
@@ -1600,14 +1636,9 @@ where
             handoff.claimed_residual - handoff.eps * matrix_eval * selector * eval_public;
         let groups = vec![
             CommittedMaskGroup {
-                shape: inner_shape,
-                commitment: proof.inner_mask_commitment.clone(),
-                covectors: inner_covectors,
-            },
-            CommittedMaskGroup {
-                shape: outer_shape,
-                commitment: proof.outer_mask_commitment.clone(),
-                covectors: outer_covectors,
+                shape: application_shape,
+                commitment: proof.application_mask_commitment.clone(),
+                covectors: application_covectors,
             },
             CommittedMaskGroup {
                 shape: inner_sumcheck_shape,
@@ -1636,6 +1667,7 @@ fn observe_poseidon_zk_context(
     num_inner_rounds: usize,
     public_inputs: &[F],
 ) {
+    let _profile = profile_scope("zk_observe_context");
     for byte in domain_separator.to_bytes() {
         challenger.observe(F::from_u8(byte));
     }
@@ -1753,8 +1785,53 @@ fn scale_covectors<Ext: Field>(covectors: &mut [Vec<Ext>], scale: Ext) {
     }
 }
 
-fn packed_inner_product<Ext>(
-    evaluations: &[F],
+pub(crate) fn combined_application_mask_shape(
+    inner: MaskGroupShape,
+    outer: MaskGroupShape,
+) -> Result<MaskGroupShape, SpartanWhirError> {
+    if inner.shape.message_len > outer.shape.message_len
+        || inner.shape.randomness_len != outer.shape.randomness_len
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    if inner.shape.domain_size != outer.shape.domain_size {
+        return Err(SpartanWhirError::invalid_config_reason(
+            InvalidConfigReason::IncompatibleApplicationMaskDomains {
+                inner_domain_size: inner.shape.domain_size,
+                outer_domain_size: outer.shape.domain_size,
+            },
+        ));
+    }
+    Ok(MaskGroupShape {
+        shape: outer.shape,
+        width: inner
+            .width
+            .checked_add(outer.width)
+            .ok_or_else(SpartanWhirError::invalid_config)?,
+    })
+}
+
+fn combine_application_mask_vectors<Ext: Field>(
+    inner: Vec<Vec<Ext>>,
+    outer: Vec<Vec<Ext>>,
+    message_len: usize,
+) -> Result<Vec<Vec<Ext>>, SpartanWhirError> {
+    if inner.iter().any(|values| values.len() > message_len)
+        || outer.iter().any(|values| values.len() != message_len)
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    let mut combined = Vec::with_capacity(inner.len() + outer.len());
+    combined.extend(inner.into_iter().map(|mut values| {
+        values.resize(message_len, Ext::ZERO);
+        values
+    }));
+    combined.extend(outer);
+    Ok(combined)
+}
+
+fn unpacked_inner_product<Ext>(
+    evaluations: Vec<F>,
     weights: Vec<Ext>,
 ) -> Result<ProductPolynomial<F, Ext>, SpartanWhirError>
 where
@@ -1767,29 +1844,15 @@ where
         return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
 
-    let packing_width = <F as Field>::Packing::WIDTH;
-    if evaluations.len() > packing_width {
-        let packed_evaluations = <F as Field>::Packing::pack_slice(evaluations)
-            .iter()
-            .copied()
-            .map(Ext::ExtensionPacking::from)
-            .collect();
-        let packed_weights = weights
-            .chunks_exact(packing_width)
-            .map(Ext::ExtensionPacking::from_ext_slice)
-            .collect();
-        Ok(ProductPolynomial::new_packed(
-            VariableOrder::Prefix,
-            Poly::new(packed_evaluations),
-            Poly::new(packed_weights),
-        ))
-    } else {
-        Ok(ProductPolynomial::new_unpacked(
-            VariableOrder::Prefix,
-            Poly::new(evaluations.iter().copied().map(Ext::from).collect()),
-            Poly::new(weights),
-        ))
+    if evaluations.len() > <F as Field>::Packing::WIDTH {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
+
+    Ok(ProductPolynomial::new_unpacked(
+        VariableOrder::Prefix,
+        Poly::new(evaluations.into_iter().map(Ext::from).collect()),
+        Poly::new(weights),
+    ))
 }
 
 fn observe_spartan_context<E, Ext>(
@@ -3375,8 +3438,8 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 mod tests {
     use super::{
         application_relation, build_matrix_z, build_public_half, build_z_full,
-        evaluate_public_half, matrix_z_slice, power_covector, recover_witness_eval,
-        sample_inner_masks,
+        combine_application_mask_vectors, evaluate_public_half, matrix_z_slice, power_covector,
+        recover_witness_eval, sample_inner_masks,
     };
     use crate::{engine::F, QuarticBinExtension};
     use p3_field::{HornerIter, PrimeCharacteristicRing};
@@ -3463,6 +3526,23 @@ mod tests {
 
         assert_eq!(source + inner_claim + outer_claim, target);
         assert_eq!(power_covector(EF::ONE, 4), vec![EF::ONE; 4]);
+    }
+
+    #[test]
+    fn combined_application_masks_pad_inner_before_outer() {
+        let inner = vec![
+            vec![EF::ONE, EF::from_u32(2), EF::from_u32(3), EF::from_u32(4)],
+            vec![EF::from_u32(5); 4],
+        ];
+        let outer = vec![vec![EF::from_u32(6); 8]];
+        let combined = combine_application_mask_vectors(inner.clone(), outer.clone(), 8).unwrap();
+
+        assert_eq!(combined.len(), 3);
+        assert_eq!(&combined[0][..4], inner[0]);
+        assert_eq!(&combined[1][..4], inner[1]);
+        assert!(combined[0][4..].iter().all(|&value| value == EF::ZERO));
+        assert!(combined[1][4..].iter().all(|&value| value == EF::ZERO));
+        assert_eq!(combined[2], outer[0]);
     }
 
     #[test]

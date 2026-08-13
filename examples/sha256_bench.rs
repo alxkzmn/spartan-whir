@@ -86,7 +86,7 @@ fn init_profile_tracing() {
     }
     if spartan_whir::profiling::profile_detail_enabled() {
         let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
+            .with_max_level(tracing::Level::INFO)
             .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
             .try_init();
     } else {
@@ -466,11 +466,8 @@ fn prove_and_verify_poseidon_plonky3_full_zk(
     drop(_verify_profile);
     let verify_ms = verify_start.elapsed().as_millis();
     let proof_size_bytes = bincode::serialize(&proof)?.len();
-    let application_mask_commitments_bytes = bincode::serialize(&(
-        proof.inner_mask_commitment.clone(),
-        proof.outer_mask_commitment.clone(),
-    ))?
-    .len();
+    let application_mask_commitments_bytes =
+        bincode::serialize(&(proof.application_mask_commitment.clone(),))?.len();
     let outer_iop_bytes = bincode::serialize(&(
         &proof.outer_sumcheck,
         proof.outer_claims,

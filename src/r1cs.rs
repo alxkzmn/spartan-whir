@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 use core::cmp::max;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -418,6 +418,46 @@ impl<F: Field> R1csShape<F> {
         Ok(out)
     }
 
+    pub(crate) fn bind_row_vars_joint_packed_with_layout_unchecked<EF>(
+        &self,
+        layout: &DirectBindLayout<F>,
+        eq_rx: &[EF],
+        r: EF,
+    ) -> Result<Vec<EF::ExtensionPacking>, SpartanWhirError>
+    where
+        F: Send + Sync,
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        if eq_rx.len() != self.num_cons {
+            return Err(SpartanWhirError::InvalidWitnessLength);
+        }
+
+        let width = self
+            .num_vars
+            .checked_mul(2)
+            .ok_or(SpartanWhirError::InvalidR1csShape)?;
+        if layout.width != width || !width.is_multiple_of(F::Packing::WIDTH) {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+
+        let r_squared = r * r;
+        let (eq_b, eq_c) = {
+            let _profile = crate::profiling::profile_scope("bind_row_scale_eq");
+            join(
+                || scale_eq_table(eq_rx, r),
+                || scale_eq_table(eq_rx, r_squared),
+            )
+        };
+        let packed = {
+            let _profile = crate::profiling::profile_scope("bind_row_accumulate");
+            accumulate_bound_rows_for_joint_column_layout_packed(
+                self, layout, eq_rx, &eq_b, &eq_c, width,
+            )?
+        };
+
+        Ok(packed)
+    }
+
     pub fn evaluate_with_tables<EF>(
         &self,
         t_x: &[EF],
@@ -831,6 +871,78 @@ where
     Ok(())
 }
 
+fn accumulate_bound_rows_for_joint_column_layout_packed<F, EF>(
+    shape: &R1csShape<F>,
+    layout: &DirectBindLayout<F>,
+    eq_a: &[EF],
+    eq_b: &[EF],
+    eq_c: &[EF],
+    out_len: usize,
+) -> Result<Vec<EF::ExtensionPacking>, SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+{
+    let packing_width = F::Packing::WIDTH;
+    if !out_len.is_multiple_of(packing_width) {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    let total_nnz = shape
+        .a
+        .nnz()
+        .checked_add(shape.b.nnz())
+        .and_then(|n| n.checked_add(shape.c.nnz()))
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let packed_len = out_len / packing_width;
+    let mut out = EF::ExtensionPacking::zero_vec(packed_len);
+    let fill_chunk = |packed_start: usize, out_chunk: &mut [EF::ExtensionPacking]| {
+        let mut scratch = vec![EF::ZERO; packing_width];
+        for (offset, dst) in out_chunk.iter_mut().enumerate() {
+            scratch.fill(EF::ZERO);
+            let col_start = (packed_start + offset) * packing_width;
+            let col_end = col_start + packing_width;
+            accumulate_bound_rows_for_column_range(
+                &layout.a,
+                eq_a,
+                col_start,
+                col_end,
+                &mut scratch,
+            );
+            accumulate_bound_rows_for_column_range(
+                &layout.b,
+                eq_b,
+                col_start,
+                col_end,
+                &mut scratch,
+            );
+            accumulate_bound_rows_for_column_range(
+                &layout.c,
+                eq_c,
+                col_start,
+                col_end,
+                &mut scratch,
+            );
+            *dst = EF::ExtensionPacking::from_ext_slice(&scratch);
+        }
+    };
+
+    if cfg!(feature = "parallel") && total_nnz >= R1CS_PARALLEL_BIND_MIN_NNZ {
+        let shard_count = current_num_threads()
+            .saturating_mul(R1CS_PARALLEL_BIND_CHUNKS_PER_THREAD)
+            .min(packed_len)
+            .max(1);
+        let chunk_len = packed_len.div_ceil(shard_count).max(1);
+        out.par_chunks_mut(chunk_len)
+            .enumerate()
+            .for_each(|(chunk_idx, out_chunk)| fill_chunk(chunk_idx * chunk_len, out_chunk));
+    } else {
+        fill_chunk(0, &mut out);
+    }
+
+    Ok(out)
+}
+
 fn accumulate_bound_rows_for_column_range<F, EF>(
     layout: &ColumnBindMatrixLayout<F>,
     eq_rx: &[EF],
@@ -959,8 +1071,15 @@ mod tests {
         let actual = shape
             .bind_row_vars_joint_with_layout_unchecked(&layout, &eq_rx, r)
             .expect("layout bind succeeds");
+        let packed = shape
+            .bind_row_vars_joint_packed_with_layout_unchecked(&layout, &eq_rx, r)
+            .expect("packed layout bind succeeds");
+        let unpacked = p3_multilinear_util::poly::Poly::new(packed)
+            .unpack::<F, EF>()
+            .into_evals();
 
         assert_eq!(actual, expected);
+        assert_eq!(unpacked, expected);
     }
 
     #[test]

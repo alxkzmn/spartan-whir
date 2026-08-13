@@ -1,5 +1,6 @@
 use std::{env, panic, process};
 
+use num_bigint::BigUint;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_field::{extension::BinomialExtensionField, ExtensionField, Field, TwoAdicField};
@@ -15,11 +16,17 @@ use spartan_whir::{
     FINAL_SUMCHECK_MAX_VARIABLES,
 };
 
+mod poseidon_schedule_support;
+use poseidon_schedule_support::{
+    collect as collect_provenance, enabled_features, BenchmarkProvenance,
+};
+
 const DEFAULT_SECURITY_BITS: usize = 123;
 const DEFAULT_K_MAX: usize = 8;
 const DEFAULT_LIR_MAX: usize = 8;
 const DEFAULT_MAX_POW_BITS: usize = 22;
 const DEFAULT_BEAM_WIDTH: usize = 64;
+const FULL_ZK_RELATION_SECURITY_SLACK_BITS: usize = 2;
 const POW_BITS_CANDIDATES: &[usize] = &[0, 4, 8, 12, 16, 20, 22];
 const FIELD_BYTES: u128 = 4;
 const POSEIDON_DIGEST_BYTES: u128 = 32;
@@ -68,6 +75,7 @@ impl FieldProfile {
 struct Args {
     field: FieldProfile,
     num_variables: usize,
+    num_outer_rounds: usize,
     security_bits: usize,
     merkle_security_bits: usize,
     k_max: usize,
@@ -84,9 +92,11 @@ struct Args {
 #[derive(Debug, Serialize)]
 struct CandidateDump {
     schema_version: u32,
+    provenance: BenchmarkProvenance,
     matrix_closing: MatrixClosingMode,
     base_field: &'static str,
     num_variables: usize,
+    num_outer_rounds: usize,
     target_security_bits: usize,
     soundness: SoundnessAssumption,
     max_pow_bits: usize,
@@ -124,6 +134,8 @@ struct CandidateRow {
     zk_sumcheck_work: Option<u128>,
     zk_proof_size_bytes_estimate: Option<u128>,
     zk_mask_queries: Option<usize>,
+    zk_application_mask_domain: Option<usize>,
+    zk_application_mask_width: Option<usize>,
     zk_ell: Option<usize>,
     zk_mask_log_inv_rate: Option<usize>,
     commitment_ood_samples: Option<usize>,
@@ -157,6 +169,10 @@ fn main() {
         process::exit(2);
     });
 
+    let provenance = collect_provenance(enabled_features()).unwrap_or_else(|error| {
+        eprintln!("failed to collect benchmark provenance: {error}");
+        process::exit(1);
+    });
     let mut candidates = Vec::new();
     for schedule in schedules(&args) {
         for pow_bits in POW_BITS_CANDIDATES
@@ -209,10 +225,12 @@ fn main() {
     }
 
     let dump = CandidateDump {
-        schema_version: 2,
+        schema_version: 3,
+        provenance,
         matrix_closing: MatrixClosingMode::DirectSparse,
         base_field: args.field.label(),
         num_variables: args.num_variables,
+        num_outer_rounds: args.num_outer_rounds,
         target_security_bits: args.security_bits,
         soundness: SoundnessAssumption::JohnsonBound,
         max_pow_bits: args.max_pow_bits,
@@ -386,7 +404,14 @@ fn derive_for_extension<Base, Ext, Challenger>(
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let label = schedule_label(extension, &whir_params);
-    let protocol_params = protocol_parameters(&whir_params, args.security_bits);
+    let protocol_security_bits = if args.proof_mode.is_full_zk() {
+        args.security_bits
+            .checked_add(FULL_ZK_RELATION_SECURITY_SLACK_BITS)
+            .unwrap_or(usize::MAX)
+    } else {
+        args.security_bits
+    };
+    let protocol_params = protocol_parameters(&whir_params, protocol_security_bits);
     let result = catch_unwind_silent(|| {
         P3WhirConfig::<Ext, Base, Challenger>::new(args.num_variables, protocol_params)
     });
@@ -432,7 +457,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
     let achieved = achieved_security_bits::<Base, Ext, Challenger>(&config);
     let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config);
     let zk_rejection = if args.proof_mode.is_full_zk() {
-        zk_compatibility_error::<Base, Ext, Challenger>(args, &config)
+        full_zk_compatibility_error::<Base, Ext, Challenger>(args, &config)
     } else {
         None
     };
@@ -530,6 +555,12 @@ fn derive_for_extension<Base, Ext, Challenger>(
             .as_ref()
             .map(|estimate| estimate.proof_size_bytes_estimate),
         zk_mask_queries: zk_estimates.as_ref().map(|estimate| estimate.mask_queries),
+        zk_application_mask_domain: zk_estimates
+            .as_ref()
+            .map(|estimate| estimate.application_mask.domain_size),
+        zk_application_mask_width: zk_estimates
+            .as_ref()
+            .map(|estimate| estimate.application_mask.width),
         zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
         zk_mask_log_inv_rate: args
             .proof_mode
@@ -574,6 +605,14 @@ struct ZkEstimates {
     sumcheck_work: u128,
     proof_size_bytes_estimate: u128,
     mask_queries: usize,
+    application_mask: ApplicationMaskEstimate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ApplicationMaskEstimate {
+    domain_size: usize,
+    log_domain_size: usize,
+    width: usize,
 }
 
 fn zk_estimates<Base, Ext, Challenger>(
@@ -589,6 +628,8 @@ where
     let n_rounds = config.n_rounds();
     let oracle_randomness = oracle_randomness(config);
     let mask_queries = zk_mask_queries(args, config);
+    let application_mask = application_mask_estimate::<Ext>(args, mask_queries)
+        .expect("application mask geometry was validated before estimation");
     let sumcheck_rounds = zk_sumcheck_rounds(config);
     let sumcheck_mask_domain = mask_domain(args.zk_ell, mask_queries, args.zk_mask_log_inv_rate);
     let switch_mask_domains = (0..n_rounds)
@@ -617,8 +658,15 @@ where
         .iter()
         .map(|rounds| (*rounds as u128).saturating_mul(args.zk_ell.max(3) as u128))
         .fold(0, u128::saturating_add);
-    let dft_work_extra = mask_rows.saturating_mul(ext_dim);
-    let merkle_work_extra = mask_rows.saturating_mul(ext_dim);
+    let application_mask_rows = (application_mask.domain_size as u128)
+        .saturating_mul(application_mask.width as u128)
+        .saturating_mul(2);
+    let dft_work_extra = mask_rows
+        .saturating_add(application_mask_rows)
+        .saturating_mul(ext_dim);
+    let merkle_work_extra = mask_rows
+        .saturating_add(application_mask_rows)
+        .saturating_mul(ext_dim);
 
     let switch_mask_path_work = switch_mask_domains
         .iter()
@@ -632,7 +680,12 @@ where
         .saturating_mul(log2_usize(sumcheck_mask_domain));
     let merkle_path_work_extra = switch_mask_path_work
         .saturating_add(sumcheck_mask_path_work)
-        .saturating_add(base_mask_path_work);
+        .saturating_add(base_mask_path_work)
+        .saturating_add(
+            (mask_queries as u128)
+                .saturating_mul(application_mask.log_domain_size as u128)
+                .saturating_mul(2),
+        );
 
     let row_work_extra = (mask_queries as u128)
         .saturating_mul(
@@ -640,7 +693,13 @@ where
                 .saturating_add(sumcheck_mask_width)
                 .saturating_add(base_mask_width.saturating_mul(2)),
         )
-        .saturating_mul(ext_dim);
+        .saturating_mul(ext_dim)
+        .saturating_add(
+            (mask_queries as u128)
+                .saturating_mul(application_mask.width as u128)
+                .saturating_mul(ext_dim)
+                .saturating_mul(2),
+        );
 
     let proof_size_bytes_estimate = zk_proof_size_bytes_estimate::<Base, Ext, Challenger>(
         args,
@@ -650,6 +709,7 @@ where
         mask_queries,
         sumcheck_mask_domain,
         &switch_mask_domains,
+        application_mask,
     );
 
     ZkEstimates {
@@ -660,6 +720,7 @@ where
         sumcheck_work: base.sumcheck_work.saturating_add(sumcheck_work_extra),
         proof_size_bytes_estimate,
         mask_queries,
+        application_mask,
     }
 }
 
@@ -671,6 +732,7 @@ fn zk_proof_size_bytes_estimate<Base, Ext, Challenger>(
     mask_queries: usize,
     sumcheck_mask_domain: usize,
     switch_mask_domains: &[usize],
+    application_mask: ApplicationMaskEstimate,
 ) -> u128
 where
     Base: TwoAdicField,
@@ -777,12 +839,33 @@ where
         .saturating_add(fresh_main_query_bytes)
         .saturating_add(mask_query_bytes);
 
+    let application_mask_bytes = POSEIDON_DIGEST_BYTES
+        .saturating_mul(2)
+        .saturating_add(
+            (application_mask.width as u128)
+                .saturating_mul((8usize.saturating_add(mask_queries)) as u128)
+                .saturating_mul(ext_bytes),
+        )
+        .saturating_add(
+            (mask_queries as u128)
+                .saturating_mul(application_mask.width as u128)
+                .saturating_mul(ext_bytes)
+                .saturating_mul(2),
+        )
+        .saturating_add(
+            (mask_queries as u128)
+                .saturating_mul(application_mask.log_domain_size as u128)
+                .saturating_mul(POSEIDON_DIGEST_BYTES)
+                .saturating_mul(2),
+        );
+
     ext_bytes
         .saturating_add(sumcheck_bytes)
         .saturating_add(sumcheck_mask_commitments)
         .saturating_add(round_bytes)
         .saturating_add(switch_mask_query_bytes)
         .saturating_add(base_case_bytes)
+        .saturating_add(application_mask_bytes)
 }
 
 fn oracle_randomness<Base, Ext, Challenger>(
@@ -889,7 +972,7 @@ where
     sumcheck_messages.saturating_add(switch_messages)
 }
 
-fn zk_compatibility_error<Base, Ext, Challenger>(
+fn full_zk_compatibility_error<Base, Ext, Challenger>(
     args: &Args,
     config: &P3WhirConfig<Ext, Base, Challenger>,
 ) -> Option<String>
@@ -898,6 +981,32 @@ where
     Ext: ExtensionField<Base> + Field + TwoAdicField,
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
+    let inner_degree = args.zk_ell.saturating_sub(1).max(2);
+    let soundness_error_terms = args
+        .num_outer_rounds
+        .checked_mul(15)
+        .and_then(|outer| {
+            inner_degree
+                .checked_mul(args.num_variables.saturating_add(1))
+                .and_then(|inner| outer.checked_add(inner))
+        })
+        .and_then(|terms| terms.checked_add(4));
+    let Some(soundness_error_terms) = soundness_error_terms else {
+        return Some("full-ZK security term count overflows".to_owned());
+    };
+    let Some(required_bits) = args
+        .security_bits
+        .checked_add(FULL_ZK_RELATION_SECURITY_SLACK_BITS)
+    else {
+        return Some("full-ZK relation security level overflows".to_owned());
+    };
+    let required_order = BigUint::from(soundness_error_terms) << required_bits;
+    if Ext::order() < required_order {
+        return Some(format!(
+            "full-ZK security target {} exceeds extension field capacity after {} local error terms",
+            args.security_bits, soundness_error_terms
+        ));
+    }
     if args.zk_ell < 3 {
         return Some(format!(
             "ZK mask length {} is below the minimum of 3",
@@ -943,8 +1052,14 @@ where
                 oracle_randomness[round] + config.round_parameters[round].ood_samples
             }));
     for message_len in mask_message_lens {
-        let log_domain_size =
-            log2_ceil_usize(message_len + mask_queries).saturating_add(args.zk_mask_log_inv_rate);
+        let Some(unencoded_len) = message_len.checked_add(mask_queries) else {
+            return Some("ZK mask message and randomness length overflow".to_owned());
+        };
+        let Some(log_domain_size) =
+            log2_ceil_usize(unencoded_len).checked_add(args.zk_mask_log_inv_rate)
+        else {
+            return Some("ZK mask domain log size overflows".to_owned());
+        };
         if log_domain_size > Ext::TWO_ADICITY {
             return Some(format!(
                 "ZK mask domain 2^{log_domain_size} exceeds extension-field two-adicity 2^{}",
@@ -952,7 +1067,72 @@ where
             ));
         }
     }
+    if let Err(reason) = application_mask_estimate::<Ext>(args, mask_queries) {
+        return Some(reason);
+    }
     None
+}
+
+fn application_mask_estimate<Ext>(
+    args: &Args,
+    mask_queries: usize,
+) -> Result<ApplicationMaskEstimate, String>
+where
+    Ext: TwoAdicField,
+{
+    let inner_log = checked_mask_log_domain::<Ext>(
+        4,
+        mask_queries,
+        args.zk_mask_log_inv_rate,
+        "inner application",
+    )?;
+    let outer_log = checked_mask_log_domain::<Ext>(
+        8,
+        mask_queries,
+        args.zk_mask_log_inv_rate,
+        "outer application",
+    )?;
+    if inner_log != outer_log {
+        return Err(format!(
+            "IncompatibleApplicationMaskDomains: inner domain 2^{inner_log}, outer domain 2^{outer_log}"
+        ));
+    }
+    let width = args
+        .num_outer_rounds
+        .checked_mul(4)
+        .ok_or_else(|| "combined application mask width overflows".to_owned())?;
+    let domain_size = 1usize
+        .checked_shl(inner_log as u32)
+        .ok_or_else(|| "combined application mask domain size overflows".to_owned())?;
+    Ok(ApplicationMaskEstimate {
+        domain_size,
+        log_domain_size: inner_log,
+        width,
+    })
+}
+
+fn checked_mask_log_domain<Ext>(
+    message_len: usize,
+    randomness_len: usize,
+    log_inv_rate: usize,
+    label: &str,
+) -> Result<usize, String>
+where
+    Ext: TwoAdicField,
+{
+    let unencoded_len = message_len
+        .checked_add(randomness_len)
+        .ok_or_else(|| format!("{label} mask message and randomness length overflow"))?;
+    let log_domain_size = log2_ceil_usize(unencoded_len)
+        .checked_add(log_inv_rate)
+        .ok_or_else(|| format!("{label} mask domain log size overflows"))?;
+    if log_domain_size > Ext::TWO_ADICITY || log_domain_size >= usize::BITS as usize {
+        return Err(format!(
+            "{label} mask domain 2^{log_domain_size} exceeds extension-field two-adicity 2^{}",
+            Ext::TWO_ADICITY
+        ));
+    }
+    Ok(log_domain_size)
 }
 
 fn oracle_shape<Base, Ext, Challenger>(
@@ -1067,6 +1247,8 @@ fn invalid_row(
         zk_sumcheck_work: None,
         zk_proof_size_bytes_estimate: None,
         zk_mask_queries: None,
+        zk_application_mask_domain: None,
+        zk_application_mask_width: None,
         zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
         zk_mask_log_inv_rate: args
             .proof_mode
@@ -1535,6 +1717,7 @@ fn schedule_label(extension: &str, params: &WhirParams) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p3_field::BasedVectorSpace;
 
     fn test_config() -> P3WhirConfig<OcticBinExtension, F, PoseidonChallenger> {
         let params = WhirParams {
@@ -1562,6 +1745,7 @@ mod tests {
         let mut args = Args {
             field: FieldProfile::KoalaBear,
             num_variables: 20,
+            num_outer_rounds: 20,
             security_bits: DEFAULT_SECURITY_BITS,
             merkle_security_bits: DEFAULT_SECURITY_BITS,
             k_max: DEFAULT_K_MAX,
@@ -1657,12 +1841,105 @@ mod tests {
         assert_eq!(actual_query_count(100, 32, 3), 4);
         assert_eq!(path_depth(32, 3), 2);
     }
+
+    #[test]
+    fn application_mask_rejects_mismatched_domains() {
+        let args = Args {
+            field: FieldProfile::KoalaBear,
+            num_variables: 20,
+            num_outer_rounds: 19,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::FullZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 2,
+        };
+
+        let error = application_mask_estimate::<OcticBinExtension>(&args, 25).unwrap_err();
+        assert!(error.contains("IncompatibleApplicationMaskDomains"));
+    }
+
+    #[test]
+    fn application_mask_rejects_domains_beyond_two_adicity() {
+        let mut args = Args {
+            field: FieldProfile::KoalaBear,
+            num_variables: 20,
+            num_outer_rounds: 19,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::FullZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: OcticBinExtension::TWO_ADICITY,
+        };
+
+        let error = application_mask_estimate::<OcticBinExtension>(&args, 1).unwrap_err();
+        assert!(error.contains("exceeds extension-field two-adicity"));
+
+        args.num_outer_rounds = usize::MAX;
+        args.zk_mask_log_inv_rate = 1;
+        let error = application_mask_estimate::<OcticBinExtension>(&args, 8).unwrap_err();
+        assert!(error.contains("width overflows"));
+    }
+
+    #[test]
+    fn application_mask_cost_and_size_terms_are_accounted_for() {
+        let args = Args {
+            field: FieldProfile::KoalaBear,
+            num_variables: 18,
+            num_outer_rounds: 17,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::FullZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 3,
+        };
+        let config = test_config();
+        let mask_queries = zk_mask_queries(&args, &config);
+        let application = application_mask_estimate::<OcticBinExtension>(&args, mask_queries)
+            .expect("application mask geometry is valid");
+        let base = ZkBaseEstimates {
+            dft_work: 0,
+            merkle_work: 0,
+            merkle_path_work: 0,
+            row_work: 0,
+            sumcheck_work: 0,
+        };
+        let estimate = zk_estimates(&args, &config, base);
+        let application_rows = (application.domain_size as u128)
+            * (application.width as u128)
+            * 2
+            * (<OcticBinExtension as BasedVectorSpace<F>>::DIMENSION as u128);
+
+        assert!(estimate.dft_work >= application_rows);
+        assert!(estimate.merkle_work >= application_rows);
+        assert!(estimate.proof_size_bytes_estimate > proof_size_bytes_estimate(&config));
+        assert_eq!(estimate.application_mask, application);
+    }
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         field: FieldProfile::KoalaBear,
         num_variables: 0,
+        num_outer_rounds: 0,
         security_bits: DEFAULT_SECURITY_BITS,
         merkle_security_bits: DEFAULT_SECURITY_BITS,
         k_max: DEFAULT_K_MAX,
@@ -1680,6 +1957,7 @@ fn parse_args() -> Result<Args, String> {
         match arg.as_str() {
             "--field" => args.field = parse_field_profile(&mut iter, &arg)?,
             "--num-variables" => args.num_variables = parse_next(&mut iter, &arg)?,
+            "--num-outer-rounds" => args.num_outer_rounds = parse_next(&mut iter, &arg)?,
             "--security-bits" => args.security_bits = parse_next(&mut iter, &arg)?,
             "--merkle-security-bits" => args.merkle_security_bits = parse_next(&mut iter, &arg)?,
             "--k-max" => args.k_max = parse_next(&mut iter, &arg)?,
@@ -1704,6 +1982,9 @@ fn parse_args() -> Result<Args, String> {
     }
     if args.num_variables == 0 {
         return Err("--num-variables is required".to_owned());
+    }
+    if args.num_outer_rounds == 0 {
+        args.num_outer_rounds = args.num_variables;
     }
     Ok(args)
 }
@@ -1751,6 +2032,6 @@ fn parse_proof_mode(
 
 fn usage() {
     eprintln!(
-        "usage: poseidon-schedule-candidates --num-variables N [--field koalabear|babybear] [--security-bits 123] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
+        "usage: poseidon-schedule-candidates --num-variables N [--num-outer-rounds N] [--field koalabear|babybear] [--security-bits 123] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
     );
 }

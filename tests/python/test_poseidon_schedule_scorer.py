@@ -41,6 +41,10 @@ def candidate(
     zk_mask_queries=None,
     zk_ell=None,
     zk_mask_log_inv_rate=None,
+    measured_seconds=None,
+    measured_proof_size=None,
+    relative_difference=None,
+    paired_ci=None,
 ):
     out = {
         "label": label,
@@ -84,6 +88,14 @@ def candidate(
         out["zk_mask_log_inv_rate"] = zk_mask_log_inv_rate
     if legacy_proof_size is not None:
         out["proof_size_score"] = legacy_proof_size
+    if measured_seconds is not None:
+        out["measured_seconds"] = measured_seconds
+    if measured_proof_size is not None:
+        out["heldout_proof_size_median_bytes"] = measured_proof_size
+    if relative_difference is not None:
+        out["heldout_relative_median_difference"] = relative_difference
+    if paired_ci is not None:
+        out["heldout_paired_relative_median_ci"] = list(paired_ci)
     return out
 
 
@@ -287,7 +299,110 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
         )
         self.assertEqual(report["selected"]["label"], "model")
         self.assertEqual(report["selected_measured"]["label"], "measured")
-        self.assertEqual(report["measurement_summary"]["selection"], "measured_argmin")
+        self.assertEqual(
+            report["measurement_summary"]["selection"],
+            "one_percent_paired_then_proof_size",
+        )
+
+    def test_significant_sub_one_percent_improvement_uses_proof_size(self):
+        measurements = {
+            "proof_mode": "full-zk",
+            "rows": [
+                candidate(
+                    "fast",
+                    zk=True,
+                    measured_seconds=0.994,
+                    measured_proof_size=200,
+                    relative_difference=0.0,
+                    paired_ci=(0.0, 0.0),
+                ),
+                candidate(
+                    "small",
+                    zk=True,
+                    measured_seconds=1.0,
+                    measured_proof_size=100,
+                    relative_difference=0.006,
+                    paired_ci=(0.004, 0.008),
+                ),
+            ],
+        }
+        selected, _ = scorer.measured_selection(measurements)
+        self.assertEqual(selected["label"], "small")
+
+    def test_more_than_one_percent_directional_improvement_wins(self):
+        measurements = {
+            "proof_mode": "full-zk",
+            "rows": [
+                candidate(
+                    "fast",
+                    zk=True,
+                    measured_seconds=0.98,
+                    measured_proof_size=200,
+                    relative_difference=0.0,
+                    paired_ci=(0.0, 0.0),
+                ),
+                candidate(
+                    "small",
+                    zk=True,
+                    measured_seconds=1.0,
+                    measured_proof_size=100,
+                    relative_difference=0.0204,
+                    paired_ci=(0.012, 0.03),
+                ),
+            ],
+        }
+        selected, _ = scorer.measured_selection(measurements)
+        self.assertEqual(selected["label"], "fast")
+
+    def test_more_than_one_percent_uncertain_improvement_uses_proof_size(self):
+        measurements = {
+            "proof_mode": "full-zk",
+            "rows": [
+                candidate(
+                    "fast",
+                    zk=True,
+                    measured_seconds=0.98,
+                    measured_proof_size=200,
+                    relative_difference=0.0,
+                    paired_ci=(0.0, 0.0),
+                ),
+                candidate(
+                    "small",
+                    zk=True,
+                    measured_seconds=1.0,
+                    measured_proof_size=100,
+                    relative_difference=0.0204,
+                    paired_ci=(-0.002, 0.03),
+                ),
+            ],
+        }
+        selected, _ = scorer.measured_selection(measurements)
+        self.assertEqual(selected["label"], "small")
+
+    def test_measured_proof_size_breaks_full_tie(self):
+        measurements = {
+            "proof_mode": "full-zk",
+            "rows": [
+                candidate(
+                    "large",
+                    zk=True,
+                    measured_seconds=1.0,
+                    measured_proof_size=200,
+                    relative_difference=0.0,
+                    paired_ci=(0.0, 0.0),
+                ),
+                candidate(
+                    "small",
+                    zk=True,
+                    measured_seconds=1.0,
+                    measured_proof_size=100,
+                    relative_difference=0.0,
+                    paired_ci=(-0.001, 0.001),
+                ),
+            ],
+        }
+        selected, _ = scorer.measured_selection(measurements)
+        self.assertEqual(selected["label"], "small")
 
     def test_recalibrate_updates_extension_specific_sumcheck(self):
         calibration = self.per_extension_calibration()
@@ -304,6 +419,17 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
         add_heldout.recalibrate(calibration, [row], prior_weight=0.0)
         self.assertAlmostEqual(calibration["coefficients"]["dft"], 1.0)
 
+    def test_recalibrate_can_learn_spartan_from_zero_coefficient(self):
+        calibration = self.calibration()
+        calibration["coefficients"]["spartan"] = 0.0
+        row = candidate("spartan")
+        row["constraint_work"] = 100
+        row["measured_seconds"] = 1.0
+
+        add_heldout.recalibrate(calibration, [row], prior_weight=0.0)
+
+        self.assertGreater(calibration["coefficients"]["spartan"], 0.0)
+
     def test_zk_candidate_generation_sweeps_default_zk_knobs(self):
         calls = []
 
@@ -313,13 +439,17 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
             max_pow_bits,
             field,
             proof_mode,
+            num_outer_rounds,
             zk_ell,
             zk_mask_log_inv_rate,
+            features,
         ):
             calls.append((zk_ell, zk_mask_log_inv_rate))
+            self.assertEqual(features, "parallel")
             return {
                 "schema_version": 2,
                 "proof_mode": proof_mode,
+                "num_outer_rounds": num_outer_rounds,
                 "zk_ell": zk_ell,
                 "zk_mask_log_inv_rate": zk_mask_log_inv_rate,
                 "candidates": [{"label": f"ell{zk_ell}_mask{zk_mask_log_inv_rate}"}],
@@ -334,6 +464,7 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
                 22,
                 "koalabear",
                 "full-zk",
+                1 << 19,
                 None,
                 None,
             )
@@ -351,6 +482,55 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
             dump["zk_mask_log_inv_rate_sweep"],
             scorer.DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP,
         )
+        self.assertEqual(dump["num_outer_rounds"], 19)
+
+    def test_rejects_mismatched_code_provenance(self):
+        dump = {
+            "schema_version": 3,
+            "proof_mode": "no-zk",
+            "provenance": {"code": {"spartan_whir": {"head": "a"}}},
+            "candidates": [candidate("a", dft=1)],
+        }
+        calibration = self.calibration()
+        calibration["provenance"] = {"code": {"spartan_whir": {"head": "b"}}}
+        with self.assertRaises(SystemExit):
+            scorer.score_dump(dump, calibration, max_pow_bits=22)
+
+    def test_rejects_mismatched_build_provenance(self):
+        provenance = {
+            "code": {"spartan_whir": {"head": "same"}},
+            "build": {"profile": "release", "features": "parallel"},
+        }
+        dump = {
+            "schema_version": 3,
+            "proof_mode": "no-zk",
+            "provenance": provenance,
+            "candidates": [candidate("a", dft=1)],
+        }
+        calibration = self.calibration()
+        calibration["provenance"] = {
+            **provenance,
+            "build": {"profile": "debug", "features": "parallel"},
+        }
+        with self.assertRaises(SystemExit):
+            scorer.score_dump(dump, calibration, max_pow_bits=22)
+
+    def test_recalibration_uses_fresh_model_resolution_floor(self):
+        calibration = self.calibration(heldout=[])
+        row = candidate("heldout", dft=10)
+        row["measured_seconds"] = 10.0
+
+        add_heldout.refresh_model_resolution(calibration, [row])
+
+        self.assertEqual(calibration["validation"]["model_resolution_relative"], 0.01)
+        self.assertEqual(calibration["validation"]["max_relative_error"], 0.01)
+
+    def test_add_heldout_rejects_mismatched_code_provenance(self):
+        calibration = {"provenance": {"code": {"head": "a"}}}
+        heldout = {"provenance": {"code": {"head": "b"}}}
+
+        with self.assertRaises(SystemExit):
+            add_heldout.require_matching_code_provenance(calibration, heldout)
 
 
 if __name__ == "__main__":

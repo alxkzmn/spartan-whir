@@ -216,6 +216,26 @@ fn poseidon_direct_full_zk_rejects_oversized_application_mask_domain_at_setup() 
 }
 
 #[test]
+fn poseidon_direct_full_zk_rejects_mismatched_application_mask_domains_at_setup() {
+    let fixture = fixture();
+    let mut config = poseidon_zk_config(MatrixClosingMode::DirectSparse);
+    config.security.security_level_bits = 110;
+    config.security.merkle_security_bits = 110;
+    config.mask_log_inv_rate = 1;
+    let error = match setup_poseidon_zk::<OcticBinExtension>(fixture.shape, config) {
+        Ok(_) => panic!("setup must reject incompatible application-mask domains"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::IncompatibleApplicationMaskDomains {
+            inner_domain_size: 256,
+            outer_domain_size: 512,
+        })
+    );
+}
+
+#[test]
 fn poseidon_direct_full_zk_rejects_tampered_outer_claim() {
     let fixture = fixture();
     let (pk, vk) = setup_zk(&fixture.shape);
@@ -245,9 +265,9 @@ fn poseidon_direct_full_zk_rejects_tampered_mask_commitment() {
         &mut prover_challenger,
     )
     .expect("full-ZK prove succeeds");
-    let mut roots = proof.inner_mask_commitment.roots().to_vec();
+    let mut roots = proof.application_mask_commitment.roots().to_vec();
     roots[0][0] += F::ONE;
-    proof.inner_mask_commitment = p3_symmetric::MerkleCap::new(roots);
+    proof.application_mask_commitment = p3_symmetric::MerkleCap::new(roots);
 
     let mut verifier_challenger = spartan_whir::poseidon_challenger();
     assert!(ZkProtocol::verify(&vk, &instance, &proof, &mut verifier_challenger).is_err());

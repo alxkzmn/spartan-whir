@@ -4,34 +4,58 @@ mod sha256;
 use std::{env, time::Duration};
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use rand::{rngs::StdRng, SeedableRng};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use rand::{
+    distr::{Distribution, StandardUniform},
+    rngs::StdRng,
+    SeedableRng,
+};
+use serde::{Deserialize, Serialize};
 use sha256::{input_binary, message, Sha256Fixture};
 use spartan_whir::{
-    engine::F, recommended_octic_zk_whir_params, MatrixClosingMode, MlePcs, OcticBinExtension,
-    Plonky3WhirPcs, PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey,
+    engine::{ExtField, F},
+    recommended_octic_zk_whir_params, MatrixClosingMode, MlePcs, OcticBinExtension, Plonky3WhirPcs,
+    PoseidonChallenger, PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey,
     PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, ProvingKey,
-    R1csInstance, SecurityConfig, SoundnessAssumption, SpartanProofKind, SpartanSnarkConfig,
-    VerifyingKey, ZkSpartanProof,
+    QuinticExtension, R1csInstance, SecurityConfig, SoundnessAssumption, SpartanProofKind,
+    SpartanSnarkConfig, VerifyingKey, WhirFoldingSchedule, WhirParams, ZkSpartanProof,
 };
 
-const SHA256_SIZE: usize = 2048;
+const DEFAULT_SHA256_SIZE: usize = 2048;
 const DEFAULT_CORPUS_SIZE: usize = 16;
 const FULL_ZK_SEED: u64 = 0x5A25_6B32_4655_4C4C;
 
-type PlainProtocol = PoseidonSpartanProtocol<OcticBinExtension>;
-type FullZkProtocol = PoseidonZkSpartanProtocol<OcticBinExtension>;
-type Engine = PoseidonEngine<OcticBinExtension>;
-type PlainProvingKey = ProvingKey<Engine, Plonky3WhirPcs>;
-type PlainVerifyingKey = VerifyingKey<Engine, Plonky3WhirPcs>;
-type FullZkProvingKey = PoseidonZkProvingKey<OcticBinExtension>;
-type FullZkVerifyingKey = PoseidonZkVerifyingKey<OcticBinExtension>;
-type Commitment = <Plonky3WhirPcs as MlePcs<Engine>>::Commitment;
-type Instance = R1csInstance<F, Commitment>;
-type PlainProof = SpartanProofKind<Engine, Plonky3WhirPcs>;
-type FullZkProof = ZkSpartanProof<OcticBinExtension>;
+type PlainProtocol<Ext> = PoseidonSpartanProtocol<Ext>;
+type FullZkProtocol<Ext> = PoseidonZkSpartanProtocol<Ext>;
+type Engine<Ext> = PoseidonEngine<Ext>;
+type PlainProvingKey<Ext> = ProvingKey<Engine<Ext>, Plonky3WhirPcs>;
+type PlainVerifyingKey<Ext> = VerifyingKey<Engine<Ext>, Plonky3WhirPcs>;
+type FullZkProvingKey<Ext> = PoseidonZkProvingKey<Ext>;
+type FullZkVerifyingKey<Ext> = PoseidonZkVerifyingKey<Ext>;
+type Commitment<Ext> = <Plonky3WhirPcs as MlePcs<Engine<Ext>>>::Commitment;
+type Instance<Ext> = R1csInstance<F, Commitment<Ext>>;
+type PlainProof<Ext> = SpartanProofKind<Engine<Ext>, Plonky3WhirPcs>;
+type FullZkProof<Ext> = ZkSpartanProof<Ext>;
 
 fn benchmark_sha256_full_zk(c: &mut Criterion) {
-    let fixture = Sha256Fixture::load(SHA256_SIZE)
+    let sha256_size = env_usize("SHA256_ZK_BENCH_SIZE", DEFAULT_SHA256_SIZE);
+    match env_string("SHA256_ZK_BENCH_EXTENSION", "octic").as_str() {
+        "octic" => benchmark_extension::<OcticBinExtension>(c, sha256_size, "octic"),
+        "quintic" => benchmark_extension::<QuinticExtension>(c, sha256_size, "quintic"),
+        extension => panic!("SHA256_ZK_BENCH_EXTENSION must be octic or quintic, got {extension}"),
+    }
+}
+
+fn benchmark_extension<Ext>(c: &mut Criterion, sha256_size: usize, extension: &str)
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    let fixture = Sha256Fixture::load(sha256_size)
         .unwrap_or_else(|error| panic!("failed to load SHA-256 benchmark fixture: {error}"));
     let corpus_size = env_usize("SHA256_ZK_BENCH_CORPUS_SIZE", DEFAULT_CORPUS_SIZE);
     assert!(
@@ -39,7 +63,7 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
         "SHA256_ZK_BENCH_CORPUS_SIZE must exceed one"
     );
     let messages = (0..corpus_size)
-        .map(|sample| message(SHA256_SIZE, sample))
+        .map(|sample| message(sha256_size, sample))
         .collect::<Vec<_>>();
     let inputs = messages
         .iter()
@@ -50,17 +74,33 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
         .expect("cached linked witness generator matches SHA-256");
 
     let num_variables = fixture.shape.num_vars.next_power_of_two().ilog2() as usize;
-    let (plain_config, full_zk_config) = benchmark_configs(num_variables);
-    let (plain_pk, plain_vk) = PlainProtocol::setup_with_config(&fixture.shape, &plain_config)
-        .expect("plain-WHIR setup succeeds");
+    let (plain_config, full_zk_config) = benchmark_configs(num_variables, extension);
+    let (plain_pk, plain_vk) =
+        PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &plain_config)
+            .expect("plain-WHIR setup succeeds");
     let (full_zk_pk, full_zk_vk) =
-        FullZkProvingKey::setup(fixture.shape.clone(), full_zk_config.clone())
+        FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), full_zk_config.clone())
             .expect("full-ZK setup succeeds");
 
-    benchmark_setup(c, &fixture, &plain_config, &full_zk_config);
-    benchmark_proving(c, &fixture, &plain_config, &plain_pk, &full_zk_pk);
+    benchmark_setup::<Ext>(
+        c,
+        sha256_size,
+        extension,
+        &fixture,
+        &plain_config,
+        &full_zk_config,
+    );
+    benchmark_proving::<Ext>(
+        c,
+        sha256_size,
+        extension,
+        &fixture,
+        &plain_config,
+        &plain_pk,
+        &full_zk_pk,
+    );
 
-    let (plain_proofs, full_zk_proofs) = build_proof_corpus(
+    let (plain_proofs, full_zk_proofs) = build_proof_corpus::<Ext>(
         &fixture,
         &messages,
         &inputs,
@@ -70,22 +110,39 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
         &full_zk_pk,
         &full_zk_vk,
     );
-    report_proof_sizes(&plain_proofs, &full_zk_proofs);
-    benchmark_verification(c, &plain_vk, &plain_proofs, &full_zk_vk, &full_zk_proofs);
+    report_proof_sizes::<Ext>(&plain_proofs, &full_zk_proofs);
+    benchmark_verification::<Ext>(
+        c,
+        sha256_size,
+        extension,
+        &plain_vk,
+        &plain_proofs,
+        &full_zk_vk,
+        &full_zk_proofs,
+    );
 }
 
-fn benchmark_setup(
+fn benchmark_setup<Ext>(
     c: &mut Criterion,
+    sha256_size: usize,
+    extension: &str,
     fixture: &Sha256Fixture,
     plain_config: &SpartanSnarkConfig,
     full_zk_config: &PoseidonZkSetupConfig,
-) {
-    let mut group = c.benchmark_group(format!("sha256_{SHA256_SIZE}b/setup"));
+) where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    let mut group = c.benchmark_group(format!("sha256_{sha256_size}b_{extension}/setup"));
     group.bench_function(BenchmarkId::from_parameter("no_zk"), |bencher| {
         bencher.iter_batched(
             || (),
             |()| {
-                PlainProtocol::setup_with_config(&fixture.shape, plain_config)
+                PlainProtocol::<Ext>::setup_with_config(&fixture.shape, plain_config)
                     .expect("plain-WHIR setup succeeds")
             },
             BatchSize::PerIteration,
@@ -95,7 +152,7 @@ fn benchmark_setup(
         bencher.iter_batched(
             || (),
             |()| {
-                FullZkProvingKey::setup(fixture.shape.clone(), full_zk_config.clone())
+                FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), full_zk_config.clone())
                     .expect("full-ZK setup succeeds")
             },
             BatchSize::PerIteration,
@@ -104,19 +161,30 @@ fn benchmark_setup(
     group.finish();
 }
 
-fn benchmark_proving(
+fn benchmark_proving<Ext>(
     c: &mut Criterion,
+    sha256_size: usize,
+    extension: &str,
     fixture: &Sha256Fixture,
     config: &SpartanSnarkConfig,
-    plain_pk: &PlainProvingKey,
-    full_zk_pk: &FullZkProvingKey,
-) {
-    let mut group = c.benchmark_group(format!("sha256_{SHA256_SIZE}b/witness_and_prove"));
+    plain_pk: &PlainProvingKey<Ext>,
+    full_zk_pk: &FullZkProvingKey<Ext>,
+) where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "sha256_{sha256_size}b_{extension}/witness_and_prove"
+    ));
     let mut plain_sample = 0usize;
     group.bench_function(BenchmarkId::from_parameter("no_zk"), |bencher| {
         bencher.iter_batched(
             || {
-                let input = input_binary(&message(SHA256_SIZE, plain_sample));
+                let input = input_binary(&message(sha256_size, plain_sample));
                 plain_sample += 1;
                 input
             },
@@ -126,7 +194,7 @@ fn benchmark_proving(
                     .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
                     .expect("plain-WHIR witness generation succeeds");
                 let mut challenger = spartan_whir::poseidon_challenger();
-                PlainProtocol::prove_with_mode(
+                PlainProtocol::<Ext>::prove_with_mode(
                     plain_pk,
                     &public_inputs,
                     &witness,
@@ -145,7 +213,7 @@ fn benchmark_proving(
             || {
                 let sample = full_zk_sample;
                 full_zk_sample += 1;
-                let input = input_binary(&message(SHA256_SIZE, sample));
+                let input = input_binary(&message(sha256_size, sample));
                 (input, sample_rng(sample))
             },
             |(input, mut rng)| {
@@ -154,7 +222,7 @@ fn benchmark_proving(
                     .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
                     .expect("full-ZK witness generation succeeds");
                 let mut challenger = spartan_whir::poseidon_challenger();
-                FullZkProtocol::prove_with_rng(
+                FullZkProtocol::<Ext>::prove_with_rng(
                     full_zk_pk,
                     &public_inputs,
                     &witness,
@@ -169,16 +237,27 @@ fn benchmark_proving(
     group.finish();
 }
 
-fn build_proof_corpus(
+fn build_proof_corpus<Ext>(
     fixture: &Sha256Fixture,
     messages: &[Vec<u8>],
     inputs: &[Vec<u8>],
     config: &SpartanSnarkConfig,
-    plain_pk: &PlainProvingKey,
-    plain_vk: &PlainVerifyingKey,
-    full_zk_pk: &FullZkProvingKey,
-    full_zk_vk: &FullZkVerifyingKey,
-) -> (Vec<(Instance, PlainProof)>, Vec<(Instance, FullZkProof)>) {
+    plain_pk: &PlainProvingKey<Ext>,
+    plain_vk: &PlainVerifyingKey<Ext>,
+    full_zk_pk: &FullZkProvingKey<Ext>,
+    full_zk_vk: &FullZkVerifyingKey<Ext>,
+) -> (
+    Vec<(Instance<Ext>, PlainProof<Ext>)>,
+    Vec<(Instance<Ext>, FullZkProof<Ext>)>,
+)
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
     let mut plain_proofs = Vec::with_capacity(inputs.len());
     let mut full_zk_proofs = Vec::with_capacity(inputs.len());
     for (sample, input) in inputs.iter().enumerate() {
@@ -191,7 +270,7 @@ fn build_proof_corpus(
             .expect("verification-corpus input matches SHA-256");
 
         let mut plain_prover = spartan_whir::poseidon_challenger();
-        let plain = PlainProtocol::prove_with_mode(
+        let plain = PlainProtocol::<Ext>::prove_with_mode(
             plain_pk,
             &public_inputs,
             &witness,
@@ -200,13 +279,13 @@ fn build_proof_corpus(
         )
         .expect("verification-corpus plain-WHIR proof succeeds");
         let mut plain_verifier = spartan_whir::poseidon_challenger();
-        PlainProtocol::verify_with_mode(plain_vk, &plain.0, &plain.1, &mut plain_verifier)
+        PlainProtocol::<Ext>::verify_with_mode(plain_vk, &plain.0, &plain.1, &mut plain_verifier)
             .expect("verification-corpus plain-WHIR proof verifies");
         plain_proofs.push(plain);
 
         let mut rng = sample_rng(sample);
         let mut full_zk_prover = spartan_whir::poseidon_challenger();
-        let full_zk = FullZkProtocol::prove_with_rng(
+        let full_zk = FullZkProtocol::<Ext>::prove_with_rng(
             full_zk_pk,
             &public_inputs,
             &witness,
@@ -215,21 +294,30 @@ fn build_proof_corpus(
         )
         .expect("verification-corpus full-ZK proof succeeds");
         let mut full_zk_verifier = spartan_whir::poseidon_challenger();
-        FullZkProtocol::verify(full_zk_vk, &full_zk.0, &full_zk.1, &mut full_zk_verifier)
+        FullZkProtocol::<Ext>::verify(full_zk_vk, &full_zk.0, &full_zk.1, &mut full_zk_verifier)
             .expect("verification-corpus full-ZK proof verifies");
         full_zk_proofs.push(full_zk);
     }
     (plain_proofs, full_zk_proofs)
 }
 
-fn benchmark_verification(
+fn benchmark_verification<Ext>(
     c: &mut Criterion,
-    plain_vk: &PlainVerifyingKey,
-    plain_proofs: &[(Instance, PlainProof)],
-    full_zk_vk: &FullZkVerifyingKey,
-    full_zk_proofs: &[(Instance, FullZkProof)],
-) {
-    let mut group = c.benchmark_group(format!("sha256_{SHA256_SIZE}b/verify"));
+    sha256_size: usize,
+    extension: &str,
+    plain_vk: &PlainVerifyingKey<Ext>,
+    plain_proofs: &[(Instance<Ext>, PlainProof<Ext>)],
+    full_zk_vk: &FullZkVerifyingKey<Ext>,
+    full_zk_proofs: &[(Instance<Ext>, FullZkProof<Ext>)],
+) where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    let mut group = c.benchmark_group(format!("sha256_{sha256_size}b_{extension}/verify"));
     let mut plain_sample = 0usize;
     group.bench_function(BenchmarkId::from_parameter("no_zk"), |bencher| {
         bencher.iter_batched(
@@ -240,7 +328,7 @@ fn benchmark_verification(
             },
             |(instance, proof)| {
                 let mut challenger = spartan_whir::poseidon_challenger();
-                PlainProtocol::verify_with_mode(plain_vk, instance, proof, &mut challenger)
+                PlainProtocol::<Ext>::verify_with_mode(plain_vk, instance, proof, &mut challenger)
                     .expect("plain-WHIR verification succeeds")
             },
             BatchSize::PerIteration,
@@ -257,7 +345,7 @@ fn benchmark_verification(
             },
             |(instance, proof)| {
                 let mut challenger = spartan_whir::poseidon_challenger();
-                FullZkProtocol::verify(full_zk_vk, instance, proof, &mut challenger)
+                FullZkProtocol::<Ext>::verify(full_zk_vk, instance, proof, &mut challenger)
                     .expect("full-ZK verification succeeds")
             },
             BatchSize::PerIteration,
@@ -266,10 +354,13 @@ fn benchmark_verification(
     group.finish();
 }
 
-fn report_proof_sizes(
-    plain_proofs: &[(Instance, PlainProof)],
-    full_zk_proofs: &[(Instance, FullZkProof)],
-) {
+fn report_proof_sizes<Ext>(
+    plain_proofs: &[(Instance<Ext>, PlainProof<Ext>)],
+    full_zk_proofs: &[(Instance<Ext>, FullZkProof<Ext>)],
+) where
+    Ext: ExtField + Serialize,
+    StandardUniform: Distribution<Ext>,
+{
     let plain = size_stats(plain_proofs.iter().map(|(_, proof)| {
         bincode::serialize(proof)
             .expect("plain proof serializes")
@@ -290,12 +381,9 @@ fn report_proof_sizes(
     );
 
     let application_masks = size_stats(full_zk_proofs.iter().map(|(_, proof)| {
-        bincode::serialize(&(
-            proof.inner_mask_commitment.clone(),
-            proof.outer_mask_commitment.clone(),
-        ))
-        .expect("application-mask commitments serialize")
-        .len()
+        bincode::serialize(&(proof.application_mask_commitment.clone(),))
+            .expect("application-mask commitments serialize")
+            .len()
     }));
     let outer_iop = size_stats(full_zk_proofs.iter().map(|(_, proof)| {
         bincode::serialize(&(
@@ -361,13 +449,24 @@ fn env_usize(name: &str, default: usize) -> usize {
     }
 }
 
-fn benchmark_configs(num_variables: usize) -> (SpartanSnarkConfig, PoseidonZkSetupConfig) {
+fn env_string(name: &str, default: &str) -> String {
+    match env::var(name) {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => default.to_owned(),
+        Err(env::VarError::NotUnicode(_)) => panic!("{name} must be valid UTF-8"),
+    }
+}
+
+fn benchmark_configs(
+    num_variables: usize,
+    extension: &str,
+) -> (SpartanSnarkConfig, PoseidonZkSetupConfig) {
     let security = SecurityConfig {
         security_level_bits: 123,
         merkle_security_bits: 123,
         soundness_assumption: SoundnessAssumption::JohnsonBound,
     };
-    let whir = recommended_octic_zk_whir_params(num_variables);
+    let whir = benchmark_whir_params(num_variables, extension);
     let plain = SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
         security,
@@ -385,6 +484,92 @@ fn benchmark_configs(num_variables: usize) -> (SpartanSnarkConfig, PoseidonZkSet
         ),
     };
     (plain, full_zk)
+}
+
+fn benchmark_whir_params(num_variables: usize, extension: &str) -> WhirParams {
+    let Some(raw) = env::var_os("SHA256_ZK_BENCH_SCHEDULE") else {
+        assert_eq!(
+            extension, "octic",
+            "SHA256_ZK_BENCH_SCHEDULE is required for non-octic extensions"
+        );
+        return recommended_octic_zk_whir_params(num_variables);
+    };
+    let label = raw
+        .into_string()
+        .unwrap_or_else(|_| panic!("SHA256_ZK_BENCH_SCHEDULE must be valid UTF-8"));
+    let parts = label.split('_').collect::<Vec<_>>();
+    assert!(
+        parts.len() == 7 && parts[0] == extension && parts[1] == "cfsr",
+        "unsupported SHA256_ZK_BENCH_SCHEDULE: {label}"
+    );
+
+    let pow_bits = parse_schedule_component(parts[2], "pow") as u32;
+    let first = parse_schedule_component(parts[3], "ff");
+    let rest = parse_schedule_component(parts[4], "rest");
+    let starting_log_inv_rate = parse_schedule_component(parts[5], "lir");
+    let rs_domain_initial_reduction_factor = parse_schedule_component(parts[6], "rsv");
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first, rest };
+    let round_log_inv_rates = benchmark_round_log_inv_rates(
+        num_variables,
+        &schedule,
+        starting_log_inv_rate,
+        rs_domain_initial_reduction_factor,
+    );
+
+    WhirParams {
+        pow_bits,
+        folding_factor: first,
+        starting_log_inv_rate,
+        rs_domain_initial_reduction_factor,
+        folding_schedule: Some(schedule),
+        round_log_inv_rates,
+    }
+}
+
+fn parse_schedule_component(component: &str, prefix: &str) -> usize {
+    component
+        .strip_prefix(prefix)
+        .unwrap_or_else(|| panic!("expected {prefix} component, got {component}"))
+        .parse()
+        .unwrap_or_else(|error| panic!("invalid {prefix} component {component}: {error}"))
+}
+
+fn benchmark_round_log_inv_rates(
+    num_variables: usize,
+    schedule: &WhirFoldingSchedule,
+    starting_log_inv_rate: usize,
+    rs_domain_initial_reduction_factor: usize,
+) -> Vec<usize> {
+    let mut rate = starting_log_inv_rate;
+    let num_rounds = folding_schedule_rounds(num_variables, schedule).saturating_sub(1);
+    (0..num_rounds)
+        .map(|round| {
+            let folding = schedule.at_round(round).expect("schedule round exists");
+            let reduction = if round == 0 {
+                rs_domain_initial_reduction_factor
+            } else {
+                1
+            };
+            rate = rate
+                .checked_add(folding)
+                .and_then(|value| value.checked_sub(reduction))
+                .unwrap_or_else(|| panic!("invalid log inverse rate at round {round}"));
+            rate
+        })
+        .collect()
+}
+
+fn folding_schedule_rounds(num_variables: usize, schedule: &WhirFoldingSchedule) -> usize {
+    let mut remaining = num_variables;
+    for round in 0.. {
+        let folding = schedule.at_round(round).expect("schedule round exists");
+        assert!(folding <= remaining, "invalid folding schedule");
+        remaining -= folding;
+        if remaining <= spartan_whir::FINAL_SUMCHECK_MAX_VARIABLES {
+            return round + 1;
+        }
+    }
+    unreachable!()
 }
 
 criterion_group! {

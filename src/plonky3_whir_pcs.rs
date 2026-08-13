@@ -1,4 +1,4 @@
-use alloc::{rc::Rc, vec, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 
 use num_bigint::BigUint;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
@@ -112,7 +112,7 @@ where
     T: Send + Sync + Clone,
     Inner: Mmcs<T>,
 {
-    type ProverData<M> = Rc<Inner::ProverData<M>>;
+    type ProverData<M> = Arc<Inner::ProverData<M>>;
     type Commitment = Inner::Commitment;
     type Proof = Inner::Proof;
     type MultiProof = Inner::MultiProof;
@@ -120,7 +120,7 @@ where
 
     fn commit<M: Matrix<T>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
         let (commitment, prover_data) = self.0.commit(inputs);
-        (commitment, Rc::new(prover_data))
+        (commitment, Arc::new(prover_data))
     }
 
     fn open_batch<M: Matrix<T>>(
@@ -914,7 +914,7 @@ where
     // Hence Pr[local false acceptance] <= terms / |Ext|. Two extra bits
     // reserve a quarter of the requested error budget for this term and make
     // the P3 WHIR relation target four times stronger as well. The remaining
-    // half covers the three caller-supplied mask groups added to P3's internal
+    // half covers the two caller-supplied mask groups added to P3's internal
     // mask-oracle union bound.
     let soundness_error_terms = num_outer_rounds
         .checked_mul(15)

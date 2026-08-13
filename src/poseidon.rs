@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     engine::{poseidon_challenger, ExtField, PoseidonChallenger, PoseidonEngine, F},
     plonky3_whir_pcs::{build_poseidon_full_zk_pcs, PoseidonCommitment},
-    protocol::{validate_canonical_verifying_shape, PoseidonZkSpartanProtocol},
+    protocol::{
+        combined_application_mask_shape, validate_canonical_verifying_shape,
+        PoseidonZkSpartanProtocol,
+    },
     r1cs::{DirectBindLayout, DirectMultiplyLayout},
     DomainSeparator, MatrixClosingMode, MlePcs, Plonky3WhirPcs, R1csInstance, R1csShape,
     R1csWitness, SecurityConfig, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
@@ -199,7 +202,9 @@ where
         ell_zk: config.ell_zk,
         mask_log_inv_rate: config.mask_log_inv_rate,
     };
-    build_poseidon_full_zk_pcs::<Ext>(&pcs_config, num_outer_rounds, num_variables + 1)?;
+    let (_, [inner_shape, outer_shape, _]) =
+        build_poseidon_full_zk_pcs::<Ext>(&pcs_config, num_outer_rounds, num_variables + 1)?;
+    combined_application_mask_shape(inner_shape, outer_shape)?;
     let domain_separator = DomainSeparator::new_full_zk(
         &shape_canonical,
         &pcs_config.base.security,

@@ -92,15 +92,30 @@ fn recommended_octic_zk_whir_params_use_zk_safe_schedule() {
 fn recommended_octic_zk_whir_params_use_measured_sha256_2048_schedule() {
     let params = recommended_octic_zk_whir_params(20);
 
-    assert_eq!(params.pow_bits, 8);
+    assert_eq!(params.pow_bits, 4);
     assert_eq!(params.folding_factor, 8);
     assert_eq!(
         params.folding_schedule,
         Some(WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 })
     );
     assert_eq!(params.starting_log_inv_rate, 1);
-    assert_eq!(params.rs_domain_initial_reduction_factor, 5);
-    assert_eq!(params.round_log_inv_rates, vec![4]);
+    assert_eq!(params.rs_domain_initial_reduction_factor, 6);
+    assert_eq!(params.round_log_inv_rates, vec![3]);
+}
+
+#[test]
+fn recommended_octic_zk_whir_params_use_measured_sha256_1024_schedule() {
+    let params = recommended_octic_zk_whir_params(19);
+
+    assert_eq!(params.pow_bits, 4);
+    assert_eq!(params.folding_factor, 8);
+    assert_eq!(
+        params.folding_schedule,
+        Some(WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 5 })
+    );
+    assert_eq!(params.starting_log_inv_rate, 1);
+    assert_eq!(params.rs_domain_initial_reduction_factor, 7);
+    assert_eq!(params.round_log_inv_rates, vec![2]);
 }
 
 #[test]

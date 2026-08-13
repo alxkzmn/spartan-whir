@@ -43,6 +43,11 @@ def main() -> None:
     parser.add_argument("--case-label", help="Optional case label copied into report rows")
     parser.add_argument("--cargo", default="cargo", help="Cargo binary used when --num-variables is set")
     parser.add_argument(
+        "--features",
+        default="parallel",
+        help="Cargo features used to build generated candidates; default: parallel",
+    )
+    parser.add_argument(
         "--proof-mode",
         choices=("no-zk", "full-zk"),
         default="no-zk",
@@ -98,8 +103,10 @@ def main() -> None:
             args.max_pow_bits,
             args.field,
             args.proof_mode,
+            args.constraint_work,
             parse_int_list(args.zk_ell_values),
             parse_int_list(args.zk_mask_log_inv_rate_values),
+            args.features,
         )
     )
     apply_case_metrics(candidates, args.constraint_work, args.case_label)
@@ -149,6 +156,11 @@ def score_dump(
     measurement_shortlist_margin_ratio: float | None = None,
     measurements: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    require_matching_code_provenance(dump, calibration, "candidate dump", "calibration")
+    if measurements is not None:
+        require_matching_code_provenance(
+            dump, measurements, "candidate dump", "heldout measurements"
+        )
     coeffs = normalized_coefficients(calibration)
     validation = validate_model(calibration, coeffs)
     proof_mode = dump.get("proof_mode")
@@ -210,6 +222,12 @@ def score_dump(
 
     return {
         "schema_version": 1,
+        "provenance": dump.get("provenance"),
+        "source_provenance": {
+            "candidates": dump.get("provenance"),
+            "calibration": calibration.get("provenance"),
+            "measurements": measurements.get("provenance") if measurements else None,
+        },
         "source_schema_version": dump.get("schema_version"),
         "num_variables": dump.get("num_variables"),
         "target_security_bits": dump.get("target_security_bits"),
@@ -302,7 +320,12 @@ def zk_metric_name(metric: str) -> str:
 def proof_size_key(row: dict[str, Any]) -> int:
     # `proof_size_score` is kept only for candidate JSONs emitted before
     # `proof_size_bytes_estimate` became the canonical tie-breaker.
-    return int(row.get("proof_size_bytes_estimate") or row.get("proof_size_score") or 0)
+    return int(
+        row.get("heldout_proof_size_median_bytes")
+        or row.get("proof_size_bytes_estimate")
+        or row.get("proof_size_score")
+        or 0
+    )
 
 
 def pow_tie_break_key(row: dict[str, Any]) -> tuple[int, int]:
@@ -430,27 +453,34 @@ def measured_selection(
             str(row.get("label") or ""),
         ),
     )
-    selected = dict(ranked[0])
-    selected["measured_rank"] = 1
-    ties = measured_ties_with_best(ranked)
+    ties = measured_ties_with_fastest(ranked)
+    tied_rows = [row for row in ranked if not demonstrably_slower_than_fastest(row)]
+    selected_source = min(
+        tied_rows,
+        key=lambda row: (
+            proof_size_key(row),
+            pow_tie_break_key(row),
+            str(row.get("label") or ""),
+        ),
+    )
+    selected = dict(selected_source)
+    selected["measured_rank"] = ranked.index(selected_source) + 1
     return selected, {
         "source_measurements": measurements.get("source_report"),
         "measured_rows": len(rows),
-        "selection": "measured_argmin",
+        "selection": "one_percent_paired_then_proof_size",
+        "demonstrable_speed_threshold_relative": 0.01,
         "tied_with_best_count": len(ties),
         "tied_with_best": ties,
     }
 
 
-def measured_ties_with_best(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def measured_ties_with_fastest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
-    best = rows[0]
-    best_ci = median_ci(best)
     tied = []
     for rank, row in enumerate(rows, 1):
-        ci = median_ci(row)
-        if best_ci is not None and ci is not None and not intervals_overlap(best_ci, ci):
+        if demonstrably_slower_than_fastest(row):
             continue
         tied.append(
             {
@@ -460,9 +490,26 @@ def measured_ties_with_best(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "zk_mask_log_inv_rate": row.get("zk_mask_log_inv_rate"),
                 "measured_seconds": row.get("measured_seconds"),
                 "heldout_median_ci_seconds": row.get("heldout_median_ci_seconds"),
+                "heldout_relative_median_difference": row.get(
+                    "heldout_relative_median_difference"
+                ),
+                "heldout_paired_relative_median_ci": row.get(
+                    "heldout_paired_relative_median_ci"
+                ),
+                "heldout_proof_size_median_bytes": row.get(
+                    "heldout_proof_size_median_bytes"
+                ),
             }
         )
     return tied
+
+
+def demonstrably_slower_than_fastest(row: dict[str, Any]) -> bool:
+    relative = float(row.get("heldout_relative_median_difference") or 0.0)
+    raw_ci = row.get("heldout_paired_relative_median_ci")
+    if not isinstance(raw_ci, list) or len(raw_ci) != 2:
+        return False
+    return relative > 0.01 and float(raw_ci[0]) > 0.0
 
 
 def median_ci(row: dict[str, Any]) -> tuple[float, float] | None:
@@ -586,9 +633,16 @@ def generate_candidates(
     max_pow_bits: int,
     field: str,
     proof_mode: str,
+    constraint_work: int | None,
     zk_ell_values: list[int] | None,
     zk_mask_log_inv_rate_values: list[int] | None,
+    features: str = "parallel",
 ) -> dict[str, Any]:
+    num_outer_rounds = (
+        max(0, constraint_work - 1).bit_length()
+        if constraint_work is not None
+        else num_variables
+    )
     if proof_mode == "no-zk":
         return generate_candidate_dump(
             cargo,
@@ -596,8 +650,10 @@ def generate_candidates(
             max_pow_bits,
             field,
             proof_mode,
+            num_outer_rounds,
             None,
             None,
+            features,
         )
     ell_values = zk_ell_values or DEFAULT_ZK_ELL_SWEEP
     mask_rate_values = zk_mask_log_inv_rate_values or DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP
@@ -611,8 +667,10 @@ def generate_candidates(
                     max_pow_bits,
                     field,
                     proof_mode,
+                    num_outer_rounds,
                     zk_ell,
                     zk_mask_log_inv_rate,
+                    features,
                 )
             )
     merged = dict(dumps[0])
@@ -622,6 +680,9 @@ def generate_candidates(
         value for value in mask_rate_values if value is not None
     ]
     for dump in dumps:
+        require_matching_code_provenance(
+            merged, dump, "first candidate dump", "candidate dump"
+        )
         for candidate in dump.get("candidates", []):
             row = dict(candidate)
             row["zk_ell"] = dump.get("zk_ell")
@@ -636,16 +697,21 @@ def generate_candidate_dump(
     max_pow_bits: int,
     field: str,
     proof_mode: str,
+    num_outer_rounds: int,
     zk_ell: int | None,
     zk_mask_log_inv_rate: int | None,
+    features: str,
 ) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
         cargo,
         "run",
         "-q",
+        "--release",
         "--manifest-path",
         str(repo / "Cargo.toml"),
+        "--features",
+        features,
         "--bin",
         "poseidon-schedule-candidates",
         "--",
@@ -657,6 +723,8 @@ def generate_candidate_dump(
         str(max_pow_bits),
         "--proof-mode",
         proof_mode,
+        "--num-outer-rounds",
+        str(num_outer_rounds),
     ]
     if zk_ell is not None:
         cmd.extend(["--zk-ell", str(zk_ell)])
@@ -692,6 +760,26 @@ def apply_case_metrics(
 def read_json(path: Path) -> dict[str, Any]:
     with path.open() as f:
         return json.load(f)
+
+
+def require_matching_code_provenance(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    left_name: str,
+    right_name: str,
+) -> None:
+    left_provenance = left.get("provenance")
+    right_provenance = right.get("provenance")
+    if left_provenance is None and right_provenance is None:
+        return
+    if left_provenance is None or right_provenance is None:
+        raise SystemExit(
+            f"cannot combine {left_name} and {right_name}: one artifact is missing provenance"
+        )
+    if left_provenance != right_provenance:
+        raise SystemExit(
+            f"cannot combine {left_name} and {right_name}: provenance differs"
+        )
 
 
 def write_json(path: Path, value: Any) -> None:

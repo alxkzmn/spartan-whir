@@ -424,9 +424,12 @@ where
         .sum::<EF>();
 
     let (base_compact, correction_compact) = {
-        let (h0, h2, h3) = eq.evaluation_points_base_first(&az_tab, &bz_tab, &cz_tab);
+        let _profile = crate::profiling::profile_scope("zk_outer_first_round_compute");
+        let ((h0, h2, h3), moments) = join(
+            || eq.evaluation_points_base_first(&az_tab, &bz_tab, &cz_tab),
+            || eq.linear_moments_base_first(&az_tab, &bz_tab),
+        );
         let base_compact = degree_three.extend_evals(&[h0, h2, h3], base_claim, 7);
-        let moments = eq.linear_moments_base_first(&az_tab, &bz_tab);
         let correction =
             masked_outer_correction_evals(&eq, moments, 0, inner_masks, &inner_past, &nodes);
         (base_compact, correction)
@@ -465,36 +468,52 @@ where
     rounds.push(wire);
     point.push(challenge);
 
-    let (mut az_tab, mut bz_tab, mut cz_tab) =
-        bind_three_halves_base_to_extension(&az_tab, &bz_tab, &cz_tab, challenge)?;
     eq.bind(challenge);
-
-    for round in 1..num_rounds {
-        let (h0, h2, h3) = eq.evaluation_points(round, &az_tab, &bz_tab, &cz_tab);
-        let base_compact = degree_three.extend_evals(&[h0, h2, h3], base_claim, 7);
-        let moments = eq.linear_moments(&az_tab, &bz_tab);
-        let correction_compact =
-            masked_outer_correction_evals(&eq, moments, round, inner_masks, &inner_past, &nodes);
-        outer_future_endpoints -=
-            outer_masks[round][0].double() + outer_masks[round][1..].iter().copied().sum::<EF>();
-        let outer_compact = outer_mask_round_evals(
-            &outer_masks[round],
-            outer_past,
-            outer_future_endpoints,
-            num_rounds - round - 1,
-            &nodes,
-        );
-        let wire = base_compact
-            .iter()
-            .zip(&correction_compact)
-            .zip(&outer_compact)
-            .map(|((&base, &correction), &outer)| epsilon * (base + correction) + outer)
-            .collect::<Vec<_>>();
-        challenger.observe_algebra_slice(&wire);
-        let challenge = if round + 1 == num_rounds {
-            sample_non_boolean::<F, EF, C>(challenger)
-        } else {
-            challenger.sample_algebra_element::<EF>()
+    let first_challenge = challenge;
+    let (mut az_tab, mut bz_tab, mut cz_tab) = if num_rounds == 1 {
+        let _profile = crate::profiling::profile_scope("zk_outer_first_round_bind");
+        bind_three_halves_base_to_extension(&az_tab, &bz_tab, &cz_tab, first_challenge)?
+    } else {
+        let round = 1;
+        let (base_compact, wire, challenge) = {
+            let _profile = crate::profiling::profile_scope("zk_outer_second_round_compute_base");
+            let ((h0, h2, h3), moments) = eq.evaluation_points_and_linear_moments_base_second(
+                first_challenge,
+                &az_tab,
+                &bz_tab,
+                &cz_tab,
+            );
+            let base_compact = degree_three.extend_evals(&[h0, h2, h3], base_claim, 7);
+            let correction_compact = masked_outer_correction_evals(
+                &eq,
+                moments,
+                round,
+                inner_masks,
+                &inner_past,
+                &nodes,
+            );
+            outer_future_endpoints -= outer_masks[round][0].double()
+                + outer_masks[round][1..].iter().copied().sum::<EF>();
+            let outer_compact = outer_mask_round_evals(
+                &outer_masks[round],
+                outer_past,
+                outer_future_endpoints,
+                num_rounds - round - 1,
+                &nodes,
+            );
+            let wire = base_compact
+                .iter()
+                .zip(&correction_compact)
+                .zip(&outer_compact)
+                .map(|((&base, &correction), &outer)| epsilon * (base + correction) + outer)
+                .collect::<Vec<_>>();
+            challenger.observe_algebra_slice(&wire);
+            let challenge = if num_rounds == 2 {
+                sample_non_boolean::<F, EF, C>(challenger)
+            } else {
+                challenger.sample_algebra_element::<EF>()
+            };
+            (base_compact, wire, challenge)
         };
         full_claim = degree_seven.eval(&wire, full_claim, challenge);
         base_claim = degree_three.eval(&base_compact[..3], base_claim, challenge);
@@ -509,8 +528,75 @@ where
         rounds.push(wire);
         point.push(challenge);
 
-        bind_three_halves(&mut az_tab, &mut bz_tab, &mut cz_tab, challenge)?;
+        let _profile = crate::profiling::profile_scope("zk_outer_first_two_rounds_bind");
+        let tables = bind_three_quarters_base_to_extension(
+            &az_tab,
+            &bz_tab,
+            &cz_tab,
+            first_challenge,
+            challenge,
+        )?;
         eq.bind(challenge);
+        tables
+    };
+
+    for round in 2..num_rounds {
+        let (base_compact, wire, challenge) = {
+            let _profile = crate::profiling::profile_scope("zk_outer_round_compute");
+            let ((h0, h2, h3), moments) = join(
+                || eq.evaluation_points(round, &az_tab, &bz_tab, &cz_tab),
+                || eq.linear_moments(&az_tab, &bz_tab),
+            );
+            let base_compact = degree_three.extend_evals(&[h0, h2, h3], base_claim, 7);
+            let correction_compact = masked_outer_correction_evals(
+                &eq,
+                moments,
+                round,
+                inner_masks,
+                &inner_past,
+                &nodes,
+            );
+            outer_future_endpoints -= outer_masks[round][0].double()
+                + outer_masks[round][1..].iter().copied().sum::<EF>();
+            let outer_compact = outer_mask_round_evals(
+                &outer_masks[round],
+                outer_past,
+                outer_future_endpoints,
+                num_rounds - round - 1,
+                &nodes,
+            );
+            let wire = base_compact
+                .iter()
+                .zip(&correction_compact)
+                .zip(&outer_compact)
+                .map(|((&base, &correction), &outer)| epsilon * (base + correction) + outer)
+                .collect::<Vec<_>>();
+            challenger.observe_algebra_slice(&wire);
+            let challenge = if round + 1 == num_rounds {
+                sample_non_boolean::<F, EF, C>(challenger)
+            } else {
+                challenger.sample_algebra_element::<EF>()
+            };
+            (base_compact, wire, challenge)
+        };
+        full_claim = degree_seven.eval(&wire, full_claim, challenge);
+        base_claim = degree_three.eval(&base_compact[..3], base_claim, challenge);
+        update_mask_accumulators(
+            round,
+            challenge,
+            inner_masks,
+            outer_masks,
+            &mut inner_past,
+            &mut outer_past,
+        );
+        rounds.push(wire);
+        point.push(challenge);
+
+        {
+            let _profile = crate::profiling::profile_scope("zk_outer_round_bind");
+            bind_three_halves(&mut az_tab, &mut bz_tab, &mut cz_tab, challenge)?;
+            eq.bind(challenge);
+        }
     }
 
     let masked_claims = (
@@ -918,6 +1004,71 @@ where
         b_delta: weight * (bz_tab[i + half] - bz_tab[i]),
         weight,
     }
+}
+
+fn zero_outer_and_linear_moments<EF: Field>() -> ((EF, EF, EF), LinearMoments<EF>) {
+    ((EF::ZERO, EF::ZERO, EF::ZERO), zero_linear_moments())
+}
+
+fn add_outer_and_linear_moments<EF: Field>(
+    lhs: ((EF, EF, EF), LinearMoments<EF>),
+    rhs: ((EF, EF, EF), LinearMoments<EF>),
+) -> ((EF, EF, EF), LinearMoments<EF>) {
+    (
+        (
+            lhs.0 .0 + rhs.0 .0,
+            lhs.0 .1 + rhs.0 .1,
+            lhs.0 .2 + rhs.0 .2,
+        ),
+        add_linear_moments(lhs.1, rhs.1),
+    )
+}
+
+fn outer_and_linear_moment_partial_base_second<F, EF>(
+    i: usize,
+    quarter: usize,
+    first_challenge: EF,
+    weight: EF,
+    az_tab: &[F],
+    bz_tab: &[F],
+    cz_tab: &[F],
+) -> ((EF, EF, EF), LinearMoments<EF>)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let half = quarter * 2;
+    let a0 = bind_base_pair_to_extension(az_tab, i, half, first_challenge);
+    let a1 = bind_base_pair_to_extension(az_tab, i + quarter, half, first_challenge);
+    let b0 = bind_base_pair_to_extension(bz_tab, i, half, first_challenge);
+    let b1 = bind_base_pair_to_extension(bz_tab, i + quarter, half, first_challenge);
+    let c0 = bind_base_pair_to_extension(cz_tab, i, half, first_challenge);
+    let c1 = bind_base_pair_to_extension(cz_tab, i + quarter, half, first_challenge);
+
+    let a_delta = a1 - a0;
+    let b_delta = b1 - b0;
+    let c_delta = c1 - c0;
+    let a2 = a1 + a_delta;
+    let b2 = b1 + b_delta;
+    let c2 = c1 + c_delta;
+    let a3 = a2 + a_delta;
+    let b3 = b2 + b_delta;
+    let c3 = c2 + c_delta;
+
+    (
+        (
+            weight * (a0 * b0 - c0),
+            weight * (a2 * b2 - c2),
+            weight * (a3 * b3 - c3),
+        ),
+        LinearMoments {
+            a0: weight * a0,
+            a_delta: weight * a_delta,
+            b0: weight * b0,
+            b_delta: weight * b_delta,
+            weight,
+        },
+    )
 }
 
 fn masked_outer_correction_evals<EF: Field + Send + Sync>(
@@ -1354,6 +1505,86 @@ where
         moments
     }
 
+    fn evaluation_points_and_linear_moments_base_second<F>(
+        &self,
+        first_challenge: EF,
+        az_tab: &[F],
+        bz_tab: &[F],
+        cz_tab: &[F],
+    ) -> ((EF, EF, EF), LinearMoments<EF>)
+    where
+        F: Field + Send + Sync,
+        EF: ExtensionField<F>,
+    {
+        debug_assert_eq!(self.round, 2);
+        debug_assert_eq!(az_tab.len(), bz_tab.len());
+        debug_assert_eq!(az_tab.len(), cz_tab.len());
+        debug_assert_eq!(az_tab.len() % 4, 0);
+
+        let quarter = az_tab.len() / 4;
+        let partial = |i, weight| {
+            outer_and_linear_moment_partial_base_second(
+                i,
+                quarter,
+                first_challenge,
+                weight,
+                az_tab,
+                bz_tab,
+                cz_tab,
+            )
+        };
+        let mut accum = if self.round < self.first_half {
+            let eq_left = &self.eq_left[self.first_half - self.round];
+            let eq_right = &self.eq_right[self.second_half];
+            let second_half = self.second_half;
+            let inner_mask = (1 << second_half) - 1;
+            if should_parallelize_sumcheck_round(quarter) {
+                (0..quarter)
+                    .into_par_iter()
+                    .map(|i| {
+                        let weight = eq_left[i >> second_half] * eq_right[i & inner_mask];
+                        partial(i, weight)
+                    })
+                    .par_fold_reduce(
+                        zero_outer_and_linear_moments,
+                        add_outer_and_linear_moments,
+                        add_outer_and_linear_moments,
+                    )
+            } else {
+                (0..quarter)
+                    .map(|i| {
+                        let weight = eq_left[i >> second_half] * eq_right[i & inner_mask];
+                        partial(i, weight)
+                    })
+                    .fold(
+                        zero_outer_and_linear_moments(),
+                        add_outer_and_linear_moments,
+                    )
+            }
+        } else {
+            let eq_right = &self.eq_right[self.init_num_vars - self.round];
+            if should_parallelize_sumcheck_round(quarter) {
+                (0..quarter)
+                    .into_par_iter()
+                    .map(|i| partial(i, eq_right[i]))
+                    .par_fold_reduce(
+                        zero_outer_and_linear_moments,
+                        add_outer_and_linear_moments,
+                        add_outer_and_linear_moments,
+                    )
+            } else {
+                (0..quarter).map(|i| partial(i, eq_right[i])).fold(
+                    zero_outer_and_linear_moments(),
+                    add_outer_and_linear_moments,
+                )
+            }
+        };
+
+        self.scale_current_round(&mut accum.0 .0, &mut accum.0 .1, &mut accum.0 .2);
+        scale_linear_moments(&mut accum.1, self.eval_eq_left);
+        accum
+    }
+
     fn current_eq_at(&self, x: EF) -> EF {
         let tau = self.tau[self.round - 1];
         EF::ONE - tau - x + (tau * x).double()
@@ -1652,6 +1883,54 @@ where
             a_out[i] = bind_base_pair_to_extension(a, i, half, r);
             b_out[i] = bind_base_pair_to_extension(b, i, half, r);
             c_out[i] = bind_base_pair_to_extension(c, i, half, r);
+        }
+    }
+
+    Ok((a_out, b_out, c_out))
+}
+
+fn bind_three_quarters_base_to_extension<F, EF>(
+    a: &[F],
+    b: &[F],
+    c: &[F],
+    first_challenge: EF,
+    second_challenge: EF,
+) -> Result<(Vec<EF>, Vec<EF>, Vec<EF>), SpartanWhirError>
+where
+    F: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if a.len() < 4 || !a.len().is_multiple_of(4) || b.len() != a.len() || c.len() != a.len() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let quarter = a.len() / 4;
+    let half = quarter * 2;
+    let mut a_out = vec![EF::ZERO; quarter];
+    let mut b_out = vec![EF::ZERO; quarter];
+    let mut c_out = vec![EF::ZERO; quarter];
+    let bind = |table: &[F], i| {
+        let lo = bind_base_pair_to_extension(table, i, half, first_challenge);
+        let hi = bind_base_pair_to_extension(table, i + quarter, half, first_challenge);
+        lo + second_challenge * (hi - lo)
+    };
+
+    if should_parallelize_sumcheck_round(quarter) {
+        a_out
+            .par_iter_mut()
+            .zip(b_out.par_iter_mut())
+            .zip(c_out.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, ((a_out, b_out), c_out))| {
+                *a_out = bind(a, i);
+                *b_out = bind(b, i);
+                *c_out = bind(c, i);
+            });
+    } else {
+        for i in 0..quarter {
+            a_out[i] = bind(a, i);
+            b_out[i] = bind(b, i);
+            c_out[i] = bind(c, i);
         }
     }
 
