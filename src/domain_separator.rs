@@ -78,14 +78,16 @@ impl DomainSeparator {
         shape: &R1csShape<F>,
         security: &SecurityConfig,
         whir_params: &WhirParams,
+        matrix_closing: MatrixClosingMode,
+        spark_whir_params: Option<SparkWhirParams>,
     ) -> Self {
         Self::new_with_protocol_id(
             FULL_ZK_PROTOCOL_ID,
             shape,
             security,
             whir_params,
-            MatrixClosingMode::DirectSparse,
-            None,
+            matrix_closing,
+            spark_whir_params,
         )
     }
 

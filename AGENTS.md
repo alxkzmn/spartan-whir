@@ -20,7 +20,7 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
 - Keep the current off-chain client-side default path aligned with fast proving and feasible memory use.
 - Keep the no-ZK and full-ZK APIs separate.
 - Unqualified `Plonky3WhirPcs` means plain WHIR and is the no-ZK PCS. Full ZK uses dedicated Poseidon ZK keys and the lower-level hiding-WHIR committed-relation APIs.
-- Treat privacy and matrix closing as independent axes: no ZK supports DirectSparse and Spark; full ZK supports DirectSparse and rejects Spark during setup.
+- Treat privacy and matrix closing as independent axes: no ZK and full ZK both support DirectSparse and Spark.
 - Preserve verifier-facing protocol details deliberately, but do not treat EVM verifier efficiency as the default objective for the off-chain client-side line.
 - Do not switch transcript, hash, or commitment choices as a refactor convenience. Treat those as protocol choices that need an explicit benchmark or verifier-design reason.
 - For explicitly on-chain-targeted or recursive/on-chain-targeted paths, keep the transcript and commitment choices aligned with that verifier story.
@@ -46,9 +46,11 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
 - When you add, rename, or materially change a public benchmark target or its environment knobs, update `README.md` in the same change.
 - Keep schedule calibration, candidate search, heldout validation, Pareto exploration, and model-interpretation workflows in this file rather than `README.md`.
 - Keep benchmark commands, benchmark target names, environment knobs, and output examples aligned with the code.
-- For SHA256 plain/full-ZK performance comparisons, use the Criterion target with native CPU tuning:
+- For SHA256 comparisons across no-ZK/full-ZK and DirectSparse/Spark, use the Criterion target with native CPU tuning:
   `RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo bench --features parallel --bench sha256_full_zk`.
 - The Criterion target only loads existing circuit artifacts from `target/sha256-cache`; it must not compile the circuit as part of a benchmark run. Use `sha256_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
+- Profile the 2048-byte full-ZK Spark path without rebuilding the circuit with:
+  `SHA256_BENCH_REUSE_ARTIFACTS=1 SHA256_BENCH_SIZES=2048 SHA256_BENCH_PROOF_MODES=full-zk SHA256_BENCH_MODES=spark-independent SHA256_BENCH_SECURITY_BITS=116 SHA256_BENCH_PROFILE=1 SHA256_BENCH_PROFILE_DETAIL=1 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo run --release --features parallel --example sha256_bench`.
 - Benchmark/profiling output intended for direct human inspection should be stable and human-readable. Prefer labeled `key: value` fields and clear tree/group structure over raw debug dumps.
 - If a benchmark fixture is only shape-similar to a real circuit, document that approximation explicitly instead of describing it as the real circuit.
 - Keep `README.md` focused on the current codebase state rather than changelog-style history; describe the format and behavior that exist now.
@@ -56,10 +58,12 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
 
 ## Poseidon Schedule Optimization
 
-The Poseidon Plonky3-WHIR prover uses an offline schedule-scoring workflow for
-`MatrixClosingMode::DirectSparse` with Johnson-bound soundness. The scorer is
-not part of setup. Generate and measure schedules for the target circuit, then
-pass the selected `PoseidonSetupConfig` into `setup_poseidon`.
+The Poseidon Plonky3-WHIR prover uses an offline schedule-scoring workflow with
+Johnson-bound soundness. The component scorer ranks one WHIR commitment at a
+time. Full-ZK Spark uses `poseidon_spark_schedule_scorer.py` to compose the
+witness, fixed-value, fixed-audit, and read-table reports. The scorers are not
+part of setup. Generate and measure schedules for the target circuit, then pass
+the selected setup configuration into setup.
 
 Optimize the client-side line for prover time while keeping memory feasible.
 Use proof size as a deterministic tie-breaker between schedules whose measured
@@ -123,6 +127,77 @@ python3 scripts/poseidon_schedule_scorer.py \
 The default ZK sweep is `ell_zk = 3,4,8,16` and
 `mask_log_inv_rate = 1,2,3,4,5`. Include low mask rates in the sweep and let
 the backend slack checks reject invalid rows.
+
+For the 2048-byte full-ZK Spark workload at 116-bit composed security, score
+the witness and table commitments independently. The composed budget requires
+121-bit WHIR components and 123-bit Merkle binding:
+
+```bash
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 20 \
+  --field koalabear \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-witness.json \
+  --out-config /tmp/spark-witness-config.json \
+  --max-pow-bits 22 \
+  --security-bits 121 \
+  --merkle-security-bits 123 \
+  --proof-mode full-zk \
+  --zk-ell-values 3 \
+  --zk-mask-log-inv-rate-values 3 \
+  --max-report-rows 200
+
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 26 \
+  --field koalabear \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-table-26.json \
+  --out-config /tmp/spark-table-26-config.json \
+  --max-pow-bits 22 \
+  --security-bits 121 \
+  --merkle-security-bits 123 \
+  --proof-mode no-zk \
+  --max-report-rows 200
+
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 22 \
+  --field koalabear \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-table-22.json \
+  --out-config /tmp/spark-table-22-config.json \
+  --max-pow-bits 22 \
+  --security-bits 121 \
+  --merkle-security-bits 123 \
+  --proof-mode no-zk \
+  --max-report-rows 200
+```
+
+Compose the reports before heldout measurement:
+
+```bash
+python3 scripts/poseidon_spark_schedule_scorer.py \
+  --witness-report /tmp/spark-witness.json \
+  --fixed-value-report /tmp/spark-table-26.json \
+  --fixed-audit-report /tmp/spark-table-22.json \
+  --read-report /tmp/spark-table-26.json \
+  --out-report /tmp/spark-combined.json \
+  --security-bits 116 \
+  --merkle-security-bits 116 \
+  --ell-zk 3 \
+  --mask-log-inv-rate 3 \
+  --top-per-component 8 \
+  --max-report-rows 100 \
+  --measurement-rows 10
+```
+
+Use `/tmp/spark-combined.json` as the heldout report. After measurement, rerun
+the composer with `--measurements /tmp/spark-heldout.json`. Require
+`model.calibration.validation_within_ten_percent` before selecting a schedule.
+Pass all four `--reference-*-label` options to include the configured baseline
+in the shortlist when it is outside the model's top component rows.
 
 4. Measure shortlisted rows. For a `.wtns` calibration fixture:
 

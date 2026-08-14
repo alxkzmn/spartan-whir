@@ -165,26 +165,28 @@ preparation call so load paths stay uniform.
 - WHIR verification is split into commitment-parse and finalize phases to preserve transcript continuity
 - The `SpartanProtocol` PCS statement path accepts point-evaluation claims
 
-### Full Zero Knowledge for DirectSparse
+### Privacy and Matrix Closing
 
-Spartan-WHIR supports no-ZK proving with DirectSparse or Spark matrix closing,
-and full-ZK proving with DirectSparse:
+Privacy and matrix closing are independent configuration choices:
 
 | Privacy | DirectSparse |       Spark |
 | ------- | -----------: | ----------: |
 | No ZK   |  Implemented | Implemented |
-| Full ZK |  Implemented | Unsupported |
+| Full ZK |  Implemented | Implemented |
 
 The no-ZK API uses `PoseidonProvingKey`, `PoseidonVerifyingKey`,
 `PoseidonProof`, and `PoseidonSpartanProtocol`. The unqualified
 `Plonky3WhirPcs` name means plain WHIR and is the no-ZK PCS. Both DirectSparse
 and Spark use this API.
 
-The full-ZK DirectSparse API uses `PoseidonZkProvingKey`,
-`PoseidonZkVerifyingKey`, `PoseidonZkProof`, and
-`PoseidonZkSpartanProtocol`. `setup_poseidon_zk` returns DirectSparse keys.
-Passing `MatrixClosingMode::Spark` to full-ZK setup returns
-`UnsupportedFullZkMatrixClosing` before preprocessing or transcript work.
+The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
+`PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
+`PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
+Spark, `spark_whir_params` supplies independent fixed-value, fixed-audit, and
+read-table schedules; `None` reuses the witness schedule for all three.
+`PoseidonZkProof::closing_mode()` reports the proof payload's mode, and
+verification rejects a proof whose mode differs from the verifying key.
+
 Both proving-key families expose `prove`, witness-generator proving, and their
 checked variants. Full-ZK callers that need deterministic test randomness can
 use `PoseidonZkProvingKey::prove_with_rng`.
@@ -211,11 +213,18 @@ witness evaluation. The integration calls the lower-level
 `HidingWhirProver::prove_relation` and `HidingWhirVerifier::verify_relation`
 methods directly.
 
-The DirectSparse composition adapts Construction 11.4's succinct-linear-form
-handoff by retaining an explicit HVZK inner sumcheck and passing one equality
-constraint to hiding WHIR. RBR soundness composes because the fresh batching
-challenge binds every disclosed mask equation before the inner sumcheck, and
-the final WHIR relation binds the resulting source and mask covectors. The
+The composition adapts Construction 11.4's succinct-linear-form handoff by
+retaining an explicit HVZK inner sumcheck and passing one equality constraint
+to hiding WHIR. DirectSparse computes the three matrix evaluations from the
+verifying key. Spark authenticates the same evaluations with its memory-product
+argument and plain-WHIR openings of the fixed and read tables. Those tables
+contain only the public R1CS or values derived from public transcript challenges,
+so their commitments do not require hiding. The authenticated matrix RLC is the
+coefficient used by the final hiding-WHIR witness relation.
+
+RBR soundness composes because the fresh batching challenge binds every
+disclosed mask equation before the inner sumcheck, and the final WHIR relation
+binds the resulting source and mask covectors. The
 powers-of-the-batching-challenge combination is the paper's zero-evader
 instantiation. For honest-verifier zero knowledge, the endpoint-zero inner masks
 one-time-pad the three matrix claims at the non-Boolean final point, the
@@ -225,16 +234,27 @@ include a witness-free accepting simulator for the outer transcript,
 fixed-witness transcript divergence, masked-claim checks, and Plonky3's own
 sumcheck and WHIR simulator suites.
 
-Setup enforces an extension-aware soundness bound before proving. For `n_x`
+Setup enforces extension-aware soundness bounds before proving. For `n_x`
 outer rounds, `n_y` inner rounds, and inner masked-sumcheck degree `d`, the
-local algebraic error is conservatively bounded by
-`(15 * n_x + d * n_y + 4) / |Ext|`. The final P3 relation and this local bound
-each receive a two-bit reserve over the requested security level.
+full-ZK Spartan algebraic error includes the conservative term
+`(15 * n_x + d * n_y + 4) / |Ext|`.
+
+Spark setup applies one composed integer budget to the Spartan algebraic terms,
+matrix batching, tuple compression, grand-product identities, product
+sumchecks, per-layer reductions, batched table openings, five WHIR arguments,
+and every Poseidon commitment-binding event. The budget derives strengthened
+internal WHIR and Merkle targets from the requested end-to-end target. Setup
+returns a structured error with the requested bits, attainable bits, and
+dominant component when the extension field, WHIR arguments, or commitments
+cannot meet that target.
+
 `SecurityConfig` accepts targets from 80 through 123 bits because the
 eight-element KoalaBear Poseidon digest provides about 123.95 bits of collision
 security. Targets above 123 bits are rejected before extension-specific checks.
-At the 123-bit maximum, the full-ZK bound rejects the quartic extension; the
-quintic and octic extensions satisfy the bound. Setup also validates the
+At the 123-bit maximum, the DirectSparse full-ZK bound rejects the quartic
+extension; the quintic and octic extensions satisfy that bound. Spark may
+accept a lower maximum after accounting for its additional arguments and
+commitments. Setup also validates the
 length-4 and length-8 application-mask domains against the extension two-adicity
 before constructing or allocating their encodings.
 
@@ -248,7 +268,8 @@ The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 6. `mu_tilde`, outer combining challenge, equality point, and outer rounds
 7. outer-mask evaluations, masked matrix claims, matrix batching challenge, and relation batching challenge
 8. Plonky3 HVZK inner sumcheck
-9. hiding-WHIR committed-relation proof
+9. for Spark, fixed-table commitments, read-table commitments, the memory-product proof, and fixed/read plain-WHIR openings
+10. hiding-WHIR committed-relation proof
 
 `PoseidonZkProvingKey::prove` draws mask and WHIR randomness from an
 operating-system-seeded `StdRng`. `prove_with_rng` accepts a caller-supplied
@@ -335,25 +356,27 @@ cargo test protocol_e2e_target_2_pow_22 -- --ignored
 
 ### SHA-256 No-ZK and Full-ZK
 
-The `sha256_full_zk` Criterion target compares the no-ZK and full-ZK paths on
-a cached SHA-256 circuit. It measures setup, linked witness
-generation plus proving, and verification separately. Proving rotates through
-valid SHA-256 inputs, verification rotates through a corpus of valid proofs,
+The `sha256_full_zk` Criterion target compares no-ZK DirectSparse, no-ZK Spark,
+full-ZK DirectSparse, and full-ZK Spark on a cached SHA-256 circuit. It measures
+setup, linked witness generation plus proving, and verification separately.
+All four proving variants rotate through the same fixed corpus of valid SHA-256
+inputs, verification rotates through the corresponding corpus of valid proofs,
 and proof size is reported outside the timed intervals. The target only loads
 existing artifacts from `target/sha256-cache`; it never compiles the circuit.
 The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
 another cached circuit. The default extension is octic; set
 `SHA256_ZK_BENCH_EXTENSION=quintic` to benchmark the quintic extension. A
 non-octic run must also set `SHA256_ZK_BENCH_SCHEDULE` to its selected schedule
-label. The benchmark uses a 123-bit Johnson-bound target.
+label. The benchmark selects the highest composed Johnson-bound security target
+accepted by all four variants.
 `SHA256_BENCH_ZK_ELL` and `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the
 default ZK mask parameters.
 
 The `sha256_bench` example exposes privacy and matrix closing as separate
 axes. Set `SHA256_BENCH_PROOF_MODES=no-zk,full-zk` and
-`SHA256_BENCH_MODES=direct,spark` for diagnostic schedule screening. Full-ZK
-Spark reports the setup-time unsupported error. The example's `Instant` output
-is diagnostic; use Criterion results for performance comparisons.
+`SHA256_BENCH_MODES=direct,spark` for diagnostic schedule screening. The
+example's `Instant` output is diagnostic; use Criterion results for performance
+comparisons.
 
 ```sh
 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
@@ -363,7 +386,30 @@ cargo bench --features parallel --bench sha256_full_zk
 Criterion retains the raw estimates and sample data under
 `target/criterion/sha256_<size>b_<extension>_*`. Set
 `SHA256_ZK_BENCH_CORPUS_SIZE` to change the proof/input corpus size; the default
-is 16.
+is 16. Set `SHA256_ZK_BENCH_PROVING_ONLY=1` for a proving-only optimization
+run that skips setup measurement, proof-corpus construction, proof-size
+reporting, and verification.
+
+The 2048-byte octic run selects a 116-bit common composed-security target. The
+table reports Criterion point estimates and median serialized proof sizes from
+the default 16-proof corpus:
+
+| Variant              | Setup (ms) | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
+| -------------------- | ---------: | -------------------: | ----------: | -----------------: |
+| No-ZK DirectSparse   |     56.439 |               57.174 |      85.879 |            479,039 |
+| No-ZK Spark          |  2,120.300 |            4,186.900 |     385.550 |          4,403,087 |
+| Full-ZK DirectSparse |     59.717 |               82.254 |     112.500 |          1,566,588 |
+| Full-ZK Spark        |  2,192.000 |            4,360.800 |     414.790 |          5,539,708 |
+
+For DirectSparse, full ZK adds 43.9% to witness generation plus proving and
+31.0% to verification. Spark proving is dominated by matrix closing; full ZK
+adds 4.2% to Spark witness generation plus proving and 7.6% to verification.
+Spark verifying keys carry validated table metadata, so
+verification replays the product and opening arguments without rebuilding the
+full public tables. Full-ZK Spark's 5,539,708-byte proof contains a
+3,904,156-byte matrix-closing payload: 59,312 bytes for product proofs,
+1,651,600 bytes for fixed-table openings, and 2,193,720 bytes for read-table
+openings. Its final hiding-WHIR relation is 1,628,288 bytes.
 
 ### Sumcheck Replay
 

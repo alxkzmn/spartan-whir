@@ -66,6 +66,7 @@ fn setup(
         matrix_closing: MatrixClosingMode::DirectSparse,
         security: SecurityConfig::default(),
         whir_params: recommended_octic_zk_whir_params(num_variables),
+        spark_whir_params: None,
         ell_zk: DEFAULT_ZK_ELL,
         mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
     };

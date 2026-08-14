@@ -42,7 +42,7 @@ pub use engine::{
     PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress, PoseidonOcticEngine,
     PoseidonQuarticEngine, PoseidonQuinticEngine, QuarticBinExtension, QuinticExtension,
 };
-pub use error::{InvalidConfigReason, SpartanWhirError};
+pub use error::{InvalidConfigReason, SecurityBoundComponent, SpartanWhirError};
 pub use fixtures::{
     generate_satisfiable_fixture, generate_satisfiable_fixture_for_pow2, SyntheticR1csConfig,
     SyntheticR1csFixture,
@@ -82,7 +82,8 @@ pub use profiling::{
 pub use protocol::{
     PoseidonZkSpartanProtocol, ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof,
     SparkPcsConfigs, SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof,
-    SpartanProofKind, SpartanProtocol, SpartanSnarkConfig, VerifyingKey, ZkSpartanProof,
+    SpartanProofKind, SpartanProtocol, SpartanSnarkConfig, VerifyingKey, ZkMatrixClosingProof,
+    ZkSparkClosingProof, ZkSpartanProof,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MAX_SECURITY_BITS, MIN_SECURITY_BITS};
@@ -98,23 +99,25 @@ pub use spark::{
     prove_spark_memory_products, prove_spark_value_sumcheck, prove_spark_value_sumcheck_with_reads,
     spark_selector_from_high_bits, spark_selector_from_joint_point, spark_selector_from_slot,
     verify_spark_batched_memory_leaf_claims_with_openings,
-    verify_spark_batched_memory_product_claims, verify_spark_batched_memory_products_with_tables,
-    verify_spark_batched_product, verify_spark_grand_product,
-    verify_spark_grand_product_with_values, verify_spark_memory_grand_product_claims,
-    verify_spark_memory_grand_products_with_tables, verify_spark_memory_leaf_claims_with_tables,
-    verify_spark_memory_products_with_tables, verify_spark_value_sumcheck,
-    verify_spark_value_sumcheck_with_openings, verify_spark_value_sumcheck_with_read_tables,
-    verify_spark_value_sumcheck_with_tables, SparkAxisGrandProductLeafClaims,
-    SparkAxisGrandProductProof, SparkBatchedMemoryProductsLeafClaims,
-    SparkBatchedMemoryProductsProof, SparkBatchedProductLayerProof, SparkBatchedProductLeafClaims,
-    SparkBatchedProductProof, SparkDotProductCircuit, SparkFixedTableOpeningEvals,
-    SparkGrandProductLayerProof, SparkGrandProductLeafClaim, SparkGrandProductProof,
-    SparkGrandProductTree, SparkLayoutComparison, SparkLayoutDecision, SparkLayoutEstimate,
-    SparkLayoutKind, SparkMatrixSlot, SparkMemoryAxis, SparkMemoryGrandProductLeafClaims,
+    verify_spark_batched_memory_product_claims,
+    verify_spark_batched_memory_product_claims_with_metadata,
+    verify_spark_batched_memory_products_with_tables, verify_spark_batched_product,
+    verify_spark_grand_product, verify_spark_grand_product_with_values,
+    verify_spark_memory_grand_product_claims, verify_spark_memory_grand_products_with_tables,
+    verify_spark_memory_leaf_claims_with_tables, verify_spark_memory_products_with_tables,
+    verify_spark_value_sumcheck, verify_spark_value_sumcheck_with_openings,
+    verify_spark_value_sumcheck_with_read_tables, verify_spark_value_sumcheck_with_tables,
+    SparkAxisGrandProductLeafClaims, SparkAxisGrandProductProof,
+    SparkBatchedMemoryProductsLeafClaims, SparkBatchedMemoryProductsProof,
+    SparkBatchedProductLayerProof, SparkBatchedProductLeafClaims, SparkBatchedProductProof,
+    SparkDotProductCircuit, SparkFixedTableOpeningEvals, SparkGrandProductLayerProof,
+    SparkGrandProductLeafClaim, SparkGrandProductProof, SparkGrandProductTree,
+    SparkLayoutComparison, SparkLayoutDecision, SparkLayoutEstimate, SparkLayoutKind,
+    SparkMatrixSlot, SparkMemoryAxis, SparkMemoryGrandProductLeafClaims,
     SparkMemoryGrandProductProof, SparkMemoryProductClaim, SparkMemoryProductProof,
     SparkReadTableOpeningEvals, SparkReadTables, SparkShapeProfile, SparkSolidityGasEstimate,
-    SparkSolidityGasModel, SparkTables, SparkValueFinalEvals, SparkValueRoundPoly,
-    SparkValueSumcheckProof, SparkVerifierOperationReport,
+    SparkSolidityGasModel, SparkTableMetadata, SparkTables, SparkValueFinalEvals,
+    SparkValueRoundPoly, SparkValueSumcheckProof, SparkVerifierOperationReport,
 };
 pub use statement::{LinearConstraintClaim, PcsStatement, PcsStatementBuilder, PointEvalClaim};
 pub use sumcheck::{

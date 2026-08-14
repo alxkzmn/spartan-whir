@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::profiling::profile_scope;
+use crate::profiling::{profile_detail_scope, profile_scope};
 use crate::sumcheck_replay::{observe_sumcheck_claim, replay_compact_rounds};
 use crate::{
     engine::F, evaluate_mle_table, CubicRoundPoly, EqPolynomial, MultilinearPoint, R1csShape,
@@ -111,6 +111,15 @@ pub struct SparkTables {
     pub audit_ts_row: Vec<F>,
     pub audit_ts_col: Vec<F>,
     pub slot_mapping: [SparkMatrixSlot; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkTableMetadata {
+    pub layout: SparkLayoutKind,
+    pub row_memory_size: usize,
+    pub col_memory_size: usize,
+    pub value_domain_size: usize,
+    pub matrix_nnz_padded: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,6 +382,16 @@ struct SparkMemoryProductValues<EF> {
 }
 
 impl SparkTables {
+    pub fn metadata(&self) -> SparkTableMetadata {
+        SparkTableMetadata {
+            layout: self.layout,
+            row_memory_size: self.row_memory_size,
+            col_memory_size: self.col_memory_size,
+            value_domain_size: self.value_domain_size,
+            matrix_nnz_padded: self.matrix_nnz_padded,
+        }
+    }
+
     pub fn verifier_operation_report(
         &self,
         extension_dimension: usize,
@@ -381,6 +400,64 @@ impl SparkTables {
             self.layout,
             self.union_nnz,
             self.union_ratio_ppm,
+            self.value_domain_size,
+            self.matrix_nnz_padded,
+            self.row_memory_size,
+            self.col_memory_size,
+            extension_dimension,
+        )
+    }
+}
+
+impl SparkTableMetadata {
+    pub fn validate(&self) -> Result<(), SpartanWhirError> {
+        if self.row_memory_size == 0
+            || self.col_memory_size == 0
+            || self.value_domain_size == 0
+            || self.matrix_nnz_padded == 0
+            || !self.row_memory_size.is_power_of_two()
+            || !self.col_memory_size.is_power_of_two()
+            || !self.value_domain_size.is_power_of_two()
+            || !self.matrix_nnz_padded.is_power_of_two()
+        {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+
+        match self.layout {
+            SparkLayoutKind::SharedUnion => {
+                let max_value_domain = self
+                    .matrix_nnz_padded
+                    .checked_mul(4)
+                    .ok_or(SpartanWhirError::InvalidR1csShape)?;
+                if self.value_domain_size < self.matrix_nnz_padded
+                    || self.value_domain_size > max_value_domain
+                {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+            SparkLayoutKind::Joint | SparkLayoutKind::PerMatrix => {
+                if self.value_domain_size
+                    != self
+                        .matrix_nnz_padded
+                        .checked_mul(4)
+                        .ok_or(SpartanWhirError::InvalidR1csShape)?
+                {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn verifier_operation_report(
+        &self,
+        extension_dimension: usize,
+    ) -> Result<SparkVerifierOperationReport, SpartanWhirError> {
+        self.validate()?;
+        spark_verifier_operation_report(
+            self.layout,
+            0,
+            0,
             self.value_domain_size,
             self.matrix_nnz_padded,
             self.row_memory_size,
@@ -1835,8 +1912,20 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    validate_table_metadata(tables)?;
-    observe_spark_memory_context::<EF, C>(tables, challenger)?;
+    verify_spark_batched_memory_product_claims_with_metadata(&tables.metadata(), proof, challenger)
+}
+
+pub fn verify_spark_batched_memory_product_claims_with_metadata<EF, C>(
+    metadata: &SparkTableMetadata,
+    proof: &SparkBatchedMemoryProductsProof<EF>,
+    challenger: &mut C,
+) -> Result<SparkBatchedMemoryProductsLeafClaims<EF>, SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+{
+    metadata.validate()?;
+    observe_spark_memory_metadata::<EF, C>(metadata, challenger)?;
     let beta = challenger.sample_algebra_element::<EF>();
     let gamma = challenger.sample_algebra_element::<EF>();
     if proof.products.beta != beta || proof.products.gamma != gamma {
@@ -1864,14 +1953,14 @@ where
         &proof.proof_ops,
         &ops_roots,
         &proof.proof_ops.dotproduct_claims,
-        tables.value_domain_size,
+        metadata.value_domain_size,
         challenger,
     )?;
     let mem_claims = verify_spark_batched_product(
         &proof.proof_mem,
         &mem_roots,
         &[],
-        tables.row_memory_size.max(tables.col_memory_size),
+        metadata.row_memory_size.max(metadata.col_memory_size),
         challenger,
     )?;
 
@@ -2135,11 +2224,14 @@ where
             .zip(&coeffs)
             .fold(EF::ZERO, |acc, (&claim, &coeff)| acc + claim * coeff);
 
-        let child_layers = trees
-            .iter()
-            .map(|tree| tree[child_layer_index].as_slice())
-            .collect::<Vec<_>>();
-        let (mut product_lefts, mut product_rights) = split_product_child_layers(&child_layers)?;
+        let (mut product_lefts, mut product_rights) = {
+            let _profile = profile_detail_scope("spark_batched_product_split_layer");
+            let child_layers = trees
+                .iter()
+                .map(|tree| tree[child_layer_index].as_slice())
+                .collect::<Vec<_>>();
+            split_product_child_layers(&child_layers)?
+        };
         let (mut dotproduct_lefts, mut dotproduct_rights, mut dotproduct_weights) =
             if include_dotproducts {
                 let dotproducts = core::mem::take(&mut dotproducts);
@@ -2155,7 +2247,10 @@ where
             } else {
                 (Vec::new(), Vec::new(), Vec::new())
             };
-        let mut eq = EqPolynomial::evals_from_point(&parent_point);
+        let mut eq = {
+            let _profile = profile_detail_scope("spark_batched_product_eq_table");
+            EqPolynomial::evals_from_point_parallel(&parent_point)
+        };
         if product_lefts[0].len() != eq.len() {
             return Err(SpartanWhirError::InvalidRoundCount);
         }
@@ -2164,29 +2259,34 @@ where
         let mut alpha = Vec::with_capacity(parent_point.len());
         observe_sumcheck_claim::<F, EF, C>(challenger, claim);
         for _ in 0..parent_point.len() {
-            let round = compute_batched_product_round(
-                &eq,
-                &product_lefts,
-                &product_rights,
-                &dotproduct_lefts,
-                &dotproduct_rights,
-                &dotproduct_weights,
-                &coeffs,
-            )?;
+            let round = {
+                let _profile = profile_detail_scope("spark_batched_product_round_compute");
+                compute_batched_product_round(
+                    &eq,
+                    &product_lefts,
+                    &product_rights,
+                    &dotproduct_lefts,
+                    &dotproduct_rights,
+                    &dotproduct_weights,
+                    &coeffs,
+                )?
+            };
             challenger.observe_algebra_slice(&round.0);
             let challenge = challenger.sample_algebra_element::<EF>();
             claim = round.evaluate_at(challenge, claim);
             rounds.push(round);
             alpha.push(challenge);
 
-            bind_value_table(&mut eq, challenge)?;
-            bind_all_value_tables(&mut product_lefts, challenge)?;
-            bind_all_value_tables(&mut product_rights, challenge)?;
-            bind_all_value_tables(&mut dotproduct_lefts, challenge)?;
-            bind_all_value_tables(&mut dotproduct_rights, challenge)?;
-            bind_all_value_tables(&mut dotproduct_weights, challenge)?;
+            {
+                let _profile = profile_detail_scope("spark_batched_product_round_bind");
+                bind_value_table(&mut eq, challenge)?;
+                bind_all_value_tables(&mut product_lefts, challenge)?;
+                bind_all_value_tables(&mut product_rights, challenge)?;
+                bind_all_value_tables(&mut dotproduct_lefts, challenge)?;
+                bind_all_value_tables(&mut dotproduct_rights, challenge)?;
+                bind_all_value_tables(&mut dotproduct_weights, challenge)?;
+            }
         }
-
         let layer = batched_product_layer_from_bound_tables(
             rounds,
             &product_lefts,
@@ -2398,7 +2498,7 @@ fn split_product_child_layers<EF>(
     child_layers: &[&[EF]],
 ) -> Result<(Vec<Vec<EF>>, Vec<Vec<EF>>), SpartanWhirError>
 where
-    EF: Copy,
+    EF: Copy + Send + Sync,
 {
     let mut lefts = Vec::with_capacity(child_layers.len());
     let mut rights = Vec::with_capacity(child_layers.len());
@@ -2406,12 +2506,18 @@ where
         if child_layer.len() < 2 || !child_layer.len().is_power_of_two() {
             return Err(SpartanWhirError::InvalidPolynomialLength);
         }
-        let mut left = Vec::with_capacity(child_layer.len() / 2);
-        let mut right = Vec::with_capacity(child_layer.len() / 2);
-        for pair in child_layer.chunks_exact(2) {
-            left.push(pair[0]);
-            right.push(pair[1]);
-        }
+        let pair_count = child_layer.len() / 2;
+        let (left, right) = if should_parallelize_spark_round(pair_count) {
+            (0..pair_count)
+                .into_par_iter()
+                .map(|i| (child_layer[2 * i], child_layer[2 * i + 1]))
+                .unzip()
+        } else {
+            child_layer
+                .chunks_exact(2)
+                .map(|pair| (pair[0], pair[1]))
+                .unzip()
+        };
         lefts.push(left);
         rights.push(right);
     }
@@ -3149,11 +3255,28 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
+    observe_spark_memory_metadata::<EF, C>(&tables.metadata(), challenger)
+}
+
+fn observe_spark_memory_metadata<EF, C>(
+    metadata: &SparkTableMetadata,
+    challenger: &mut C,
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+{
+    let layout_tag = match metadata.layout {
+        SparkLayoutKind::Joint => 0,
+        SparkLayoutKind::SharedUnion => 1,
+        SparkLayoutKind::PerMatrix => 2,
+    };
     let context = [
-        EF::from(usize_to_field(tables.row_memory_size)?),
-        EF::from(usize_to_field(tables.col_memory_size)?),
-        EF::from(usize_to_field(tables.value_domain_size)?),
-        EF::from(usize_to_field(tables.matrix_nnz_padded)?),
+        EF::from(usize_to_field(metadata.row_memory_size)?),
+        EF::from(usize_to_field(metadata.col_memory_size)?),
+        EF::from(usize_to_field(metadata.value_domain_size)?),
+        EF::from(usize_to_field(metadata.matrix_nnz_padded)?),
+        EF::from(usize_to_field(layout_tag)?),
     ];
     challenger.observe_algebra_slice(&context);
     Ok(())
@@ -4331,6 +4454,33 @@ mod tests {
         assert_eq!(report.per_matrix.setup_commitments, 2);
         assert_eq!(report.per_matrix.per_proof_commitments, 1);
         assert!(report.joint.wasted_value_slot_ratio_ppm > 0);
+    }
+
+    #[test]
+    fn table_metadata_preserves_verifier_dimensions() {
+        let shape = shape_with_entries(
+            4,
+            5,
+            vec![entry(0, 0, 1), entry(1, 1, 2)],
+            vec![entry(0, 0, 3)],
+            vec![entry(2, 2, 4)],
+        );
+        let tables = preprocess_spark_tables(&shape).expect("preprocessing succeeds");
+        let metadata = tables.metadata();
+
+        assert_eq!(metadata.layout, tables.layout);
+        assert_eq!(metadata.row_memory_size, tables.row_memory_size);
+        assert_eq!(metadata.col_memory_size, tables.col_memory_size);
+        assert_eq!(metadata.value_domain_size, tables.value_domain_size);
+        assert_eq!(metadata.matrix_nnz_padded, tables.matrix_nnz_padded);
+        metadata.validate().expect("metadata validates");
+
+        let mut malformed = metadata;
+        malformed.value_domain_size = 1;
+        assert_eq!(
+            malformed.validate(),
+            Err(SpartanWhirError::InvalidR1csShape)
+        );
     }
 
     #[test]

@@ -1283,6 +1283,7 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> serde_json::Value {
             matrix_closing: MatrixClosingMode::DirectSparse,
             security,
             whir_params,
+            spark_whir_params: None,
             ell_zk: args.zk_ell,
             mask_log_inv_rate: args.zk_mask_log_inv_rate,
         }),

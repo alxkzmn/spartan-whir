@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_POW_BITS = 22
+DEFAULT_SECURITY_BITS = 123
 DEFAULT_ZK_ELL_SWEEP = [3, 4, 8, 16]
 DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP = [1, 2, 3, 4, 5]
 DEFAULT_VALIDATION_TOLERANCE = 0.20
@@ -39,6 +40,8 @@ def main() -> None:
     parser.add_argument("--out-report", required=True, help="Ranked report JSON path")
     parser.add_argument("--out-config", required=True, help="Selected PoseidonSetupConfig JSON path")
     parser.add_argument("--max-pow-bits", type=int, default=DEFAULT_MAX_POW_BITS)
+    parser.add_argument("--security-bits", type=int, default=DEFAULT_SECURITY_BITS)
+    parser.add_argument("--merkle-security-bits", type=int)
     parser.add_argument("--constraint-work", type=int, help="Circuit constraint count for full-prover scoring")
     parser.add_argument("--case-label", help="Optional case label copied into report rows")
     parser.add_argument("--cargo", default="cargo", help="Cargo binary used when --num-variables is set")
@@ -107,6 +110,8 @@ def main() -> None:
             parse_int_list(args.zk_ell_values),
             parse_int_list(args.zk_mask_log_inv_rate_values),
             args.features,
+            args.security_bits,
+            args.merkle_security_bits,
         )
     )
     apply_case_metrics(candidates, args.constraint_work, args.case_label)
@@ -637,6 +642,8 @@ def generate_candidates(
     zk_ell_values: list[int] | None,
     zk_mask_log_inv_rate_values: list[int] | None,
     features: str = "parallel",
+    security_bits: int = DEFAULT_SECURITY_BITS,
+    merkle_security_bits: int | None = None,
 ) -> dict[str, Any]:
     num_outer_rounds = (
         max(0, constraint_work - 1).bit_length()
@@ -654,6 +661,8 @@ def generate_candidates(
             None,
             None,
             features,
+            security_bits,
+            merkle_security_bits,
         )
     ell_values = zk_ell_values or DEFAULT_ZK_ELL_SWEEP
     mask_rate_values = zk_mask_log_inv_rate_values or DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP
@@ -671,6 +680,8 @@ def generate_candidates(
                     zk_ell,
                     zk_mask_log_inv_rate,
                     features,
+                    security_bits,
+                    merkle_security_bits,
                 )
             )
     merged = dict(dumps[0])
@@ -701,6 +712,8 @@ def generate_candidate_dump(
     zk_ell: int | None,
     zk_mask_log_inv_rate: int | None,
     features: str,
+    security_bits: int,
+    merkle_security_bits: int | None,
 ) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
@@ -721,6 +734,10 @@ def generate_candidate_dump(
         field,
         "--max-pow-bits",
         str(max_pow_bits),
+        "--security-bits",
+        str(security_bits),
+        "--merkle-security-bits",
+        str(merkle_security_bits if merkle_security_bits is not None else security_bits),
         "--proof-mode",
         proof_mode,
         "--num-outer-rounds",

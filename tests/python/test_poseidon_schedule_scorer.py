@@ -443,9 +443,13 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
             zk_ell,
             zk_mask_log_inv_rate,
             features,
+            security_bits,
+            merkle_security_bits,
         ):
             calls.append((zk_ell, zk_mask_log_inv_rate))
             self.assertEqual(features, "parallel")
+            self.assertEqual(security_bits, 123)
+            self.assertIsNone(merkle_security_bits)
             return {
                 "schema_version": 2,
                 "proof_mode": proof_mode,

@@ -10,7 +10,7 @@ use spartan_whir::{
     PoseidonSpartanProtocol, PoseidonZkProvingKey, PoseidonZkSetupConfig,
     PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, QuarticBinExtension as EF, SparkWhirParams,
     SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig, WhirFoldingSchedule, WhirParams,
-    WhirPcsConfig, MAX_SECURITY_BITS,
+    WhirPcsConfig, ZkMatrixClosingProof, MAX_SECURITY_BITS,
 };
 
 type PoseidonEngineForTest = PoseidonQuarticEngine;
@@ -98,6 +98,7 @@ fn poseidon_zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
         whir_params: common::phase3_whir_params(),
+        spark_whir_params: None,
         ell_zk: spartan_whir::DEFAULT_ZK_ELL,
         mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
     }
@@ -379,20 +380,286 @@ fn poseidon_direct_full_zk_seed_controls_fixed_witness_transcript() {
 }
 
 #[test]
-fn poseidon_full_zk_spark_is_rejected_at_setup() {
+fn poseidon_full_zk_spark_roundtrip() {
     let fixture = fixture();
-    let error = match setup_poseidon_zk::<EF>(
-        fixture.shape,
+    let (pk, vk) = setup_poseidon_zk::<EF>(
+        fixture.shape.clone(),
         poseidon_zk_config(MatrixClosingMode::Spark),
-    ) {
-        Ok(_) => panic!("full-ZK Spark setup must be rejected"),
-        Err(error) => error,
-    };
+    )
+    .expect("full-ZK SPARK setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = ZkProtocol::prove(
+        &pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut prover_challenger,
+    )
+    .expect("full-ZK SPARK proof succeeds");
+    assert_eq!(proof.matrix_closing.mode(), MatrixClosingMode::Spark);
 
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    ZkProtocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
+        .expect("full-ZK SPARK proof verifies");
+}
+
+fn verify_zk_rejects(
+    vk: &PoseidonZkVerifyingKey<EF>,
+    instance: &spartan_whir::R1csInstance<F, spartan_whir::plonky3_whir_pcs::PoseidonCommitment>,
+    proof: &spartan_whir::ZkSpartanProof<EF>,
+) {
+    let mut challenger = spartan_whir::poseidon_challenger();
+    assert!(ZkProtocol::verify(vk, instance, proof, &mut challenger).is_err());
+}
+
+fn spark_closing_mut(
+    proof: &mut spartan_whir::ZkSpartanProof<EF>,
+) -> &mut spartan_whir::ZkSparkClosingProof<EF> {
+    let ZkMatrixClosingProof::Spark(closing) = &mut proof.matrix_closing else {
+        panic!("expected SPARK closing payload");
+    };
+    closing
+}
+
+#[test]
+fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
+    let fixture = generate_satisfiable_fixture(&SyntheticR1csConfig {
+        target_log2_witness_poly: 4,
+        num_constraints: 8,
+        num_io: 1,
+        a_terms_per_constraint: 3,
+        b_terms_per_constraint: 3,
+        seed: 0x5A4A_7A4E,
+    })
+    .expect("fixture generation succeeds");
+    let (pk, vk) =
+        setup_poseidon_zk::<EF>(fixture.shape, poseidon_zk_config(MatrixClosingMode::Spark))
+            .expect("full-ZK SPARK setup succeeds");
+    let mut prover = spartan_whir::poseidon_challenger();
+    let (instance, proof) =
+        ZkProtocol::prove(&pk, &fixture.public_inputs, &fixture.witness, &mut prover)
+            .expect("full-ZK SPARK proof succeeds");
+
+    let mut tampered = proof.clone();
+    spark_closing_mut(&mut tampered)
+        .spark_products
+        .proof_ops
+        .layers
+        .iter_mut()
+        .find_map(|layer| layer.rounds.first_mut())
+        .expect("SPARK product proof has a sumcheck round")
+        .0[0] += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    spark_closing_mut(&mut tampered).spark_products.matrix_evals[0] += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    spark_closing_mut(&mut tampered)
+        .spark_products
+        .products
+        .row
+        .read_root += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    let closing = spark_closing_mut(&mut tampered);
+    let mut roots = closing
+        .spark_fixed_openings
+        .value_commitment
+        .roots()
+        .to_vec();
+    roots[0][0] += F::ONE;
+    closing.spark_fixed_openings.value_commitment = p3_symmetric::MerkleCap::new(roots);
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    let closing = spark_closing_mut(&mut tampered);
+    let mut roots = closing.spark_read_openings.erow_commitment.roots().to_vec();
+    roots[0][0] += F::ONE;
+    closing.spark_read_openings.erow_commitment = p3_symmetric::MerkleCap::new(roots);
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    spark_closing_mut(&mut tampered)
+        .spark_fixed_openings
+        .evals
+        .val_a_low += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    *spark_closing_mut(&mut tampered)
+        .spark_read_openings
+        .erow_low_evals
+        .first_mut()
+        .expect("read-table opening has a low evaluation") += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    *spark_closing_mut(&mut tampered)
+        .spark_fixed_openings
+        .value_proof
+        .initial_ood_answers
+        .first_mut()
+        .expect("fixed-table WHIR proof has an initial OOD answer") += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof.clone();
+    *spark_closing_mut(&mut tampered)
+        .spark_read_openings
+        .erow_proof
+        .initial_ood_answers
+        .first_mut()
+        .expect("read-table WHIR proof has an initial OOD answer") += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+
+    let mut tampered = proof;
+    tampered.pcs_proof.sumchecks[0].mu_tilde += EF::ONE;
+    verify_zk_rejects(&vk, &instance, &tampered);
+}
+
+#[test]
+fn poseidon_full_zk_rejects_matrix_closing_kind_mismatch() {
+    let fixture = fixture();
+    let (direct_pk, direct_vk) = setup_poseidon_zk::<EF>(
+        fixture.shape.clone(),
+        poseidon_zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("direct setup succeeds");
+    let (spark_pk, spark_vk) =
+        setup_poseidon_zk::<EF>(fixture.shape, poseidon_zk_config(MatrixClosingMode::Spark))
+            .expect("SPARK setup succeeds");
+    let mut direct_prover = spartan_whir::poseidon_challenger();
+    let (direct_instance, direct_proof) = ZkProtocol::prove(
+        &direct_pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut direct_prover,
+    )
+    .expect("direct proof succeeds");
+    let mut spark_prover = spartan_whir::poseidon_challenger();
+    let (spark_instance, spark_proof) = ZkProtocol::prove(
+        &spark_pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut spark_prover,
+    )
+    .expect("SPARK proof succeeds");
+
+    let mut verifier = spartan_whir::poseidon_challenger();
     assert_eq!(
-        error,
-        SpartanWhirError::UnsupportedFullZkMatrixClosing(MatrixClosingMode::Spark)
+        ZkProtocol::verify(&direct_vk, &spark_instance, &spark_proof, &mut verifier),
+        Err(SpartanWhirError::ProofKindMismatch)
     );
+    let mut verifier = spartan_whir::poseidon_challenger();
+    assert_eq!(
+        ZkProtocol::verify(&spark_vk, &direct_instance, &direct_proof, &mut verifier),
+        Err(SpartanWhirError::ProofKindMismatch)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_spark_seed_controls_transcript() {
+    let fixture = fixture();
+    let (pk, vk) =
+        setup_poseidon_zk::<EF>(fixture.shape, poseidon_zk_config(MatrixClosingMode::Spark))
+            .expect("full-ZK SPARK setup succeeds");
+    let mut first_rng = StdRng::seed_from_u64(0x5A4A_0001);
+    let mut replay_rng = StdRng::seed_from_u64(0x5A4A_0001);
+    let mut other_rng = StdRng::seed_from_u64(0x5A4A_0002);
+    let first = pk
+        .prove_with_rng(
+            fixture.witness.clone(),
+            fixture.public_inputs.clone(),
+            &mut first_rng,
+        )
+        .expect("seeded proof succeeds");
+    let replay = pk
+        .prove_with_rng(
+            fixture.witness.clone(),
+            fixture.public_inputs.clone(),
+            &mut replay_rng,
+        )
+        .expect("replayed proof succeeds");
+    let other = pk
+        .prove_with_rng(fixture.witness, fixture.public_inputs, &mut other_rng)
+        .expect("second seeded proof succeeds");
+    assert_eq!(
+        bincode::serialize(&first).expect("first proof serializes"),
+        bincode::serialize(&replay).expect("replayed proof serializes")
+    );
+    assert_ne!(
+        bincode::serialize(&first).expect("first proof serializes"),
+        bincode::serialize(&other).expect("other proof serializes")
+    );
+    vk.verify(&first).expect("first proof verifies");
+    vk.verify(&other).expect("other proof verifies");
+}
+
+#[test]
+fn poseidon_full_zk_spark_rejects_invalid_table_schedule_at_setup() {
+    let fixture = fixture();
+    let mut config = poseidon_zk_config(MatrixClosingMode::Spark);
+    let invalid = WhirParams {
+        folding_factor: 0,
+        ..common::phase3_whir_params()
+    };
+    config.spark_whir_params = Some(SparkWhirParams {
+        fixed_value: invalid.clone(),
+        fixed_audit: invalid.clone(),
+        read: invalid,
+    });
+    assert!(setup_poseidon_zk::<EF>(fixture.shape, config).is_err());
+}
+
+#[test]
+fn poseidon_full_zk_spark_rejects_schedule_for_wrong_table_shape_at_setup() {
+    let fixture = generate_satisfiable_fixture(&SyntheticR1csConfig {
+        target_log2_witness_poly: 8,
+        num_constraints: 64,
+        num_io: 1,
+        a_terms_per_constraint: 3,
+        b_terms_per_constraint: 3,
+        seed: 0x5A4A_5C4E,
+    })
+    .expect("fixture generation succeeds");
+    let mut config = poseidon_zk_config(MatrixClosingMode::Spark);
+    let valid = common::phase3_whir_params();
+    let mismatched = WhirParams {
+        folding_factor: 1,
+        folding_schedule: Some(WhirFoldingSchedule::PerRound(vec![1])),
+        ..valid.clone()
+    };
+    config.spark_whir_params = Some(SparkWhirParams {
+        fixed_value: mismatched,
+        fixed_audit: valid.clone(),
+        read: valid,
+    });
+
+    assert!(matches!(
+        setup_poseidon_zk::<EF>(fixture.shape, config),
+        Err(SpartanWhirError::InvalidConfig(
+            InvalidConfigReason::InvalidFoldingSchedule { .. }
+        ))
+    ));
+}
+
+#[test]
+fn poseidon_full_zk_spark_rejects_unattainable_composed_security() {
+    let fixture = fixture();
+    let mut config = poseidon_zk_config(MatrixClosingMode::Spark);
+    config.security.security_level_bits = MAX_SECURITY_BITS;
+    config.security.merkle_security_bits = MAX_SECURITY_BITS;
+    let error = setup_poseidon_zk::<OcticBinExtension>(fixture.shape, config)
+        .err()
+        .expect("composed target must be rejected");
+    assert!(matches!(
+        error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
+            requested_bits: MAX_SECURITY_BITS,
+            ..
+        })
+    ));
 }
 
 #[test]

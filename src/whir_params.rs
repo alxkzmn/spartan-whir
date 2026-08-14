@@ -144,7 +144,7 @@ pub fn recommended_octic_schedule(num_variables: usize) -> WhirFoldingSchedule {
 /// Plain-WHIR octic parameters from the historical schedule table.
 ///
 /// These parameters are not checked against full-ZK mask slack limits. Use
-/// [`recommended_octic_zk_whir_params`] for the full-ZK DirectSparse protocol.
+/// [`recommended_octic_zk_whir_params`] for the full-ZK witness commitment.
 pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
     let schedule = recommended_octic_schedule(num_variables);
     let folding_factor = schedule.first_round();
@@ -260,6 +260,17 @@ fn compute_number_of_rounds(num_variables: usize, schedule: &WhirFoldingSchedule
     compute_folding_schedule(num_variables, schedule)
         .len()
         .saturating_sub(1)
+}
+
+pub(crate) fn whir_folding_round_count(
+    num_variables: usize,
+    params: &WhirParams,
+) -> Result<usize, crate::SpartanWhirError> {
+    let schedule = params.effective_folding_schedule();
+    if !schedule.is_valid_for(num_variables) {
+        return Err(crate::SpartanWhirError::invalid_config());
+    }
+    Ok(compute_number_of_rounds(num_variables, &schedule))
 }
 
 fn compute_folding_schedule(num_variables: usize, schedule: &WhirFoldingSchedule) -> Vec<usize> {

@@ -14,11 +14,10 @@ use serde_json::Value;
 use spartan_whir::{
     engine::{ExtField, F},
     import_paths, import_r1cs_path, setup_poseidon_zk, validate_satisfaction,
-    LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
-    MatrixClosingMode, MlePcs, Plonky3WhirPcs, PoseidonChallenger, PoseidonEngine,
-    PoseidonProvingKey, PoseidonSetupConfig, PoseidonSpartanProtocol, PoseidonVerifyingKey,
-    PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
-    QuarticBinExtension, R1csShape, R1csWitness,
+    LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn, MlePcs,
+    Plonky3WhirPcs, PoseidonChallenger, PoseidonEngine, PoseidonProvingKey, PoseidonSetupConfig,
+    PoseidonSpartanProtocol, PoseidonVerifyingKey, PoseidonWitnessGenerator, PoseidonZkProvingKey,
+    PoseidonZkSetupConfig, PoseidonZkVerifyingKey, QuarticBinExtension, R1csShape, R1csWitness,
 };
 
 mod poseidon_schedule_support;
@@ -368,15 +367,6 @@ enum RowSetupConfig {
     FullZk(PoseidonZkSetupConfig),
 }
 
-impl RowSetupConfig {
-    fn matrix_closing(&self) -> MatrixClosingMode {
-        match self {
-            Self::NoZk(config) => config.matrix_closing,
-            Self::FullZk(config) => config.matrix_closing,
-        }
-    }
-}
-
 struct PreparedFullZkRow<Ext>
 where
     Ext: ExtField,
@@ -492,11 +482,6 @@ fn measure_rows(
                     .map_err(|err| format!("{label}: invalid full-ZK setup_config: {err}"))?,
             ),
         };
-        if setup_config.matrix_closing() != MatrixClosingMode::DirectSparse {
-            return Err(format!(
-                "{label}: heldout measurement only supports DirectSparse"
-            ));
-        }
         let row_to_measure = RowToMeasure {
             original_index: index,
             row,

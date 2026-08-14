@@ -61,6 +61,7 @@ pub struct PlainParsedCommitment<Ext, Commitment> {
 }
 
 /// Plain WHIR PCS used by the no-ZK Spartan protocol.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Plonky3WhirPcs;
 
 /// Marker for the hiding WHIR relation backend used by the full-ZK protocol.
@@ -872,13 +873,19 @@ pub(crate) fn build_poseidon_full_zk_pcs<Ext>(
     config: &ZkWhirPcsConfig,
     num_outer_rounds: usize,
     num_inner_rounds: usize,
+    requested_security_bits: u32,
 ) -> Result<(PoseidonHidingPcs<Ext>, [MaskGroupShape; 3]), SpartanWhirError>
 where
     Ext: ExtField,
     StandardUniform: Distribution<Ext>,
 {
     config.validate()?;
-    validate_full_zk_security::<Ext>(config, num_outer_rounds, num_inner_rounds)?;
+    validate_full_zk_security::<Ext>(
+        config,
+        num_outer_rounds,
+        num_inner_rounds,
+        requested_security_bits,
+    )?;
 
     let relation_security_level = config
         .base
@@ -895,6 +902,7 @@ fn validate_full_zk_security<Ext>(
     config: &ZkWhirPcsConfig,
     num_outer_rounds: usize,
     num_inner_rounds: usize,
+    requested_security_bits: u32,
 ) -> Result<(), SpartanWhirError>
 where
     Ext: ExtField,
@@ -925,17 +933,14 @@ where
         })
         .and_then(|terms| terms.checked_add(4))
         .ok_or_else(SpartanWhirError::invalid_config)?;
-    let required_bits = config
-        .base
-        .security
-        .security_level_bits
+    let required_bits = requested_security_bits
         .checked_add(FULL_ZK_SECURITY_SLACK_BITS)
         .ok_or_else(SpartanWhirError::invalid_config)?;
     let required_order = BigUint::from(soundness_error_terms) << required_bits as usize;
     if Ext::order() < required_order {
         return Err(SpartanWhirError::invalid_config_reason(
             InvalidConfigReason::FullZkSecurityExceedsExtensionField {
-                requested_bits: config.base.security.security_level_bits,
+                requested_bits: requested_security_bits,
                 extension_field_bits: Ext::bits(),
                 soundness_error_terms,
             },
@@ -1328,9 +1333,13 @@ mod pcs_transcript_tests {
         };
         let plain = build_poseidon_plain_pcs::<OcticBinExtension>(&base)
             .expect("plain PCS config is valid");
-        let (hiding, relation_shapes) =
-            build_poseidon_full_zk_pcs::<OcticBinExtension>(&zk, 19, 21)
-                .expect("hiding relation PCS config is valid");
+        let (hiding, relation_shapes) = build_poseidon_full_zk_pcs::<OcticBinExtension>(
+            &zk,
+            19,
+            21,
+            zk.base.security.security_level_bits,
+        )
+        .expect("hiding relation PCS config is valid");
 
         let mut plain_challenger = crate::poseidon_challenger();
         observe_poseidon_plain_domain_separator(&plain, &mut plain_challenger);

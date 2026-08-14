@@ -1,4 +1,21 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityBoundComponent {
+    ExtensionField,
+    WhirArguments,
+    PoseidonCommitments,
+}
+
+impl core::fmt::Display for SecurityBoundComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ExtensionField => write!(f, "extension field"),
+            Self::WhirArguments => write!(f, "WHIR arguments"),
+            Self::PoseidonCommitments => write!(f, "Poseidon commitments"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidConfigReason {
     Generic,
     ZeroFoldingFactor,
@@ -45,6 +62,12 @@ pub enum InvalidConfigReason {
         extension_field_bits: usize,
         soundness_error_terms: usize,
     },
+    ComposedSecurityUnavailable {
+        requested_bits: u32,
+        attainable_bits: u32,
+        dominant_component: SecurityBoundComponent,
+    },
+    ComposedSecurityBudgetOverflow,
     MissingDerivedProverData,
 }
 
@@ -126,6 +149,17 @@ impl core::fmt::Display for InvalidConfigReason {
                 f,
                 "full-ZK target of {requested_bits} bits is not supported by the {extension_field_bits}-bit extension field with {soundness_error_terms} algebraic error terms"
             ),
+            Self::ComposedSecurityUnavailable {
+                requested_bits,
+                attainable_bits,
+                dominant_component,
+            } => write!(
+                f,
+                "composed target of {requested_bits} bits exceeds the attainable {attainable_bits} bits limited by {dominant_component}"
+            ),
+            Self::ComposedSecurityBudgetOverflow => {
+                write!(f, "composed security budget arithmetic overflowed")
+            }
             Self::MissingDerivedProverData => write!(f, "derived prover data is missing"),
         }
     }
@@ -134,7 +168,6 @@ impl core::fmt::Display for InvalidConfigReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpartanWhirError {
     Unimplemented(&'static str),
-    UnsupportedFullZkMatrixClosing(crate::MatrixClosingMode),
     InvalidR1csShape,
     InvalidWitnessLength,
     InvalidPublicInputLength,
@@ -145,6 +178,7 @@ pub enum SpartanWhirError {
     MerkleSecurityAboveMaximum,
     TranscriptMismatch,
     SumcheckFailed,
+    SparkMatrixEvaluationMismatch,
     PcsVerificationFailed,
     ProofDecodeFailed,
     ProofKindMismatch,
@@ -183,9 +217,6 @@ impl core::fmt::Display for SpartanWhirError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unimplemented(where_) => write!(f, "unimplemented: {where_}"),
-            Self::UnsupportedFullZkMatrixClosing(mode) => {
-                write!(f, "full ZK does not support {mode:?} matrix closing")
-            }
             Self::InvalidR1csShape => write!(f, "invalid R1CS shape"),
             Self::InvalidWitnessLength => write!(f, "invalid witness length"),
             Self::InvalidPublicInputLength => write!(f, "invalid public input length"),
@@ -198,6 +229,12 @@ impl core::fmt::Display for SpartanWhirError {
             }
             Self::TranscriptMismatch => write!(f, "transcript mismatch"),
             Self::SumcheckFailed => write!(f, "sumcheck verification failed"),
+            Self::SparkMatrixEvaluationMismatch => {
+                write!(
+                    f,
+                    "SPARK matrix evaluation does not match the inner sumcheck"
+                )
+            }
             Self::PcsVerificationFailed => write!(f, "PCS verification failed"),
             Self::ProofDecodeFailed => write!(f, "proof decode failed"),
             Self::ProofKindMismatch => write!(f, "proof kind mismatch"),

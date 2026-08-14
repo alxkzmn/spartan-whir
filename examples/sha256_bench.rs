@@ -13,10 +13,10 @@ use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
     compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_whir_params,
-    MatrixClosingMode, OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator,
-    PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, R1csShape,
-    SecurityConfig, SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanSnarkConfig,
-    WhirFoldingSchedule, WhirParams,
+    recommended_octic_zk_whir_params, MatrixClosingMode, OcticBinExtension,
+    PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig,
+    PoseidonZkSpartanProtocol, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
+    SparkWhirParams, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
 };
 use spartan_whir::{
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
@@ -30,7 +30,7 @@ const POSEIDON_DIRECT_RS_REDUCTION_FACTOR: usize = 5;
 const POSEIDON_DIRECT_REST_FOLDING_FACTOR: usize = 6;
 const POSEIDON_DIRECT_ROUND_LOG_INV_RATES: &[usize] = &[4];
 const POSEIDON_DIRECT_POW_BITS: u32 = 8;
-const POSEIDON_SECURITY_BITS: u32 = 123;
+const DEFAULT_POSEIDON_SECURITY_BITS: u32 = 123;
 
 #[derive(Debug)]
 struct ArtifactPaths {
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let modes = parse_modes()?;
     let repeats = parse_repeats()?;
 
-    println!("security: {POSEIDON_SECURITY_BITS}-bit JohnsonBound");
+    println!("security: {}-bit JohnsonBound", benchmark_security_bits());
     println!("poseidon_direct_schedule: {POSEIDON_DIRECT_SCHEDULE}");
     println!("sizes: {:?}", sizes);
     println!("proof_modes: {:?}", proof_modes);
@@ -184,8 +184,15 @@ fn run_size(
             None,
         )
     };
+    let spark_full_zk_config = protocol_config(
+        MatrixClosingMode::Spark,
+        recommended_octic_zk_whir_params(padded_shape.num_vars.ilog2() as usize),
+        None,
+    );
     let spark_independent_config =
-        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size)?;
+        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size, false)?;
+    let spark_independent_full_zk_config =
+        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size, true)?;
 
     for sample in 0..repeats {
         if repeats > 1 {
@@ -212,22 +219,34 @@ fn run_size(
                             )?;
                         }
                     }
-                    BenchMode::Spark => prove_and_verify(
-                        proof_mode,
-                        "spark",
-                        &spark_config,
-                        &shape,
-                        &loaded_generator.generator,
-                        &input_binary,
-                    )?,
-                    BenchMode::SparkIndependent => prove_and_verify(
-                        proof_mode,
-                        "spark_independent_whir_schedules",
-                        &spark_independent_config,
-                        &shape,
-                        &loaded_generator.generator,
-                        &input_binary,
-                    )?,
+                    BenchMode::Spark => {
+                        let config = match proof_mode {
+                            ProofMode::NoZk => &spark_config,
+                            ProofMode::FullZk => &spark_full_zk_config,
+                        };
+                        prove_and_verify(
+                            proof_mode,
+                            "spark",
+                            config,
+                            &shape,
+                            &loaded_generator.generator,
+                            &input_binary,
+                        )?;
+                    }
+                    BenchMode::SparkIndependent => {
+                        let config = match proof_mode {
+                            ProofMode::NoZk => &spark_independent_config,
+                            ProofMode::FullZk => &spark_independent_full_zk_config,
+                        };
+                        prove_and_verify(
+                            proof_mode,
+                            "spark_independent_whir_schedules",
+                            config,
+                            &shape,
+                            &loaded_generator.generator,
+                            &input_binary,
+                        )?;
+                    }
                 }
             }
         }
@@ -707,9 +726,10 @@ fn protocol_config(
     whir_params: WhirParams,
     spark_whir_params: Option<SparkWhirParams>,
 ) -> SpartanSnarkConfig {
+    let security_bits = benchmark_security_bits();
     let security = SecurityConfig {
-        security_level_bits: POSEIDON_SECURITY_BITS,
-        merkle_security_bits: POSEIDON_SECURITY_BITS,
+        security_level_bits: security_bits,
+        merkle_security_bits: security_bits,
         soundness_assumption: SoundnessAssumption::JohnsonBound,
     };
     SpartanSnarkConfig {
@@ -720,11 +740,24 @@ fn protocol_config(
     }
 }
 
+fn benchmark_security_bits() -> u32 {
+    match env::var("SHA256_BENCH_SECURITY_BITS") {
+        Ok(raw) => raw
+            .parse()
+            .unwrap_or_else(|err| panic!("SHA256_BENCH_SECURITY_BITS must be a u32: {err}")),
+        Err(env::VarError::NotPresent) => DEFAULT_POSEIDON_SECURITY_BITS,
+        Err(env::VarError::NotUnicode(_)) => {
+            panic!("SHA256_BENCH_SECURITY_BITS must be valid UTF-8")
+        }
+    }
+}
+
 fn full_zk_setup_config(config: &SpartanSnarkConfig) -> PoseidonZkSetupConfig {
     PoseidonZkSetupConfig {
         matrix_closing: config.matrix_closing,
         security: config.security,
         whir_params: config.whir_params.clone(),
+        spark_whir_params: config.spark_whir_params.clone(),
         ell_zk: env_usize("SHA256_BENCH_ZK_ELL", spartan_whir::DEFAULT_ZK_ELL),
         mask_log_inv_rate: env_usize(
             "SHA256_BENCH_ZK_MASK_LOG_INV_RATE",
@@ -885,6 +918,7 @@ fn legacy_spark_whir_params(folding_factor: usize) -> WhirParams {
 fn independent_spark_protocol_config(
     padded_shape: &R1csShape<F>,
     value_domain_size: usize,
+    full_zk: bool,
 ) -> Result<SpartanSnarkConfig, Box<dyn Error>> {
     let witness_vars = log2_power_of_two(padded_shape.num_vars)?;
     let value_vars = log2_power_of_two(value_domain_size)?;
@@ -906,7 +940,11 @@ fn independent_spark_protocol_config(
         "spark_independent_vars: witness={witness_vars} fixed_value={fixed_value_vars} fixed_audit={fixed_audit_vars} read={read_vars}"
     );
 
-    let witness = recommended_octic_whir_params(witness_vars);
+    let witness = if full_zk {
+        recommended_octic_zk_whir_params(witness_vars)
+    } else {
+        recommended_octic_whir_params(witness_vars)
+    };
     let fixed_value = recommended_octic_whir_params(fixed_value_vars);
     let fixed_audit = recommended_octic_whir_params(fixed_audit_vars);
     let read = recommended_octic_whir_params(read_vars);

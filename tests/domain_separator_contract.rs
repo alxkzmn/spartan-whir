@@ -56,7 +56,13 @@ fn no_zk_and_full_zk_separators_share_only_the_canonical_body() {
     let security = SecurityConfig::default();
     let whir = WhirParams::default();
     let no_zk = DomainSeparator::new(&shape, &security, &whir);
-    let full_zk = DomainSeparator::new_full_zk(&shape, &security, &whir);
+    let full_zk = DomainSeparator::new_full_zk(
+        &shape,
+        &security,
+        &whir,
+        MatrixClosingMode::DirectSparse,
+        None,
+    );
 
     let expected_full_zk = [
         b"spartan-whir-full-zk-v0".as_slice(),
