@@ -397,14 +397,19 @@ the default 16-proof corpus:
 | Variant              | Setup (ms) | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
 | -------------------- | ---------: | -------------------: | ----------: | -----------------: |
 | No-ZK DirectSparse   |     56.439 |               57.174 |      85.879 |            479,039 |
-| No-ZK Spark          |  2,120.300 |            4,186.900 |     385.550 |          4,403,087 |
+| No-ZK Spark          |  2,120.300 |            3,626.900 |     385.550 |          4,403,087 |
 | Full-ZK DirectSparse |     59.717 |               82.254 |     112.500 |          1,566,588 |
-| Full-ZK Spark        |  2,192.000 |            4,360.800 |     414.790 |          5,539,708 |
+| Full-ZK Spark        |  2,192.000 |            3,524.300 |     414.790 |          5,539,708 |
 
 For DirectSparse, full ZK adds 43.9% to witness generation plus proving and
-31.0% to verification. Spark proving is dominated by matrix closing; full ZK
-adds 4.2% to Spark witness generation plus proving and 7.6% to verification.
-Spark verifying keys carry validated table metadata, so
+31.0% to verification. The SPARK proving estimates above come from separate
+optimization snapshots and do not establish a ZK overhead: a no-ZK-first run
+measured 3,911.9 ms versus 4,029.9 ms, while reversing the order measured
+3,859.6 ms versus 4,093.5 ms for full ZK and no ZK respectively. The sign
+reverses with benchmark order, so no SPARK proving overhead is distinguishable
+from system drift in these measurements. Full ZK adds 7.6% to Spark
+verification in the recorded full comparison. Spark verifying keys carry
+validated table metadata, so
 verification replays the product and opening arguments without rebuilding the
 full public tables. Full-ZK Spark's 5,539,708-byte proof contains a
 3,904,156-byte matrix-closing payload: 59,312 bytes for product proofs,
