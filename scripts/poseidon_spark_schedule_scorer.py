@@ -24,6 +24,8 @@ def main() -> None:
     parser.add_argument("--top-per-component", type=int, default=8)
     parser.add_argument("--max-report-rows", type=int, default=100)
     parser.add_argument("--measurement-rows", type=int, default=10)
+    parser.add_argument("--max-fixed-value-log-domain", type=int, required=True)
+    parser.add_argument("--max-fixed-audit-log-domain", type=int, required=True)
     parser.add_argument("--measurements")
     parser.add_argument("--reference-witness-label")
     parser.add_argument("--reference-fixed-value-label")
@@ -47,6 +49,10 @@ def main() -> None:
         args.max_report_rows,
         args.measurement_rows,
         read_json(args.measurements) if args.measurements else None,
+        {
+            "fixed_value": args.max_fixed_value_log_domain,
+            "fixed_audit": args.max_fixed_audit_log_domain,
+        },
         {
             "witness": args.reference_witness_label,
             "fixed_value": args.reference_fixed_value_label,
@@ -74,6 +80,7 @@ def compose_report(
     max_report_rows: int,
     measurement_rows: int,
     measurements: dict[str, Any] | None,
+    fixed_setup_log_domain_caps: dict[str, int],
     reference_labels: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     if min(top_per_component, max_report_rows, measurement_rows) <= 0:
@@ -84,7 +91,12 @@ def compose_report(
         require_report_mode(reports[component], "no-zk", component)
 
     ranked = {
-        component: component_rows(report, component, top_per_component)
+        component: component_rows(
+            report,
+            component,
+            top_per_component,
+            fixed_setup_log_domain_caps.get(component),
+        )
         for component, report in reports.items()
     }
     rows = []
@@ -126,15 +138,16 @@ def compose_report(
     for row in shortlist:
         if all(existing["label"] != row["label"] for existing in rows):
             rows.append(row)
+    rows.sort(key=ranking_key)
 
-    calibration = calibrate(rows, measurements)
+    calibration = calibrate(rows, measurements, reference_labels or {})
     if calibration is not None:
         apply_calibration(rows, calibration)
         rows.sort(key=ranking_key)
 
     selected_measured = select_measured(rows, measurements)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "provenance": provenance,
         "matrix_closing": "Spark",
         "proof_mode": "full-zk",
@@ -146,9 +159,10 @@ def compose_report(
             component: report.get("num_variables") for component, report in reports.items()
         },
         "model": {
-            "formula": "witness + fixed openings + 2 * read commit/open",
+            "formula": "witness + fixed post-setup commitments/openings + combined read commit/open",
             "fixed_value_excludes_setup_commitment": True,
             "fixed_audit_excludes_setup_commitment": True,
+            "fixed_setup_log_domain_caps": fixed_setup_log_domain_caps,
             "calibration": calibration,
         },
         "selected": rows[0],
@@ -169,24 +183,8 @@ def stratified_shortlist(
     reports: dict[str, dict[str, Any]],
     reference_labels: dict[str, str | None],
 ) -> list[dict[str, Any]]:
-    selected = rows[: min(2, len(rows))]
     best = {component: candidates[0] for component, candidates in ranked.items()}
-    for component in ("witness", "fixed_value", "fixed_audit", "read"):
-        for alternative in ranked[component][1:3]:
-            choice = dict(best)
-            choice[component] = alternative
-            selected.append(
-                composed_row(
-                    choice["witness"],
-                    choice["fixed_value"],
-                    choice["fixed_audit"],
-                    choice["read"],
-                    security_bits,
-                    merkle_security_bits,
-                    ell_zk,
-                    mask_log_inv_rate,
-                )
-            )
+    selected = rows[: min(2, len(rows))]
     if any(reference_labels.values()):
         if not all(reference_labels.values()):
             raise SystemExit("all four reference labels are required together")
@@ -194,18 +192,54 @@ def stratified_shortlist(
             component: find_report_row(reports[component], str(label), component)
             for component, label in reference_labels.items()
         }
-        selected.append(
-            composed_row(
-                reference["witness"],
-                reference["fixed_value"],
-                reference["fixed_audit"],
-                reference["read"],
-                security_bits,
-                merkle_security_bits,
-                ell_zk,
-                mask_log_inv_rate,
-            )
-        )
+        selected = [rows[0], composed_row(
+            reference["witness"],
+            reference["fixed_value"],
+            reference["fixed_audit"],
+            reference["read"],
+            security_bits,
+            merkle_security_bits,
+            ell_zk,
+            mask_log_inv_rate,
+        )]
+        for component in ("witness", "fixed_value", "fixed_audit", "read"):
+            alternatives = [
+                candidate
+                for candidate in ranked[component]
+                if candidate["label"] != reference_labels[component]
+            ][:2]
+            for alternative in alternatives:
+                choice = dict(reference)
+                choice[component] = alternative
+                selected.append(
+                    composed_row(
+                        choice["witness"],
+                        choice["fixed_value"],
+                        choice["fixed_audit"],
+                        choice["read"],
+                        security_bits,
+                        merkle_security_bits,
+                        ell_zk,
+                        mask_log_inv_rate,
+                    )
+                )
+    else:
+        for component in ("witness", "fixed_value", "fixed_audit", "read"):
+            for alternative in ranked[component][1:3]:
+                choice = dict(best)
+                choice[component] = alternative
+                selected.append(
+                    composed_row(
+                        choice["witness"],
+                        choice["fixed_value"],
+                        choice["fixed_audit"],
+                        choice["read"],
+                        security_bits,
+                        merkle_security_bits,
+                        ell_zk,
+                        mask_log_inv_rate,
+                    )
+                )
     selected = deduplicate_rows(selected)
     return selected[:limit]
 
@@ -215,24 +249,40 @@ def find_report_row(
 ) -> dict[str, Any]:
     for row in report.get("scores", []):
         if row.get("label") == label and row.get("extension") == "octic":
-            return row
+            return {**row, "_component_num_variables": report.get("num_variables")}
     raise SystemExit(f"{component} reference label not found: {label}")
 
 
 def component_rows(
-    report: dict[str, Any], component: str, limit: int
+    report: dict[str, Any],
+    component: str,
+    limit: int,
+    max_setup_log_domain: int | None,
 ) -> list[dict[str, Any]]:
     rows = [
-        row
+        {**row, "_component_num_variables": report.get("num_variables")}
         for row in report.get("scores", [])
         if row.get("valid", True)
         and row.get("extension") == "octic"
         and row.get("whir_params") is not None
+        and within_setup_domain_cap(report, row, max_setup_log_domain)
     ]
     rows.sort(key=lambda row: (component_score(row, component), proof_size(row), row["label"]))
     if not rows:
         raise SystemExit(f"{component} report has no valid octic rows")
     return rows[:limit]
+
+
+def within_setup_domain_cap(
+    report: dict[str, Any], row: dict[str, Any], max_setup_log_domain: int | None
+) -> bool:
+    if max_setup_log_domain is None:
+        return True
+    num_variables = report.get("num_variables")
+    starting_log_inv_rate = (row.get("whir_params") or {}).get("starting_log_inv_rate")
+    if not isinstance(num_variables, int) or not isinstance(starting_log_inv_rate, int):
+        return False
+    return num_variables + starting_log_inv_rate <= max_setup_log_domain
 
 
 def component_score(row: dict[str, Any], component: str) -> float:
@@ -245,10 +295,31 @@ def component_score(row: dict[str, Any], component: str) -> float:
         multiplier = 1.0
     elif component == "read":
         names = ("dft", "merkle", "merkle_path", "row_opening", "sumcheck", "pow")
-        multiplier = 2.0
+        multiplier = 1.0
     else:
         raise AssertionError(component)
-    return multiplier * sum(float(costs.get(name) or 0.0) for name in names)
+    score = multiplier * sum(float(costs.get(name) or 0.0) for name in names)
+    if component in ("fixed_value", "fixed_audit"):
+        score += post_setup_commitment_cost(row)
+    return score
+
+
+def post_setup_commitment_cost(row: dict[str, Any]) -> float:
+    num_variables = row.get("_component_num_variables")
+    params = row.get("whir_params") or {}
+    starting_log_inv_rate = params.get("starting_log_inv_rate")
+    if not isinstance(num_variables, int) or not isinstance(starting_log_inv_rate, int):
+        return 0.0
+    initial_work = 1 << (num_variables + starting_log_inv_rate)
+    costs = row.get("cost_breakdown") or {}
+    total = 0.0
+    for cost_name, work_name in (("dft", "dft_work"), ("merkle", "merkle_work")):
+        work = int(row.get(work_name) or 0)
+        if work <= 0:
+            continue
+        post_setup_work = max(0, work - initial_work)
+        total += float(costs.get(cost_name) or 0.0) * post_setup_work / work
+    return total
 
 
 def composed_row(
@@ -275,7 +346,7 @@ def composed_row(
         proof_size(witness)
         + proof_size(fixed_value)
         + proof_size(fixed_audit)
-        + 2 * proof_size(read)
+        + proof_size(read)
     )
     labels = {component: str(row["label"]) for component, row in components.items()}
     label = "spark_" + "__".join(
@@ -329,7 +400,9 @@ def deduplicate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def calibrate(
-    rows: list[dict[str, Any]], measurements: dict[str, Any] | None
+    rows: list[dict[str, Any]],
+    measurements: dict[str, Any] | None,
+    reference_labels: dict[str, str | None] | None = None,
 ) -> dict[str, Any] | None:
     if measurements is None:
         return None
@@ -341,6 +414,10 @@ def calibrate(
     ]
     if len(pairs) < 3:
         raise SystemExit("SPARK calibration requires at least three measured rows")
+    if reference_labels and all(reference_labels.values()):
+        component_calibration = calibrate_components(rows, measured, reference_labels)
+        if component_calibration is not None:
+            return component_calibration
     calibration_pairs = [pair for index, pair in enumerate(pairs) if index % 3 != 2]
     validation_pairs = [pair for index, pair in enumerate(pairs) if index % 3 == 2]
     if not validation_pairs:
@@ -359,6 +436,87 @@ def calibrate(
     }
 
 
+def calibrate_components(
+    rows: list[dict[str, Any]],
+    measured: dict[str, float],
+    reference_labels: dict[str, str | None],
+) -> dict[str, Any] | None:
+    components = ("witness", "fixed_value", "fixed_audit", "read")
+    reference = next(
+        (
+            row
+            for row in rows
+            if row["label"] in measured
+            and all(row["component_labels"][name] == reference_labels[name] for name in components)
+        ),
+        None,
+    )
+    if reference is None:
+        return None
+
+    reference_time = measured[reference["label"]]
+    scales = {}
+    fallback_components = []
+    calibration_labels = {reference["label"]}
+    for component in components:
+        slopes = []
+        for row in rows:
+            if row["label"] not in measured:
+                continue
+            if any(
+                row["component_labels"][name] != reference_labels[name]
+                for name in components
+                if name != component
+            ):
+                continue
+            delta_score = float(row["component_scores"][component]) - float(
+                reference["component_scores"][component]
+            )
+            if delta_score == 0.0:
+                continue
+            slopes.append((measured[row["label"]] - reference_time) / delta_score)
+            calibration_labels.add(row["label"])
+        if not slopes:
+            return None
+        slopes.sort()
+        fitted_scale = slopes[len(slopes) // 2]
+        if fitted_scale <= 0.0:
+            fitted_scale = 1.0
+            fallback_components.append(component)
+        scales[component] = fitted_scale
+
+    intercept = reference_time - sum(
+        scales[component] * float(reference["component_scores"][component])
+        for component in components
+    )
+    validation_rows = [
+        row
+        for row in rows
+        if row["label"] in measured and row["label"] not in calibration_labels
+    ]
+    errors = [
+        relative_error(
+            intercept
+            + sum(
+                scales[component] * float(row["component_scores"][component])
+                for component in components
+            ),
+            measured[row["label"]],
+        )
+        for row in validation_rows
+    ]
+    return {
+        "method": "per-component slopes from configured-reference perturbations",
+        "intercept_seconds": intercept,
+        "component_scales": scales,
+        "unit_scale_fallback_components": fallback_components,
+        "calibration_rows": len(calibration_labels),
+        "validation_rows": len(validation_rows),
+        "validation_max_relative_error": max(errors) if errors else None,
+        "validation_within_ten_percent": bool(errors) and max(errors) <= 0.10,
+    }
+
+
 def fit_affine(pairs: list[tuple[float, float]]) -> tuple[float, float]:
     x_mean = sum(x for x, _ in pairs) / len(pairs)
     y_mean = sum(y for _, y in pairs) / len(pairs)
@@ -371,6 +529,14 @@ def fit_affine(pairs: list[tuple[float, float]]) -> tuple[float, float]:
 
 def apply_calibration(rows: list[dict[str, Any]], calibration: dict[str, Any]) -> None:
     intercept = float(calibration["intercept_seconds"])
+    component_scales = calibration.get("component_scales")
+    if component_scales is not None:
+        for row in rows:
+            row["projected_seconds"] = intercept + sum(
+                float(component_scales[component]) * float(row["component_scores"][component])
+                for component in ("witness", "fixed_value", "fixed_audit", "read")
+            )
+        return
     scale = float(calibration["scale"])
     for row in rows:
         row["projected_seconds"] = intercept + scale * float(row["projected_schedule_seconds"])
@@ -394,10 +560,7 @@ def select_measured(
     tied = [
         row
         for row in candidates
-        if intervals_overlap(
-            median_interval(measured_rows[row["label"]]),
-            median_interval(fastest_measurement),
-        )
+        if measurement_is_tied(measured_rows[row["label"]], fastest_measurement)
     ]
     selected = min(tied, key=lambda row: (measured_size(measured_rows[row["label"]]), row["label"]))
     out = dict(selected)
@@ -413,6 +576,13 @@ def select_measured(
         }
     )
     return out
+
+
+def measurement_is_tied(row: dict[str, Any], fastest: dict[str, Any]) -> bool:
+    paired = row.get("heldout_paired_relative_median_ci")
+    if isinstance(paired, list) and len(paired) == 2:
+        return float(paired[0]) <= 0.0 <= float(paired[1])
+    return intervals_overlap(median_interval(row), median_interval(fastest))
 
 
 def measurement_map(measurements: dict[str, Any]) -> dict[str, float]:

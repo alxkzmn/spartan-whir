@@ -12,14 +12,15 @@ use libloading::Library;
 use p3_field::{PrimeField32, TwoAdicField};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_whir_params,
-    recommended_octic_zk_whir_params, MatrixClosingMode, OcticBinExtension,
-    PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig,
-    PoseidonZkSpartanProtocol, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
-    SparkWhirParams, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
+    compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_spark_fixed_whir_params,
+    recommended_octic_whir_params, recommended_octic_zk_whir_params, MatrixClosingMode,
+    OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey,
+    PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, R1csShape, SecurityConfig,
+    SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanSnarkConfig,
+    WhirFoldingSchedule, WhirParams,
 };
 use spartan_whir::{
-    protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
+    protocol::{fixed_audit_column_count, fixed_value_column_bits, read_table_column_bits},
     spark::spark_col_memory_size,
 };
 const DEFAULT_SIZES: &[usize] = &[128, 256, 512, 1024, 2048];
@@ -934,7 +935,7 @@ fn independent_spark_protocol_config(
         .ok_or("fixed audit domain size overflow")?;
     let fixed_value_vars = value_vars + fixed_value_column_bits();
     let fixed_audit_vars = log2_power_of_two(fixed_audit_domain_size)?;
-    let read_vars = value_vars + read_column_bits::<OcticBinExtension>();
+    let read_vars = value_vars + read_table_column_bits::<OcticBinExtension>();
 
     println!(
         "spark_independent_vars: witness={witness_vars} fixed_value={fixed_value_vars} fixed_audit={fixed_audit_vars} read={read_vars}"
@@ -945,8 +946,8 @@ fn independent_spark_protocol_config(
     } else {
         recommended_octic_whir_params(witness_vars)
     };
-    let fixed_value = recommended_octic_whir_params(fixed_value_vars);
-    let fixed_audit = recommended_octic_whir_params(fixed_audit_vars);
+    let fixed_value = recommended_octic_spark_fixed_whir_params(fixed_value_vars);
+    let fixed_audit = recommended_octic_spark_fixed_whir_params(fixed_audit_vars);
     let read = recommended_octic_whir_params(read_vars);
 
     println!(

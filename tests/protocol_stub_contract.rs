@@ -574,13 +574,9 @@ fn protocol_spark_tampered_read_opening_commitment_fails() {
     )
     .expect("spark prove succeeds");
 
-    let mut roots = proof
-        .spark_read_openings
-        .erow_commitment
-        .clone()
-        .into_roots();
+    let mut roots = proof.spark_read_openings.commitment.clone().into_roots();
     roots[0][0] += F::ONE;
-    proof.spark_read_openings.erow_commitment = roots.into();
+    proof.spark_read_openings.commitment = roots.into();
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
         &instance,
@@ -591,7 +587,7 @@ fn protocol_spark_tampered_read_opening_commitment_fails() {
 }
 
 #[test]
-fn protocol_spark_tampered_ecol_read_opening_commitment_fails() {
+fn protocol_spark_tampered_read_opening_proof_fails() {
     let shape = regular_shape_two_constraints();
     let (pk, vk) = setup_keys(&shape);
     let mut prover_challenger = spartan_whir::poseidon_challenger();
@@ -610,20 +606,19 @@ fn protocol_spark_tampered_ecol_read_opening_commitment_fails() {
     )
     .expect("spark prove succeeds");
 
-    let mut roots = proof
+    *proof
         .spark_read_openings
-        .ecol_commitment
-        .clone()
-        .into_roots();
-    roots[0][0] += F::ONE;
-    proof.spark_read_openings.ecol_commitment = roots.into();
+        .proof
+        .initial_ood_answers
+        .first_mut()
+        .expect("read-table WHIR proof has an initial OOD answer") += EF::ONE;
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
         &instance,
         &proof,
         &mut verifier_challenger,
     );
-    assert_eq!(verified, Err(SpartanWhirError::TranscriptMismatch));
+    assert_eq!(verified, Err(SpartanWhirError::WhirVerifyFailed));
 }
 
 #[test]

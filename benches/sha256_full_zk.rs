@@ -14,13 +14,14 @@ use serde::{Deserialize, Serialize};
 use sha256::{input_binary, message, Sha256Fixture};
 use spartan_whir::{
     engine::{ExtField, F},
-    preprocess_spark_tables, recommended_octic_whir_params, recommended_octic_zk_whir_params,
-    InvalidConfigReason, MatrixClosingMode, MlePcs, OcticBinExtension, Plonky3WhirPcs,
-    PoseidonChallenger, PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey,
-    PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, ProvingKey,
-    QuinticExtension, R1csInstance, SecurityConfig, SoundnessAssumption, SparkWhirParams,
-    SpartanProofKind, SpartanSnarkConfig, SpartanWhirError, VerifyingKey, WhirFoldingSchedule,
-    WhirParams, ZkMatrixClosingProof, ZkSpartanProof, MAX_SECURITY_BITS, MIN_SECURITY_BITS,
+    preprocess_spark_tables, recommended_octic_spark_fixed_whir_params,
+    recommended_octic_whir_params, recommended_octic_zk_whir_params, InvalidConfigReason,
+    MatrixClosingMode, MlePcs, OcticBinExtension, Plonky3WhirPcs, PoseidonChallenger,
+    PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey, PoseidonZkSetupConfig,
+    PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, ProvingKey, QuinticExtension, R1csInstance,
+    SecurityConfig, SoundnessAssumption, SparkWhirParams, SpartanProofKind, SpartanSnarkConfig,
+    SpartanWhirError, VerifyingKey, WhirFoldingSchedule, WhirParams, ZkMatrixClosingProof,
+    ZkSpartanProof, MAX_SECURITY_BITS, MIN_SECURITY_BITS,
 };
 
 const DEFAULT_SHA256_SIZE: usize = 2048;
@@ -100,9 +101,11 @@ where
         .iter()
         .map(|message| input_binary(message))
         .collect::<Vec<_>>();
-    fixture
-        .validate_input(&messages[0], &inputs[0])
-        .expect("cached linked witness generator matches SHA-256");
+    for (message, input) in messages.iter().zip(&inputs) {
+        fixture
+            .validate_input(message, input)
+            .expect("cached linked witness generator matches SHA-256");
+    }
 
     let (configs, keys, security_bits) = select_configs_and_keys::<Ext>(&fixture, extension);
     println!("benchmark_security_bits: {security_bits}");
@@ -801,10 +804,10 @@ fn benchmark_configs<Ext: ExtField>(
         .next_power_of_two()
         .ilog2() as usize
         + spartan_whir::protocol::fixed_audit_column_bits();
-    let read_variables = value_variables + spartan_whir::protocol::read_column_bits::<Ext>();
+    let read_variables = value_variables + spartan_whir::protocol::read_table_column_bits::<Ext>();
     let spark_whir_params = SparkWhirParams {
-        fixed_value: recommended_octic_whir_params(fixed_value_variables),
-        fixed_audit: recommended_octic_whir_params(audit_variables),
+        fixed_value: recommended_octic_spark_fixed_whir_params(fixed_value_variables),
+        fixed_audit: recommended_octic_spark_fixed_whir_params(audit_variables),
         read: recommended_octic_whir_params(read_variables),
     };
     let no_zk_direct = SpartanSnarkConfig {

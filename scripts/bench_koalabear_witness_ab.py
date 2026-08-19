@@ -31,7 +31,6 @@ MODULUS = 2_130_706_433
 MONTGOMERY_R = (1 << 32) % MODULUS
 MONTGOMERY_R2 = (MONTGOMERY_R * MONTGOMERY_R) % MODULUS
 MONTGOMERY_NPRIME = (-pow(MODULUS, -1, 1 << 32)) % (1 << 32)
-SUM_OF_SQUARES_CONSTRAINTS = 65_536
 SHA_SIZES = (256, 512, 2048)
 
 
@@ -148,7 +147,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--workloads",
-        default="sum_of_squares,sha256_256b,sha256_512b,sha256_2048b",
+        default="sha256_256b,sha256_512b,sha256_2048b",
         help="Comma-separated workloads.",
     )
     parser.add_argument(
@@ -406,20 +405,7 @@ def select_candidates(raw: str) -> list[Candidate]:
 
 
 def select_workloads(repo_root: Path, raw: str, input_mode: str) -> list[Workload]:
-    known: dict[str, Workload] = {
-        "sum_of_squares": Workload(
-            name="sum_of_squares",
-            circuit=repo_root / "tests" / "circuits" / "sum_of_squares.circom",
-            cpp_dir_name="sum_of_squares_cpp",
-            binary_name="sum_of_squares",
-            input_name=f"sum_of_squares_input.{input_mode_extension(input_mode)}",
-            expected_witnesses=None,
-            throughput_denominator=SUM_OF_SQUARES_CONSTRAINTS,
-            write_input=select_input_writer(
-                input_mode, write_sum_of_squares_json_input, write_sum_of_squares_binary_input
-            ),
-        )
-    }
+    known: dict[str, Workload] = {}
     for size in SHA_SIZES:
         known[f"sha256_{size}b"] = Workload(
             name=f"sha256_{size}b",
@@ -600,16 +586,6 @@ def select_input_writer(
     if input_mode == "binary":
         return binary_writer
     raise SystemExit(f"unknown input mode: {input_mode}")
-
-
-def write_sum_of_squares_json_input(path: Path) -> None:
-    values = [str((i * 17 + 3) % MODULUS) for i in range(SUM_OF_SQUARES_CONSTRAINTS)]
-    path.write_text(json.dumps({"xs": values}) + "\n")
-
-
-def write_sum_of_squares_binary_input(path: Path) -> None:
-    values = [(i * 17 + 3) % MODULUS for i in range(SUM_OF_SQUARES_CONSTRAINTS)]
-    write_u32_binary(path, values)
 
 
 def write_sha256_json_input(path: Path, size: int) -> None:

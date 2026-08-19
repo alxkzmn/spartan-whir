@@ -10,7 +10,7 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
-def candidate(label, projected, proof_bytes):
+def candidate(label, projected, proof_bytes, starting_log_inv_rate=1):
     return {
         "label": label,
         "extension": "octic",
@@ -19,7 +19,7 @@ def candidate(label, projected, proof_bytes):
         "whir_params": {
             "pow_bits": 0,
             "folding_factor": 4,
-            "starting_log_inv_rate": 1,
+            "starting_log_inv_rate": starting_log_inv_rate,
             "rs_domain_initial_reduction_factor": 1,
             "folding_schedule": {"Constant": 4},
             "round_log_inv_rates": [],
@@ -34,6 +34,8 @@ def candidate(label, projected, proof_bytes):
             "sumcheck": projected,
             "pow": projected,
         },
+        "dft_work": 1,
+        "merkle_work": 1,
     }
 
 
@@ -55,16 +57,51 @@ class SparkScheduleScorerTests(unittest.TestCase):
             "read": report("no-zk", 26, [candidate("r0", 4.0, 400)]),
         }
 
-    def test_composes_full_zk_spark_config_and_weights_read_twice(self):
-        result = MODULE.compose_report(self.reports(), 116, 116, 3, 3, 1, 10, 1, None, None)
+    def test_composes_full_zk_spark_config_with_one_combined_read_opening(self):
+        result = MODULE.compose_report(
+            self.reports(),
+            116,
+            116,
+            3,
+            3,
+            1,
+            10,
+            1,
+            None,
+            {"fixed_value": 27, "fixed_audit": 23},
+            None,
+        )
         row = result["selected"]
         self.assertEqual(row["setup_config"]["matrix_closing"], "Spark")
         self.assertEqual(row["setup_config"]["security"]["security_level_bits"], 116)
         self.assertEqual(row["component_scores"]["witness"], 6.0)
         self.assertEqual(row["component_scores"]["fixed_value"], 8.0)
         self.assertEqual(row["component_scores"]["fixed_audit"], 12.0)
-        self.assertEqual(row["component_scores"]["read"], 48.0)
-        self.assertEqual(row["proof_size_bytes_estimate"], 1400)
+        self.assertEqual(row["component_scores"]["read"], 24.0)
+        self.assertEqual(row["proof_size_bytes_estimate"], 1000)
+
+    def test_fixed_table_setup_domain_caps_filter_impractical_rates(self):
+        reports = self.reports()
+        reports["fixed_value"]["scores"] = [
+            candidate("huge", 0.1, 10, starting_log_inv_rate=8),
+            candidate("bounded", 1.0, 20, starting_log_inv_rate=1),
+        ]
+
+        result = MODULE.compose_report(
+            reports,
+            116,
+            116,
+            3,
+            3,
+            2,
+            10,
+            1,
+            None,
+            {"fixed_value": 27, "fixed_audit": 23},
+            None,
+        )
+
+        self.assertEqual(result["selected"]["component_labels"]["fixed_value"], "bounded")
 
     def test_affine_calibration_holds_out_every_third_row(self):
         pairs = [(1.0, 3.0), (2.0, 5.0), (4.0, 9.0), (5.0, 11.0)]
@@ -86,6 +123,92 @@ class SparkScheduleScorerTests(unittest.TestCase):
         result = MODULE.calibrate(rows, measurements)
         self.assertEqual(result["scale"], 1.0)
         self.assertTrue(result["validation_within_ten_percent"])
+
+    def test_component_calibration_uses_reference_perturbations(self):
+        components = ("witness", "fixed_value", "fixed_audit", "read")
+        reference_labels = {component: f"{component}0" for component in components}
+
+        def row(label, scores, labels):
+            return {
+                "label": label,
+                "projected_schedule_seconds": sum(scores.values()),
+                "component_scores": scores,
+                "component_labels": labels,
+            }
+
+        reference_scores = {component: 1.0 for component in components}
+        rows = [row("reference", reference_scores, reference_labels)]
+        measurements = [{"label": "reference", "measured_seconds": 25.0}]
+        expected_scales = {
+            "witness": 2.0,
+            "fixed_value": 3.0,
+            "fixed_audit": 4.0,
+            "read": 5.0,
+        }
+        for component in components:
+            scores = dict(reference_scores)
+            scores[component] = 2.0
+            labels = dict(reference_labels)
+            labels[component] = f"{component}1"
+            rows.append(row(component, scores, labels))
+            measurements.append(
+                {"label": component, "measured_seconds": 25.0 + expected_scales[component]}
+            )
+        validation_scores = {component: 2.0 for component in components}
+        validation_labels = {component: f"{component}1" for component in components}
+        rows.append(row("validation", validation_scores, validation_labels))
+        measurements.append({"label": "validation", "measured_seconds": 39.0})
+
+        result = MODULE.calibrate(
+            rows,
+            {"rows": measurements},
+            reference_labels,
+        )
+
+        self.assertEqual(result["component_scales"], expected_scales)
+        self.assertEqual(result["unit_scale_fallback_components"], [])
+        self.assertEqual(result["validation_rows"], 1)
+        self.assertTrue(result["validation_within_ten_percent"])
+
+    def test_fixed_score_excludes_only_the_initial_setup_commitment(self):
+        row = candidate("fixed", 2.0, 10, starting_log_inv_rate=1)
+        row["_component_num_variables"] = 2
+        row["dft_work"] = 16
+        row["merkle_work"] = 24
+
+        score = MODULE.component_score(row, "fixed_value")
+
+        # Four opening terms cost 8. The initial setup work is 2^(2 + 1) = 8,
+        # leaving half the DFT cost and two thirds of the Merkle cost.
+        self.assertAlmostEqual(score, 8.0 + 1.0 + 4.0 / 3.0)
+
+    def test_measured_selection_uses_paired_confidence_interval(self):
+        rows = [
+            {"label": "fast", "proof_size_bytes_estimate": 20},
+            {"label": "slow-small", "proof_size_bytes_estimate": 10},
+        ]
+        measurements = {
+            "rows": [
+                {
+                    "label": "fast",
+                    "measured_seconds": 1.0,
+                    "heldout_median_ci_seconds": [0.9, 1.2],
+                    "heldout_paired_relative_median_ci": [0.0, 0.0],
+                    "heldout_proof_size_median_bytes": 20,
+                },
+                {
+                    "label": "slow-small",
+                    "measured_seconds": 1.1,
+                    "heldout_median_ci_seconds": [0.95, 1.2],
+                    "heldout_paired_relative_median_ci": [0.05, 0.15],
+                    "heldout_proof_size_median_bytes": 10,
+                },
+            ]
+        }
+
+        selected = MODULE.select_measured(rows, measurements)
+
+        self.assertEqual(selected["label"], "fast")
 
 
 if __name__ == "__main__":

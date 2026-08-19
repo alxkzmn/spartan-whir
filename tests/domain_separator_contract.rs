@@ -43,7 +43,7 @@ fn domain_separator_encoding_is_deterministic() {
     assert_eq!(a, b);
     assert_eq!(a.to_bytes(), b.to_bytes());
     let expected = [
-        b"spartan-whir-no-zk-v0".as_slice(),
+        b"spartan-whir-no-zk-v1".as_slice(),
         &expected_shared_direct_body(),
     ]
     .concat();
@@ -65,7 +65,7 @@ fn no_zk_and_full_zk_separators_share_only_the_canonical_body() {
     );
 
     let expected_full_zk = [
-        b"spartan-whir-full-zk-v0".as_slice(),
+        b"spartan-whir-full-zk-v1".as_slice(),
         &expected_shared_direct_body(),
     ]
     .concat();

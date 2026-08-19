@@ -11,7 +11,6 @@ const TINY_R1CS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.r1cs");
 const TINY_WTNS: &[u8] = include_bytes!("fixtures/circom/tiny_arithmetic.wtns");
 const NON_POWER_R1CS: &[u8] = include_bytes!("fixtures/circom/non_power_of_two.r1cs");
 const NON_POWER_WTNS: &[u8] = include_bytes!("fixtures/circom/non_power_of_two.wtns");
-const SUM_OF_SQUARES_SOURCE: &str = include_str!("circuits/sum_of_squares.circom");
 
 fn direct_config() -> SpartanSnarkConfig {
     SpartanSnarkConfig {
@@ -118,10 +117,4 @@ fn proves_and_verifies_real_generated_tiny_fixture() {
     ));
 
     prove_and_verify(&shape, &witness, &public_inputs);
-}
-
-#[test]
-fn sum_of_squares_is_the_benchmark_circuit() {
-    assert!(SUM_OF_SQUARES_SOURCE.contains("template SumOfSquares(N)"));
-    assert!(SUM_OF_SQUARES_SOURCE.contains("component main { public [xs] } = SumOfSquares(65536);"));
 }

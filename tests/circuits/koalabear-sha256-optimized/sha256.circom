@@ -18,7 +18,7 @@
 */
 pragma circom 2.0.0;
 
-include "constants.circom";
+include "../koalabear-sha256/constants.circom";
 include "sha256compression.circom";
 
 template Sha256(nBits) {
@@ -35,7 +35,7 @@ template Sha256(nBits) {
 
     signal paddedIn[nBlocks*512];
 
-    // The SHA-256 bit-operation rows are determined on Boolean inputs.
+    // The optimized XOR and majority rows are determined on Boolean inputs.
     for (k=0; k<nBits; k++) {
         in[k] * (in[k] - 1) === 0;
         paddedIn[k] <== in[k];

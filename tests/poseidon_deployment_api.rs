@@ -297,6 +297,12 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
     vk.verify(&first).expect("first proof verifies");
     vk.verify(&second).expect("second proof verifies");
 
+    let proof_bytes = bincode::serialize(&first).expect("full-ZK SPARK proof serializes");
+    let proof_roundtrip: PoseidonZkProof<QuarticBinExtension> =
+        bincode::deserialize(&proof_bytes).expect("full-ZK SPARK proof deserializes");
+    vk.verify(&proof_roundtrip)
+        .expect("deserialized full-ZK SPARK proof verifies");
+
     let pk_bytes = bincode::serialize(&pk).expect("full-ZK SPARK proving key serializes");
     let vk_bytes = bincode::serialize(&vk).expect("full-ZK SPARK verifying key serializes");
     let mut restored_pk: PoseidonZkProvingKey<QuarticBinExtension> =
@@ -348,6 +354,13 @@ fn poseidon_spark_proving_key_is_serializable() {
     spark_vk
         .verify(&second)
         .expect("second Spark proof verifies");
+
+    let proof_bytes = bincode::serialize(&first).expect("Spark proof serializes");
+    let proof_roundtrip: PoseidonProof<QuarticBinExtension> =
+        bincode::deserialize(&proof_bytes).expect("Spark proof deserializes");
+    spark_vk
+        .verify(&proof_roundtrip)
+        .expect("deserialized Spark proof verifies");
 
     let mut pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("spark proving key deserializes");

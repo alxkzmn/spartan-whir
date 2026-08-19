@@ -475,9 +475,9 @@ fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
 
     let mut tampered = proof.clone();
     let closing = spark_closing_mut(&mut tampered);
-    let mut roots = closing.spark_read_openings.erow_commitment.roots().to_vec();
+    let mut roots = closing.spark_read_openings.commitment.roots().to_vec();
     roots[0][0] += F::ONE;
-    closing.spark_read_openings.erow_commitment = p3_symmetric::MerkleCap::new(roots);
+    closing.spark_read_openings.commitment = p3_symmetric::MerkleCap::new(roots);
     verify_zk_rejects(&vk, &instance, &tampered);
 
     let mut tampered = proof.clone();
@@ -507,7 +507,7 @@ fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
     let mut tampered = proof.clone();
     *spark_closing_mut(&mut tampered)
         .spark_read_openings
-        .erow_proof
+        .proof
         .initial_ood_answers
         .first_mut()
         .expect("read-table WHIR proof has an initial OOD answer") += EF::ONE;

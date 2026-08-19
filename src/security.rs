@@ -87,7 +87,7 @@ pub(crate) struct ComposedSecurityBudget {
     pub dominant_component: SecurityBoundComponent,
 }
 
-/// Derive per-argument targets for the five WHIR arguments in a SPARK proof.
+/// Derive per-argument targets for the four WHIR arguments in a SPARK proof.
 ///
 /// The composed error budget reserves one half for algebraic checks and one
 /// quarter each for WHIR soundness and Merkle binding. All arithmetic that
@@ -178,7 +178,6 @@ where
         .and_then(|events| {
             read_rounds
                 .checked_add(1)
-                .and_then(|read| read.checked_mul(2))
                 .and_then(|read| events.checked_add(read))
         })
         .ok_or_else(composed_budget_overflow)?;
@@ -195,7 +194,8 @@ where
         .checked_add(witness_commitment_events)
         .ok_or_else(composed_budget_overflow)?;
 
-    let whir_argument_count = 5usize;
+    // Fixed value, fixed audit, shared read-table, and witness/relation.
+    let whir_argument_count = 4usize;
     compose_spark_budget::<Ext>(
         requested,
         algebraic_error_terms,

@@ -1,6 +1,6 @@
 use crate::{
-    Evaluations, MatrixClosingMode, PcsStatement, SpartanWhirEngine, SpartanWhirError,
-    WhirPcsConfig,
+    Evaluations, MatrixClosingMode, MultilinearPoint, PcsStatement, SpartanWhirEngine,
+    SpartanWhirError, WhirPcsConfig,
 };
 
 mod sealed {
@@ -76,6 +76,48 @@ pub trait ProtocolPcs<E: SpartanWhirEngine>: MlePcs<E> {
         parsed: &Self::ParsedCommitment,
         statement: &PcsStatement<E>,
         proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<(), SpartanWhirError>;
+}
+
+/// Plain PCS support for SPARK's two read tables.
+///
+/// The logical row and column tables share one commitment and one opening
+/// argument. Their extension-field entries are supplied as one column-major
+/// base-coordinate buffer, with all row-table coordinates followed by all
+/// column-table coordinates. The opening points are fixed by the surrounding
+/// SPARK transcript before this interface is called.
+pub trait SparkReadPcs<E: SpartanWhirEngine>: ProtocolPcs<E, Config = WhirPcsConfig> {
+    type ReadProverData;
+    type ParsedReadCommitment;
+
+    fn commit_read_tables(
+        config: &WhirPcsConfig,
+        coordinate_columns: Evaluations<E::F>,
+        domain_size: usize,
+        challenger: &mut E::Challenger,
+    ) -> Result<(Self::Commitment, Self::ReadProverData), SpartanWhirError>;
+
+    fn open_read_tables(
+        config: &WhirPcsConfig,
+        prover_data: Self::ReadProverData,
+        points: &[MultilinearPoint<E::EF>],
+        challenger: &mut E::Challenger,
+    ) -> Result<(Self::Proof, Vec<Vec<E::EF>>), SpartanWhirError>;
+
+    fn verify_parse_read_commitment(
+        config: &WhirPcsConfig,
+        commitment: &Self::Commitment,
+        proof: &Self::Proof,
+        challenger: &mut E::Challenger,
+    ) -> Result<Self::ParsedReadCommitment, SpartanWhirError>;
+
+    fn verify_finalize_read_tables(
+        config: &WhirPcsConfig,
+        parsed: &Self::ParsedReadCommitment,
+        proof: &Self::Proof,
+        points: &[MultilinearPoint<E::EF>],
+        evals: &[Vec<E::EF>],
         challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError>;
 }

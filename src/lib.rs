@@ -54,7 +54,7 @@ pub use hashers::{
 };
 pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
 pub(crate) use pcs::SealedNoZkPcs;
-pub use pcs::{CommittedPolynomialView, MlePcs, NoZkPcs, ProtocolPcs};
+pub use pcs::{CommittedPolynomialView, MlePcs, NoZkPcs, ProtocolPcs, SparkReadPcs};
 pub use pcs_config::{
     WhirPcsConfig, ZkWhirPcsConfig, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
@@ -126,6 +126,7 @@ pub use sumcheck::{
     ZkOuterSumcheckProof,
 };
 pub use whir_params::{
-    recommended_octic_schedule, recommended_octic_whir_params, recommended_octic_zk_whir_params,
-    WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES,
+    recommended_octic_schedule, recommended_octic_spark_fixed_whir_params,
+    recommended_octic_whir_params, recommended_octic_zk_whir_params, WhirFoldingSchedule,
+    WhirParams, FINAL_SUMCHECK_MAX_VARIABLES,
 };

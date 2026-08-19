@@ -141,7 +141,7 @@ pub fn recommended_octic_schedule(num_variables: usize) -> WhirFoldingSchedule {
     }
 }
 
-/// Plain-WHIR octic parameters from the historical schedule table.
+/// Plain-WHIR octic default parameters.
 ///
 /// These parameters are not checked against full-ZK mask slack limits. Use
 /// [`recommended_octic_zk_whir_params`] for the full-ZK witness commitment.
@@ -162,10 +162,26 @@ pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
     }
 }
 
-/// Octic parameters that satisfy the default full-ZK WHIR configuration.
+/// Plain-WHIR octic parameters for fixed SPARK table openings.
 ///
-/// These are conservative fallback parameters. For benchmarked circuits, prefer
-/// a schedule selected by `poseidon-schedule-candidates --proof-mode full-zk`.
+/// Initial fixed-table commitments are prepared during setup. These parameters
+/// optimize the fold commitments and openings performed for each proof. The
+/// 25-variable case is the measured SHA-256 2048-byte fixed-value schedule.
+pub fn recommended_octic_spark_fixed_whir_params(num_variables: usize) -> WhirParams {
+    let mut params = recommended_octic_whir_params(num_variables);
+    if num_variables == 25 {
+        params.pow_bits = 4;
+        return params;
+    }
+    params.rs_domain_initial_reduction_factor = params.rs_domain_initial_reduction_factor.min(6);
+    params
+}
+
+/// Octic parameters for full-ZK WHIR witness commitments.
+///
+/// The 19- and 20-variable cases use measured SHA-256 schedules. Other sizes
+/// use ZK-valid defaults; tune benchmarked workloads with
+/// `poseidon-schedule-candidates --proof-mode full-zk`.
 pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
     if num_variables < 18 {
         let schedule = WhirFoldingSchedule::Constant(1);

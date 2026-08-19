@@ -10,7 +10,7 @@ use spartan_whir::{
     compare_spark_layouts,
     engine::F,
     import_r1cs_path,
-    protocol::{fixed_audit_column_count, fixed_value_column_bits, read_column_bits},
+    protocol::{fixed_audit_column_count, fixed_value_column_bits, read_table_column_bits},
     spark::spark_col_memory_size,
     OcticBinExtension, QuarticBinExtension, SparkLayoutDecision,
 };
@@ -22,6 +22,7 @@ struct Row {
     size_bytes: usize,
     constraints: usize,
     vars: usize,
+    witness_vars: usize,
     decision: SparkLayoutDecision,
     value_domain_size: usize,
     value_vars: usize,
@@ -47,14 +48,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     rows.sort_by_key(|row| row.size_bytes);
 
     println!(
-        "size_bytes,constraints,vars,decision,value_domain,value_vars,row_memory,col_memory,fixed_value_vars,fixed_audit_vars,read_vars_quartic,read_vars_octic,max_vars_quartic,max_vars_octic,min_first_fold_lir1_quartic,min_first_fold_lir1_octic,union_nnz,max_matrix_nnz_padded"
+        "size_bytes,constraints,vars,witness_vars,decision,value_domain,value_vars,row_memory,col_memory,fixed_value_vars,fixed_audit_vars,read_vars_quartic,read_vars_octic,max_vars_quartic,max_vars_octic,min_first_fold_lir1_quartic,min_first_fold_lir1_octic,union_nnz,max_matrix_nnz_padded"
     );
     for row in rows {
         println!(
-            "{},{},{},{:?},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:?},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.size_bytes,
             row.constraints,
             row.vars,
+            row.witness_vars,
             row.decision,
             row.value_domain_size,
             row.value_vars,
@@ -82,6 +84,7 @@ fn layout_row(path: &Path) -> Result<Row, Box<dyn Error>> {
     let padded_shape = shape
         .pad_regular()
         .map_err(|err| format!("padding failed for {}: {err}", path.display()))?;
+    let witness_vars = padded_shape.num_vars.ilog2() as usize;
     let comparison = compare_spark_layouts(&padded_shape)
         .map_err(|err| format!("Spark layout failed for {}: {err}", path.display()))?;
     let selected = match comparison.decision {
@@ -100,8 +103,8 @@ fn layout_row(path: &Path) -> Result<Row, Box<dyn Error>> {
     let value_vars = log2_power_of_two(selected.value_domain_size)?;
     let fixed_value_vars = value_vars + fixed_value_column_bits();
     let fixed_audit_vars = log2_power_of_two(audit_domain_size)?;
-    let read_vars_quartic = value_vars + read_column_bits::<QuarticBinExtension>();
-    let read_vars_octic = value_vars + read_column_bits::<OcticBinExtension>();
+    let read_vars_quartic = value_vars + read_table_column_bits::<QuarticBinExtension>();
+    let read_vars_octic = value_vars + read_table_column_bits::<OcticBinExtension>();
     let max_vars_quartic = fixed_value_vars
         .max(fixed_audit_vars)
         .max(read_vars_quartic);
@@ -113,6 +116,7 @@ fn layout_row(path: &Path) -> Result<Row, Box<dyn Error>> {
         size_bytes,
         constraints: shape.num_cons,
         vars: shape.num_vars,
+        witness_vars,
         decision: comparison.decision,
         value_domain_size: selected.value_domain_size,
         value_vars,

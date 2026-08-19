@@ -28,7 +28,7 @@ emits the R1CS and the
 [native C++ witness generator](https://github.com/alxkzmn/circom/tree/koala-bear/code_producers/src/c_elements).
 The `spartan-whir` SNARK combines the
 [Spartan](https://eprint.iacr.org/2019/550) IOP with the
-[Plonky3 WHIR PCS](https://github.com/alxkzmn/Plonky3/tree/b03991a120b511cf0342e9ef0703a84a803041a4/whir),
+[Plonky3 WHIR PCS](https://github.com/Plonky3/Plonky3/tree/main/whir),
 which implements [WHIR](https://eprint.iacr.org/2024/1586). Its full-ZK
 protocol follows
 [Zero-Knowledge IOPPs for Constrained Interleaved Codes](https://eprint.iacr.org/2026/391).
@@ -183,7 +183,9 @@ The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
 `PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
 `PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
 Spark, `spark_whir_params` supplies independent fixed-value, fixed-audit, and
-read-table schedules; `None` reuses the witness schedule for all three.
+read-table schedules; `None` reuses the witness schedule for all three. Octic
+configurations can use `recommended_octic_spark_fixed_whir_params` for the two
+fixed tables and `recommended_octic_whir_params` for the read table.
 `PoseidonZkProof::closing_mode()` reports the proof payload's mode, and
 verification rejects a proof whose mode differs from the verifying key.
 
@@ -191,7 +193,8 @@ Both proving-key families expose `prove`, witness-generator proving, and their
 checked variants. Full-ZK callers that need deterministic test randomness can
 use `PoseidonZkProvingKey::prove_with_rng`.
 
-The outer protocol follows Construction 11.4 of the ZK-WHIR paper, adapted to
+The outer protocol follows Construction 11.4 of
+*Zero-Knowledge IOPPs for Constrained Interleaved Codes*, adapted to
 the independently padded row and column domains used here:
 
 - `3 * num_outer_rounds` cubic inner masks hide the `A`, `B`, and `C` claims;
@@ -241,7 +244,7 @@ full-ZK Spartan algebraic error includes the conservative term
 
 Spark setup applies one composed integer budget to the Spartan algebraic terms,
 matrix batching, tuple compression, grand-product identities, product
-sumchecks, per-layer reductions, batched table openings, five WHIR arguments,
+sumchecks, per-layer reductions, batched table openings, four WHIR arguments,
 and every Poseidon commitment-binding event. The budget derives strengthened
 internal WHIR and Merkle targets from the requested end-to-end target. Setup
 returns a structured error with the requested bits, attainable bits, and
@@ -258,7 +261,7 @@ commitments. Setup also validates the
 length-4 and length-8 application-mask domains against the extension two-adicity
 before constructing or allocating their encodings.
 
-The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
+The full-ZK `spartan-whir-full-zk-v1` Fiat-Shamir order is:
 
 1. ZK domain separator, ZK geometry, and public inputs
 2. inner-mask commitment
@@ -268,7 +271,7 @@ The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 6. `mu_tilde`, outer combining challenge, equality point, and outer rounds
 7. outer-mask evaluations, masked matrix claims, matrix batching challenge, and relation batching challenge
 8. Plonky3 HVZK inner sumcheck
-9. for Spark, fixed-table commitments, read-table commitments, the memory-product proof, and fixed/read plain-WHIR openings
+9. for Spark, fixed-table commitments, the shared read-table commitment, the memory-product proof, and fixed/read plain-WHIR openings
 10. hiding-WHIR committed-relation proof
 
 `PoseidonZkProvingKey::prove` draws mask and WHIR randomness from an
@@ -276,7 +279,7 @@ operating-system-seeded `StdRng`. `prove_with_rng` accepts a caller-supplied
 `Rng + CryptoRng`, which supports deterministic protocol tests without
 weakening the public API's RNG requirement.
 
-No-ZK transcripts use `spartan-whir-no-zk-v0`. The no-ZK and full-ZK domain
+No-ZK transcripts use `spartan-whir-no-zk-v1`. The no-ZK and full-ZK domain
 separators have the same canonical body after their protocol identifiers, but
 produce different transcript challenges. The plain-WHIR point-evaluation PCS
 and hiding-WHIR committed-relation proof also have separate transcript domain
@@ -321,9 +324,8 @@ The WHIR integration disables univariate skip.
   - `generate_satisfiable_fixture(...)`
   - `generate_satisfiable_fixture_for_pow2(k)`
 - These helpers produce satisfiable regular R1CS tuples `(shape, witness, public_inputs)` with witness length exactly `2^k`.
-- These helpers support large-size protocol tests and benchmark scaffolding.
-- The benchmark fixtures are synthetic and only shape-similar to target circuits such as Spartan2 SHA-256.
-- They model rough constraint count / witness size / row sparsity for benchmark scaffolding.
+- These helpers support protocol tests across selected witness-commitment sizes
+  and sparse R1CS layouts.
 
 ## Run Tests
 
@@ -362,7 +364,8 @@ setup, linked witness generation plus proving, and verification separately.
 All four proving variants rotate through the same fixed corpus of valid SHA-256
 inputs, verification rotates through the corresponding corpus of valid proofs,
 and proof size is reported outside the timed intervals. The target only loads
-existing artifacts from `target/sha256-cache`; it never compiles the circuit.
+existing artifacts from `SHA256_BENCH_WORKDIR`, which defaults to
+`target/sha256-cache`; it never compiles the circuit.
 The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
 another cached circuit. The default extension is octic; set
 `SHA256_ZK_BENCH_EXTENSION=quintic` to benchmark the quintic extension. A
@@ -378,8 +381,17 @@ axes. Set `SHA256_BENCH_PROOF_MODES=no-zk,full-zk` and
 example's `Instant` output is diagnostic; use Criterion results for performance
 comparisons.
 
+Build the optimized 2048-byte SHA-256 artifact bundle before running the
+Criterion benchmark:
+
+```sh
+tests/circuits/build_sha256_optimized_fixture.sh \
+  ../circom/target/release/circom
+```
+
 ```sh
 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
+SHA256_BENCH_WORKDIR=target/sha256-optimized-cache \
 cargo bench --features parallel --bench sha256_full_zk
 ```
 
@@ -390,31 +402,57 @@ is 16. Set `SHA256_ZK_BENCH_PROVING_ONLY=1` for a proving-only optimization
 run that skips setup measurement, proof-corpus construction, proof-size
 reporting, and verification.
 
-The 2048-byte octic run selects a 116-bit common composed-security target. The
-table reports Criterion point estimates and median serialized proof sizes from
-the default 16-proof corpus:
+#### SHA-256 2048-Byte Comparison
 
-| Variant              | Setup (ms) | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
-| -------------------- | ---------: | -------------------: | ----------: | -----------------: |
-| No-ZK DirectSparse   |     56.439 |               57.174 |      85.879 |            479,039 |
-| No-ZK Spark          |  2,120.300 |            3,626.900 |     385.550 |          4,403,087 |
-| Full-ZK DirectSparse |     59.717 |               82.254 |     112.500 |          1,566,588 |
-| Full-ZK Spark        |  2,192.000 |            3,524.300 |     414.790 |          5,539,708 |
+The Spartan-WHIR measurements use the optimized
+[`tests/circuits/optimized/sha256_2048b.circom`](tests/circuits/optimized/sha256_2048b.circom)
+circuit. The same M4 Pro also ran the CSP benchmark implementations of
+[ProveKit](https://github.com/worldfnd/ProveKit) at `cc391c8` and
+[Spartan2](https://github.com/microsoft/Spartan2) at `80a6a26`. ProveKit and
+Spartan2 target 128-bit security; the Spartan-WHIR rows use the 116-bit common
+target selected by the four-variant benchmark. Each frontend implements SHA-256
+over 2048 input bytes, but the resulting R1CS shapes differ:
 
-For DirectSparse, full ZK adds 43.9% to witness generation plus proving and
-31.0% to verification. The SPARK proving estimates above come from separate
-optimization snapshots and do not establish a ZK overhead: a no-ZK-first run
-measured 3,911.9 ms versus 4,029.9 ms, while reversing the order measured
-3,859.6 ms versus 4,093.5 ms for full ZK and no ZK respectively. The sign
-reverses with benchmark order, so no SPARK proving overhead is distinguishable
-from system drift in these measurements. Full ZK adds 7.6% to Spark
-verification in the recorded full comparison. Spark verifying keys carry
-validated table metadata, so
-verification replays the product and opening arguments without rebuilding the
-full public tables. Full-ZK Spark's 5,539,708-byte proof contains a
-3,904,156-byte matrix-closing payload: 59,312 bytes for product proofs,
-1,651,600 bytes for fixed-table openings, and 2,193,720 bytes for read-table
-openings. Its final hiding-WHIR relation is 1,628,288 bytes.
+| System and mode                   | Field        | Raw constraints | Padded rows | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
+| --------------------------------- | ------------ | --------------: | ----------: | -------------------: | ----------: | -----------------: |
+| Spartan-WHIR no-ZK DirectSparse   | KoalaBear x8 |         605,424 |   1,048,576 |               52.896 |      80.682 |            479,215 |
+| Spartan-WHIR full-ZK DirectSparse | KoalaBear x8 |         605,424 |   1,048,576 |               78.282 |     102.750 |          1,566,588 |
+| Spartan-WHIR no-ZK Spark          | KoalaBear x8 |         605,424 |   1,048,576 |            1,402.700 |     271.880 |          3,110,779 |
+| Spartan-WHIR full-ZK Spark        | KoalaBear x8 |         605,424 |   1,048,576 |            1,358.400 |     294.560 |          4,233,256 |
+| ProveKit full ZK                  | BN254        |         345,399 |     524,288 |              971.343 |     207.381 |          3,228,336 |
+| Spartan2 full ZK                  | P-256        |         873,466 |   1,048,576 |              287.427 |      36.169 |             78,700 |
+
+The two SPARK proving variants run as separate sequential Criterion groups, so
+their point-estimate ordering is not a paired estimate of full-ZK overhead.
+
+The Spartan-WHIR proving interval includes linked witness generation. The
+ProveKit interval calls `prove_with_toml`, which generates the witness and
+proof, while the Spartan2 interval includes `prep_prove` and `prove`. Circuit
+compilation, key preparation, and fixture construction are outside all three
+proving intervals. The Spartan-WHIR measurements use native CPU code generation,
+30 Criterion samples, and a 16-proof corpus. The competitor measurements use
+ten Criterion samples with a four-second warmup and a twenty-second target
+measurement time. Competitor proof sizes come from the corresponding SHA-256
+2048-byte entries in the CSP benchmark results. Raw Spartan-WHIR timing
+artifacts are retained under the dated `boolean-inputs-2026-08-18` directories in
+its `target/criterion` tree. The competitor artifacts use
+`comparison-2026-08-18` in their respective `target/criterion` trees.
+
+The optimized Spartan-WHIR circuit has 593,120 variables, 3,251,928 SPARK union
+entries, and a 4,194,304-entry SPARK value domain. It uses single-row
+three-input XOR and majority identities. Lower-sigma lanes whose shifted
+operand is zero use a determined two-input XOR row. The circuit also reuses
+each round's `new_e` value in the `new_a` addition and precomputes the fixed
+final padding block's message schedule. It constrains each of its 16,384
+private message limbs with `x * (x - 1) = 0` before using identities determined
+on Boolean inputs.
+
+ProveKit's 345,399-constraint result uses a compiler-level spread SHA
+construction with transcript-derived LogUp range checks and a witness split
+across pre-challenge and post-challenge phases. Its implementation also requires
+a field larger than 64 bits. The KoalaBear circuit uses segmented additions
+with carry checks. Its 605,424 constraints are 75.3% above ProveKit's
+lookup-assisted count.
 
 ### Sumcheck Replay
 

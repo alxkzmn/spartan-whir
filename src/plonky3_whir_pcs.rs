@@ -2,21 +2,24 @@ use alloc::{sync::Arc, vec, vec::Vec};
 
 use num_bigint::BigUint;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::{dot_product, Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
-use p3_matrix::{dense::DenseMatrix, Dimensions, Matrix};
+use p3_matrix::{
+    dense::{DenseMatrix, RowMajorMatrix},
+    Dimensions, Matrix,
+};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::{point::Point, poly::Poly};
 use p3_sumcheck::{
     commit::commit_base,
     constraints::{statement::EqStatement, Constraint, Statements},
     lagrange::{extrapolate_01inf, lagrange_weights_01inf_multi},
-    layout::{Layout, LayoutStrategy},
+    layout::{Layout, LayoutStrategy, PrefixProver, Table},
     product_polynomial::ProductPolynomial,
     strategy::{SumcheckProver, VariableOrder},
     svo::SvoPoint,
-    SumcheckData,
+    OpeningBatch, OpeningProtocol, PrescribedPointPcs, SumcheckData, TableShape, TableSpec,
 };
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use p3_whir::{
@@ -26,13 +29,14 @@ use p3_whir::{
         SecurityAssumption as Plonky3SecurityAssumption, WhirConfig as Plonky3PlainWhirConfig,
     },
     pcs::{
-        proof::WhirProof,
+        proof::{PcsProof, WhirProof},
         prover::WhirProver,
         verifier::WhirVerifier,
         zk::{
             HidingWhirPcs, MaskCodeShape, MaskGroupShape, ZkConfigError, ZkParameters,
             ZkWhirConfig, ZkWhirRelationProof,
         },
+        WhirProverData,
     },
 };
 use rand::{
@@ -48,7 +52,7 @@ use crate::{
         PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress, F,
     },
     CommittedPolynomialView, Evaluations, InvalidConfigReason, MatrixClosingMode, MlePcs, NoZkPcs,
-    PcsStatement, ProtocolPcs, SealedNoZkPcs, SoundnessAssumption, SpartanProtocol,
+    PcsStatement, ProtocolPcs, SealedNoZkPcs, SoundnessAssumption, SparkReadPcs, SpartanProtocol,
     SpartanWhirError, WhirPcsConfig, ZkWhirPcsConfig,
 };
 
@@ -102,6 +106,15 @@ type PoseidonPlainPcs<Ext> = WhirProver<
     PoseidonChallenger,
     SpartanEqLayout<Ext>,
 >;
+type PoseidonSparkReadPcs<Ext> = WhirProver<
+    Ext,
+    F,
+    Radix2DFTSmallBatch<F>,
+    PoseidonMmcs,
+    PoseidonChallenger,
+    PrefixProver<F, Ext>,
+>;
+type PoseidonSparkReadProverData<Ext> = WhirProverData<F, Ext, PoseidonMmcs, PrefixProver<F, Ext>>;
 
 use plain_whir_layout::SpartanEqLayout;
 
@@ -423,6 +436,201 @@ where
             .map(|_| ())
             .map_err(|_| SpartanWhirError::WhirVerifyFailed)
     }
+}
+
+impl<Ext> SparkReadPcs<PoseidonEngine<Ext>> for Plonky3WhirPcs
+where
+    Ext: ExtField + TwoAdicField,
+    PoseidonChallenger: CanObserve<PoseidonCommitment>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    type ReadProverData = PoseidonSparkReadProverData<Ext>;
+    type ParsedReadCommitment = PoseidonCommitment;
+
+    fn commit_read_tables(
+        config: &WhirPcsConfig,
+        coordinate_columns: Evaluations<F>,
+        domain_size: usize,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(Self::Commitment, Self::ReadProverData), SpartanWhirError> {
+        let _profile = profile_scope("spark_commit_read_batch");
+        let coordinate_count = Ext::DIMENSION;
+        let expected_len = domain_size
+            .checked_mul(2)
+            .and_then(|len| len.checked_mul(coordinate_count))
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        if domain_size == 0
+            || !domain_size.is_power_of_two()
+            || coordinate_columns.len() != expected_len
+        {
+            return Err(SpartanWhirError::InvalidPolynomialLength);
+        }
+        validate_spark_read_batch_config::<Ext>(config, domain_size.ilog2() as usize)?;
+
+        // Plonky3's table PCS stacks the 2 * DIMENSION base-coordinate columns
+        // into one committed polynomial. One selector bit chooses erow or ecol,
+        // while both tables share the encoding, Merkle tree, and WHIR opening.
+        // The shared read-table commitment follows ProveKit's `commit_e_values`
+        // organization (World Foundation, MIT; https://github.com/worldfnd/provekit).
+        let table = {
+            let _profile = profile_scope("spark_read_batch_pack");
+            Table::new(RowMajorMatrix::new(coordinate_columns, domain_size))
+        };
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
+        let (commitment, prover_data) = {
+            let _profile = profile_scope("spark_read_batch_commit");
+            let witness = <PrefixProver<F, Ext> as Layout<F, Ext>>::new_witness(
+                vec![table],
+                config.whir.first_folding_factor(),
+            );
+            <PoseidonSparkReadPcs<Ext> as MultilinearPcs<Ext, PoseidonChallenger>>::commit(
+                &pcs, witness, challenger,
+            )
+        };
+        Ok((commitment, prover_data))
+    }
+
+    fn open_read_tables(
+        config: &WhirPcsConfig,
+        prover_data: Self::ReadProverData,
+        points: &[crate::MultilinearPoint<Ext>],
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(Self::Proof, Vec<Vec<Ext>>), SpartanWhirError> {
+        let _profile = profile_scope("spark_open_read_batch");
+        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        if points.len() != protocol.num_openings() {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        let points = points
+            .iter()
+            .map(|point| Point::new(point.0.clone()))
+            .collect::<Vec<_>>();
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        let proof =
+            <PoseidonSparkReadPcs<Ext> as PrescribedPointPcs<Ext, PoseidonChallenger>>::open_at(
+                &pcs,
+                prover_data,
+                &protocol,
+                &points,
+                challenger,
+            );
+        let evals = {
+            let _profile = profile_scope("spark_read_batch_extract_evals");
+            proof
+                .evals
+                .iter()
+                .map(|batch| {
+                    if !batch.next().is_empty() {
+                        return Err(SpartanWhirError::invalid_config());
+                    }
+                    Ok(batch.current().to_vec())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        Ok((proof.whir, evals))
+    }
+
+    fn verify_parse_read_commitment(
+        config: &WhirPcsConfig,
+        commitment: &Self::Commitment,
+        _proof: &Self::Proof,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<Self::ParsedReadCommitment, SpartanWhirError> {
+        let _profile = profile_scope("spark_parse_read_batch");
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
+        challenger.observe(commitment.clone());
+        Ok(commitment.clone())
+    }
+
+    fn verify_finalize_read_tables(
+        config: &WhirPcsConfig,
+        parsed: &Self::ParsedReadCommitment,
+        proof: &Self::Proof,
+        points: &[crate::MultilinearPoint<Ext>],
+        evals: &[Vec<Ext>],
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(), SpartanWhirError> {
+        let _profile = profile_scope("spark_verify_read_batch");
+        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        if points.len() != protocol.num_openings()
+            || evals.len() != protocol.num_openings()
+            || evals.iter().any(|batch| batch.len() != Ext::DIMENSION)
+        {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        let points = points
+            .iter()
+            .map(|point| Point::new(point.0.clone()))
+            .collect::<Vec<_>>();
+        let proof = PcsProof {
+            whir: proof.clone(),
+            evals: evals
+                .iter()
+                .cloned()
+                .map(|batch| OpeningBatch::new(batch, Vec::new()))
+                .collect(),
+        };
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        <PoseidonSparkReadPcs<Ext> as PrescribedPointPcs<Ext, PoseidonChallenger>>::verify_at(
+            &pcs, parsed, &proof, &protocol, &points, challenger,
+        )
+        .map(|_| ())
+        .map_err(|_| SpartanWhirError::WhirVerifyFailed)
+    }
+}
+
+fn spark_read_opening_protocol<Ext>(
+    config: &WhirPcsConfig,
+) -> Result<OpeningProtocol, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    let column_count = Ext::DIMENSION
+        .checked_mul(2)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if !column_count.is_power_of_two() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let local_num_variables = config
+        .num_variables
+        .checked_sub(log2_strict_usize(column_count))
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let erow = (0..Ext::DIMENSION).collect::<Vec<_>>();
+    let ecol = (Ext::DIMENSION..column_count).collect::<Vec<_>>();
+    Ok(OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(local_num_variables, column_count),
+        vec![
+            OpeningBatch::new(erow.clone(), Vec::new()),
+            OpeningBatch::new(erow.clone(), Vec::new()),
+            OpeningBatch::new(erow, Vec::new()),
+            OpeningBatch::new(ecol.clone(), Vec::new()),
+            OpeningBatch::new(ecol.clone(), Vec::new()),
+            OpeningBatch::new(ecol, Vec::new()),
+        ],
+    )]))
+}
+
+fn validate_spark_read_batch_config<Ext>(
+    config: &WhirPcsConfig,
+    local_num_variables: usize,
+) -> Result<(), SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    let column_count = Ext::DIMENSION
+        .checked_mul(2)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let expected = local_num_variables
+        .checked_add(log2_strict_usize(column_count))
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if config.num_variables != expected {
+        return Err(SpartanWhirError::InvalidNumVariables);
+    }
+    Ok(())
 }
 
 mod plain_whir_layout {
@@ -1061,6 +1269,33 @@ fn build_poseidon_plain_pcs<Ext>(
 where
     Ext: ExtField + TwoAdicField,
 {
+    let (whir_config, dft, mmcs) = build_poseidon_plain_pcs_parts::<Ext>(config)?;
+    Ok(WhirProver::new(whir_config, dft, mmcs))
+}
+
+fn build_poseidon_spark_read_pcs<Ext>(
+    config: &WhirPcsConfig,
+) -> Result<PoseidonSparkReadPcs<Ext>, SpartanWhirError>
+where
+    Ext: ExtField + TwoAdicField,
+{
+    let (whir_config, dft, mmcs) = build_poseidon_plain_pcs_parts::<Ext>(config)?;
+    Ok(WhirProver::new(whir_config, dft, mmcs))
+}
+
+fn build_poseidon_plain_pcs_parts<Ext>(
+    config: &WhirPcsConfig,
+) -> Result<
+    (
+        PoseidonPlainWhirConfig<Ext>,
+        Radix2DFTSmallBatch<F>,
+        PoseidonMmcs,
+    ),
+    SpartanWhirError,
+>
+where
+    Ext: ExtField + TwoAdicField,
+{
     let _profile = profile_scope("build_poseidon_plain_pcs");
     config.validate()?;
     let protocol_params = ProtocolParameters {
@@ -1087,11 +1322,7 @@ where
         poseidon_merkle_compress(),
         0,
     ));
-    Ok(WhirProver::new(
-        whir_config,
-        Radix2DFTSmallBatch::<F>::default(),
-        mmcs,
-    ))
+    Ok((whir_config, Radix2DFTSmallBatch::<F>::default(), mmcs))
 }
 
 pub(crate) fn observe_poseidon_relation_domain_separator<Ext>(
@@ -1108,7 +1339,14 @@ pub(crate) fn observe_poseidon_relation_domain_separator<Ext>(
 }
 
 fn observe_poseidon_plain_domain_separator<Ext>(
-    pcs: &PoseidonPlainPcs<Ext>,
+    pcs: &WhirProver<
+        Ext,
+        F,
+        Radix2DFTSmallBatch<F>,
+        PoseidonMmcs,
+        PoseidonChallenger,
+        impl Layout<F, Ext>,
+    >,
     challenger: &mut PoseidonChallenger,
 ) where
     Ext: ExtField + TwoAdicField,

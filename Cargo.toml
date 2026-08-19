@@ -78,3 +78,11 @@ harness = false
 name = "sha256_full_zk"
 harness = false
 required-features = ["parallel"]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+
+[profile.bench]
+codegen-units = 1
+lto = "fat"
