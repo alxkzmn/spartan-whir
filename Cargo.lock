@@ -486,6 +486,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 [[package]]
 name = "p3-air"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-matrix",
@@ -496,6 +497,7 @@ dependencies = [
 [[package]]
 name = "p3-baby-bear"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-mds",
@@ -509,6 +511,7 @@ dependencies = [
 [[package]]
 name = "p3-challenger"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-maybe-rayon",
@@ -520,6 +523,7 @@ dependencies = [
 [[package]]
 name = "p3-commit"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-field",
@@ -532,6 +536,7 @@ dependencies = [
 [[package]]
 name = "p3-dft"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-field",
@@ -545,6 +550,7 @@ dependencies = [
 [[package]]
 name = "p3-field"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "num-bigint",
@@ -559,6 +565,7 @@ dependencies = [
 [[package]]
 name = "p3-keccak"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-symmetric",
  "p3-util",
@@ -568,6 +575,7 @@ dependencies = [
 [[package]]
 name = "p3-koala-bear"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-mds",
@@ -581,6 +589,7 @@ dependencies = [
 [[package]]
 name = "p3-matrix"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-field",
@@ -594,6 +603,7 @@ dependencies = [
 [[package]]
 name = "p3-maybe-rayon"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "rayon",
 ]
@@ -601,6 +611,7 @@ dependencies = [
 [[package]]
 name = "p3-mds"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-dft",
  "p3-field",
@@ -612,6 +623,7 @@ dependencies = [
 [[package]]
 name = "p3-merkle-tree"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-commit",
@@ -630,6 +642,7 @@ dependencies = [
 [[package]]
 name = "p3-monty-31"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "num-bigint",
@@ -652,6 +665,7 @@ dependencies = [
 [[package]]
 name = "p3-multilinear-util"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-field",
@@ -666,6 +680,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-mds",
@@ -676,6 +691,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-field",
  "p3-mds",
@@ -687,6 +703,7 @@ dependencies = [
 [[package]]
 name = "p3-security"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "libm",
  "p3-air",
@@ -698,6 +715,7 @@ dependencies = [
 [[package]]
 name = "p3-sumcheck"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-challenger",
@@ -718,6 +736,7 @@ dependencies = [
 [[package]]
 name = "p3-symmetric"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-field",
@@ -728,6 +747,7 @@ dependencies = [
 [[package]]
 name = "p3-util"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "p3-maybe-rayon",
  "serde",
@@ -736,6 +756,7 @@ dependencies = [
 [[package]]
 name = "p3-whir"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "hashbrown",
  "itertools 0.15.0",
@@ -763,6 +784,7 @@ dependencies = [
 [[package]]
 name = "p3-zk-codes"
 version = "0.6.0"
+source = "git+https://github.com/alxkzmn/Plonky3.git?rev=f64ae15da3807388b1a4e0a89a4fde8fdcdff515#f64ae15da3807388b1a4e0a89a4fde8fdcdff515"
 dependencies = [
  "itertools 0.15.0",
  "p3-dft",
