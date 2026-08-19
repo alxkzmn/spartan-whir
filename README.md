@@ -65,7 +65,7 @@ component main { public [x] } = Example();
 Create `input.json`:
 
 ```json
-{"x":"5","secret":"7"}
+{ "x": "5", "secret": "7" }
 ```
 
 Compile the circuit and generate the witness:
@@ -194,7 +194,7 @@ checked variants. Full-ZK callers that need deterministic test randomness can
 use `PoseidonZkProvingKey::prove_with_rng`.
 
 The outer protocol follows Construction 11.4 of
-*Zero-Knowledge IOPPs for Constrained Interleaved Codes*, adapted to
+_Zero-Knowledge IOPPs for Constrained Interleaved Codes_, adapted to
 the independently padded row and column domains used here:
 
 - `3 * num_outer_rounds` cubic inner masks hide the `A`, `B`, and `C` claims;
@@ -261,7 +261,7 @@ commitments. Setup also validates the
 length-4 and length-8 application-mask domains against the extension two-adicity
 before constructing or allocating their encodings.
 
-The full-ZK `spartan-whir-full-zk-v1` Fiat-Shamir order is:
+The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 
 1. ZK domain separator, ZK geometry, and public inputs
 2. inner-mask commitment
@@ -279,7 +279,7 @@ operating-system-seeded `StdRng`. `prove_with_rng` accepts a caller-supplied
 `Rng + CryptoRng`, which supports deterministic protocol tests without
 weakening the public API's RNG requirement.
 
-No-ZK transcripts use `spartan-whir-no-zk-v1`. The no-ZK and full-ZK domain
+No-ZK transcripts use `spartan-whir-no-zk-v0`. The no-ZK and full-ZK domain
 separators have the same canonical body after their protocol identifiers, but
 produce different transcript challenges. The plain-WHIR point-evaluation PCS
 and hiding-WHIR committed-relation proof also have separate transcript domain

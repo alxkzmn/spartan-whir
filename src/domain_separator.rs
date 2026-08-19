@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, WhirParams};
 
-pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v1";
-pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v1";
+pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v0";
+pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {
