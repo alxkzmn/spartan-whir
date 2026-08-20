@@ -17,10 +17,15 @@ def main() -> None:
     parser.add_argument("--fixed-audit-report", required=True)
     parser.add_argument("--read-report", required=True)
     parser.add_argument("--out-report", required=True)
+    parser.add_argument(
+        "--proof-mode",
+        choices=("no-zk", "full-zk"),
+        default="full-zk",
+    )
     parser.add_argument("--security-bits", type=int, required=True)
     parser.add_argument("--merkle-security-bits", type=int, required=True)
-    parser.add_argument("--ell-zk", type=int, required=True)
-    parser.add_argument("--mask-log-inv-rate", type=int, required=True)
+    parser.add_argument("--ell-zk", type=int)
+    parser.add_argument("--mask-log-inv-rate", type=int)
     parser.add_argument("--top-per-component", type=int, default=8)
     parser.add_argument("--max-report-rows", type=int, default=100)
     parser.add_argument("--measurement-rows", type=int, default=10)
@@ -39,6 +44,10 @@ def main() -> None:
         "fixed_audit": read_json(args.fixed_audit_report),
         "read": read_json(args.read_report),
     }
+    if args.proof_mode == "full-zk" and (
+        args.ell_zk is None or args.mask_log_inv_rate is None
+    ):
+        raise SystemExit("full-zk composition requires --ell-zk and --mask-log-inv-rate")
     report = compose_report(
         reports,
         args.security_bits,
@@ -59,6 +68,7 @@ def main() -> None:
             "fixed_audit": args.reference_fixed_audit_label,
             "read": args.reference_read_label,
         },
+        proof_mode=args.proof_mode,
     )
     write_json(args.out_report, report)
     selected = report.get("selected_measured") or report["selected"]
@@ -74,21 +84,27 @@ def compose_report(
     reports: dict[str, dict[str, Any]],
     security_bits: int,
     merkle_security_bits: int,
-    ell_zk: int,
-    mask_log_inv_rate: int,
+    ell_zk: int | None,
+    mask_log_inv_rate: int | None,
     top_per_component: int,
     max_report_rows: int,
     measurement_rows: int,
     measurements: dict[str, Any] | None,
     fixed_setup_log_domain_caps: dict[str, int],
     reference_labels: dict[str, str | None] | None = None,
+    proof_mode: str = "full-zk",
 ) -> dict[str, Any]:
     if min(top_per_component, max_report_rows, measurement_rows) <= 0:
         raise SystemExit("row limits must be positive")
     provenance = require_matching_provenance(reports)
-    require_report_mode(reports["witness"], "full-zk", "witness")
+    if proof_mode not in ("no-zk", "full-zk"):
+        raise SystemExit(f"unsupported SPARK proof mode: {proof_mode}")
+    require_report_mode(reports["witness"], proof_mode, "witness")
     for component in ("fixed_value", "fixed_audit", "read"):
         require_report_mode(reports[component], "no-zk", component)
+    component_security_bits, component_merkle_security_bits = require_security_targets(
+        reports, security_bits, merkle_security_bits
+    )
 
     ranked = {
         component: component_rows(
@@ -116,6 +132,7 @@ def compose_report(
                 merkle_security_bits,
                 ell_zk,
                 mask_log_inv_rate,
+                proof_mode,
             )
         )
     rows.sort(key=ranking_key)
@@ -133,6 +150,7 @@ def compose_report(
         measurement_rows,
         reports,
         reference_labels or {},
+        proof_mode,
     )
     rows = rows[:max_report_rows]
     for row in shortlist:
@@ -150,9 +168,11 @@ def compose_report(
         "schema_version": 2,
         "provenance": provenance,
         "matrix_closing": "Spark",
-        "proof_mode": "full-zk",
+        "proof_mode": proof_mode,
         "security_bits": security_bits,
         "merkle_security_bits": merkle_security_bits,
+        "component_security_bits": component_security_bits,
+        "component_merkle_security_bits": component_merkle_security_bits,
         "ell_zk": ell_zk,
         "mask_log_inv_rate": mask_log_inv_rate,
         "component_num_variables": {
@@ -172,16 +192,42 @@ def compose_report(
     }
 
 
+def require_security_targets(
+    reports: dict[str, dict[str, Any]],
+    security_bits: int,
+    merkle_security_bits: int,
+) -> tuple[int, int]:
+    component_targets = set()
+    for component, report in reports.items():
+        report_security = report.get("target_security_bits")
+        report_merkle = report.get("target_merkle_security_bits")
+        if (report_security, report_merkle) != (security_bits, merkle_security_bits):
+            raise SystemExit(
+                f"{component} report targets end-to-end security "
+                f"{report_security}/{report_merkle}, expected "
+                f"{security_bits}/{merkle_security_bits}"
+            )
+        component_security = report.get("component_security_override_bits")
+        component_merkle = report.get("component_merkle_security_override_bits")
+        if not isinstance(component_security, int) or not isinstance(component_merkle, int):
+            raise SystemExit(f"{component} report is missing explicit component security targets")
+        component_targets.add((component_security, component_merkle))
+    if len(component_targets) != 1:
+        raise SystemExit("SPARK component reports use different component security targets")
+    return component_targets.pop()
+
+
 def stratified_shortlist(
     ranked: dict[str, list[dict[str, Any]]],
     rows: list[dict[str, Any]],
     security_bits: int,
     merkle_security_bits: int,
-    ell_zk: int,
-    mask_log_inv_rate: int,
+    ell_zk: int | None,
+    mask_log_inv_rate: int | None,
     limit: int,
     reports: dict[str, dict[str, Any]],
     reference_labels: dict[str, str | None],
+    proof_mode: str,
 ) -> list[dict[str, Any]]:
     best = {component: candidates[0] for component, candidates in ranked.items()}
     selected = rows[: min(2, len(rows))]
@@ -201,6 +247,7 @@ def stratified_shortlist(
             merkle_security_bits,
             ell_zk,
             mask_log_inv_rate,
+            proof_mode,
         )]
         for component in ("witness", "fixed_value", "fixed_audit", "read"):
             alternatives = [
@@ -221,6 +268,7 @@ def stratified_shortlist(
                         merkle_security_bits,
                         ell_zk,
                         mask_log_inv_rate,
+                        proof_mode,
                     )
                 )
     else:
@@ -238,6 +286,7 @@ def stratified_shortlist(
                         merkle_security_bits,
                         ell_zk,
                         mask_log_inv_rate,
+                        proof_mode,
                     )
                 )
     selected = deduplicate_rows(selected)
@@ -329,8 +378,9 @@ def composed_row(
     read: dict[str, Any],
     security_bits: int,
     merkle_security_bits: int,
-    ell_zk: int,
-    mask_log_inv_rate: int,
+    ell_zk: int | None,
+    mask_log_inv_rate: int | None,
+    proof_mode: str,
 ) -> dict[str, Any]:
     components = {
         "witness": witness,
@@ -358,33 +408,37 @@ def composed_row(
             ("read", "r"),
         )
     )
+    setup_config = {
+        "matrix_closing": "Spark",
+        "security": {
+            "security_level_bits": security_bits,
+            "merkle_security_bits": merkle_security_bits,
+            "soundness_assumption": "JohnsonBound",
+        },
+        "whir_params": witness["whir_params"],
+        "spark_whir_params": {
+            "fixed_value": fixed_value["whir_params"],
+            "fixed_audit": fixed_audit["whir_params"],
+            "read": read["whir_params"],
+        },
+    }
+    if proof_mode == "full-zk":
+        if ell_zk is None or mask_log_inv_rate is None:
+            raise SystemExit("full-zk composition requires ZK mask parameters")
+        setup_config["ell_zk"] = ell_zk
+        setup_config["mask_log_inv_rate"] = mask_log_inv_rate
     return {
         "label": label,
         "extension": "octic",
         "valid": True,
-        "proof_mode": "full-zk",
+        "proof_mode": proof_mode,
         "matrix_closing": "Spark",
         "projected_schedule_seconds": projected,
         "projected_seconds": projected,
         "proof_size_bytes_estimate": size,
         "component_labels": labels,
         "component_scores": scores,
-        "setup_config": {
-            "matrix_closing": "Spark",
-            "security": {
-                "security_level_bits": security_bits,
-                "merkle_security_bits": merkle_security_bits,
-                "soundness_assumption": "JohnsonBound",
-            },
-            "whir_params": witness["whir_params"],
-            "spark_whir_params": {
-                "fixed_value": fixed_value["whir_params"],
-                "fixed_audit": fixed_audit["whir_params"],
-                "read": read["whir_params"],
-            },
-            "ell_zk": ell_zk,
-            "mask_log_inv_rate": mask_log_inv_rate,
-        },
+        "setup_config": setup_config,
     }
 
 

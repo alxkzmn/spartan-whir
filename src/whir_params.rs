@@ -248,6 +248,25 @@ pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
     }
 }
 
+/// Quintic parameters for 116-bit full-ZK DirectSparse witness commitments.
+///
+/// The 20-variable case is the measured SHA-256 2048-byte schedule. The WHIR
+/// schedule matches the octic profile; the prover-time improvement comes from
+/// using the quintic extension for the DirectSparse protocol. The composed
+/// security budget gives this witness argument a 118-bit component target and
+/// the hiding-WHIR protocol a 120-bit target.
+pub fn recommended_quintic_zk_whir_params(num_variables: usize) -> WhirParams {
+    let mut params = recommended_octic_zk_whir_params(num_variables);
+    // Unmeasured sizes use a permissive ceiling; the backend derives the
+    // actual grinding from the security target and schedule.
+    params.pow_bits = if matches!(num_variables, 19 | 20) {
+        params.pow_bits.max(4)
+    } else {
+        u32::try_from(num_variables).unwrap_or(u32::MAX).max(22)
+    };
+    params
+}
+
 fn derived_round_log_inv_rates(
     num_variables: usize,
     schedule: &WhirFoldingSchedule,

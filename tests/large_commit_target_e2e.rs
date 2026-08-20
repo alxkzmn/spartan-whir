@@ -29,9 +29,9 @@ fn run_target_e2e<EF>(
     .expect("setup succeeds");
 
     assert_eq!(pk.shape_canonical.num_vars, 1usize << k);
-    assert_eq!(vk.shape_canonical.num_vars, 1usize << k);
+    assert_eq!(vk.shape_canonical().num_vars, 1usize << k);
     assert_eq!(pk.pcs_config.num_variables, k);
-    assert_eq!(vk.pcs_config.num_variables, k);
+    assert_eq!(vk.pcs_config().num_variables, k);
 
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = SpartanProtocol::<PoseidonEngine<EF>, Plonky3WhirPcs>::prove(

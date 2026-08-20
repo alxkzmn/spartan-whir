@@ -33,7 +33,9 @@ use crate::plonky3_whir_pcs::{
 use crate::poseidon::{PoseidonZkProvingKey, PoseidonZkVerifyingKey};
 use crate::profiling::profile_scope;
 use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
-use crate::security::{derive_spark_component_security, SpartanSoundnessMode};
+use crate::security::{
+    derive_direct_component_security, derive_spark_component_security, SpartanSoundnessMode,
+};
 use crate::sumcheck::{
     prove_inner_base_first_unchecked, prove_outer_split_eq_base_first_owned_unchecked,
     prove_outer_zk_base_first_unchecked, verify_outer_zk,
@@ -86,21 +88,80 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     deserialize = "E::F: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Config: Deserialize<'de>"
 ))]
 pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
-    pub matrix_closing: MatrixClosingMode,
-    pub shape_canonical: R1csShape<E::F>,
-    pub num_cons_unpadded: usize,
-    pub num_vars_unpadded: usize,
-    pub num_io: usize,
-    pub security: SecurityConfig,
-    pub whir_params: WhirParams,
-    pub pcs_config: Pcs::Config,
-    pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
-    pub spark_pcs_configs: Option<SparkPcsConfigs>,
+    matrix_closing: MatrixClosingMode,
+    shape_canonical: R1csShape<E::F>,
+    num_cons_unpadded: usize,
+    num_vars_unpadded: usize,
+    num_io: usize,
+    security: SecurityConfig,
+    whir_params: WhirParams,
+    pcs_config: Pcs::Config,
+    /// SPARK fixed-table Merkle roots produced at setup.
+    spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    spark_pcs_configs: Option<SparkPcsConfigs>,
     #[serde(default)]
-    pub spark_table_metadata: Option<SparkTableMetadata>,
-    pub domain_separator: DomainSeparator,
+    spark_table_metadata: Option<SparkTableMetadata>,
+    domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
+    /// Setup authenticates this binding directly. Serialization omits the
+    /// marker, so a restored SPARK key must re-authenticate before use.
+    #[serde(skip)]
+    spark_fixed_commitments_authenticated: bool,
     marker: PhantomData<(E, Pcs)>,
+}
+
+impl<E, Pcs> VerifyingKey<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+{
+    pub fn matrix_closing(&self) -> MatrixClosingMode {
+        self.matrix_closing
+    }
+
+    pub fn shape_canonical(&self) -> &R1csShape<E::F> {
+        &self.shape_canonical
+    }
+
+    pub fn num_cons_unpadded(&self) -> usize {
+        self.num_cons_unpadded
+    }
+
+    pub fn num_vars_unpadded(&self) -> usize {
+        self.num_vars_unpadded
+    }
+
+    pub fn num_io(&self) -> usize {
+        self.num_io
+    }
+
+    pub fn security(&self) -> SecurityConfig {
+        self.security
+    }
+
+    pub fn whir_params(&self) -> &WhirParams {
+        &self.whir_params
+    }
+
+    pub fn pcs_config(&self) -> &Pcs::Config {
+        &self.pcs_config
+    }
+
+    pub fn spark_fixed_commitments(&self) -> Option<&SparkFixedCommitments<Pcs::Commitment>> {
+        self.spark_fixed_commitments.as_ref()
+    }
+
+    pub fn spark_pcs_configs(&self) -> Option<&SparkPcsConfigs> {
+        self.spark_pcs_configs.as_ref()
+    }
+
+    pub fn spark_table_metadata(&self) -> Option<SparkTableMetadata> {
+        self.spark_table_metadata
+    }
+
+    pub fn domain_separator(&self) -> &DomainSeparator {
+        &self.domain_separator
+    }
 }
 
 impl<E, Pcs> ProvingKey<E, Pcs>
@@ -589,7 +650,14 @@ where
 
     let spark_metadata = match vk.matrix_closing {
         MatrixClosingMode::DirectSparse => {
-            if vk.pcs_config.security != vk.security
+            let (expected_security, _) = derive_direct_component_security::<E::EF>(
+                &vk.security,
+                &vk.pcs_config,
+                vk.shape_canonical.num_cons.ilog2() as usize,
+                vk.shape_canonical.num_vars.ilog2() as usize + 1,
+                SpartanSoundnessMode::NoZk,
+            )?;
+            if vk.pcs_config.security != expected_security
                 || vk.spark_fixed_commitments.is_some()
                 || vk.spark_pcs_configs.is_some()
                 || vk.spark_table_metadata.is_some()
@@ -644,6 +712,90 @@ where
     };
 
     Ok(spark_metadata)
+}
+
+/// Recompute the SPARK fixed-table commitments from an R1CS shape and compare
+/// them with the roots carried by a key.
+///
+/// This is the only check that binds the fixed-table Merkle roots to the
+/// matrices they are supposed to commit to. It re-runs SPARK preprocessing
+/// and committing, so it costs about as much as the SPARK part of `setup`.
+pub(crate) fn authenticate_spark_fixed_commitments<E, EF, Pcs>(
+    shape_canonical: &R1csShape<F>,
+    configs: &SparkPcsConfigs,
+    expected: &SparkFixedCommitments<<Pcs as MlePcs<E>>::Commitment>,
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtField,
+    E: SpartanContextEngine<EF = EF>,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
+    <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
+{
+    let tables = preprocess_spark_tables(shape_canonical)?;
+    let (_, commitments) = setup_spark_fixed_commitments::<E, EF, Pcs>(configs, &tables)?
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if commitments != *expected {
+        return Err(SpartanWhirError::CommitmentMismatch);
+    }
+    Ok(())
+}
+
+impl<E, Pcs> VerifyingKey<E, Pcs>
+where
+    E: SpartanContextEngine,
+    E::EF: ExtField,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
+    Pcs::ProverData: Clone + CommittedPolynomialView<E::EF>,
+    Pcs::Commitment: Clone + PartialEq,
+{
+    /// Check that the key's SPARK fixed-table commitments actually commit to
+    /// the matrices of the embedded R1CS.
+    ///
+    /// A restored SPARK key cannot verify until this succeeds. It re-runs
+    /// SPARK preprocessing and committing, so it costs about as much as the
+    /// SPARK part of `setup`.
+    ///
+    /// Keys using `DirectSparse` matrix closing carry no commitments and
+    /// pass vacuously after the structural checks.
+    pub fn authenticate_spark_fixed_commitments(&mut self) -> Result<(), SpartanWhirError> {
+        self.spark_fixed_commitments_authenticated = false;
+        validate_verifying_key::<E, Pcs>(self)?;
+        match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => {
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+            MatrixClosingMode::Spark => {
+                let configs = self
+                    .spark_pcs_configs
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let expected = self
+                    .spark_fixed_commitments
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                authenticate_spark_fixed_commitments::<E, E::EF, Pcs>(
+                    &self.shape_canonical,
+                    configs,
+                    expected,
+                )?;
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn ensure_spark_fixed_commitments_authenticated(&self) -> Result<(), SpartanWhirError> {
+        if self.matrix_closing == MatrixClosingMode::Spark
+            && !self.spark_fixed_commitments_authenticated
+        {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::UnauthenticatedSparkVerifyingKey,
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<E, Pcs> SpartanProtocol<E, Pcs>
@@ -706,7 +858,16 @@ where
             MatrixClosingMode::Spark => Some(preprocess_spark_tables(&shape_canonical)?),
         };
         let component_security = match spark_tables.as_ref() {
-            None => config.security,
+            None => {
+                derive_direct_component_security::<E::EF>(
+                    &config.security,
+                    &provisional_pcs_config,
+                    num_outer_rounds,
+                    num_inner_rounds,
+                    SpartanSoundnessMode::NoZk,
+                )?
+                .0
+            }
             Some(tables) => {
                 let provisional_spark_configs = spark_pcs_configs_for_tables::<E::EF>(
                     &provisional_pcs_config,
@@ -806,6 +967,7 @@ where
             spark_table_metadata,
             domain_separator,
             observer: Some(NoopObserver),
+            spark_fixed_commitments_authenticated: true,
             marker: PhantomData,
         };
 
@@ -1379,6 +1541,7 @@ where
         Pcs: SparkReadPcs<E>,
     {
         let validated_spark_metadata = validate_verifying_key::<E, Pcs>(vk)?;
+        vk.ensure_spark_fixed_commitments_authenticated()?;
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
         Self::ensure_key_mode(vk.matrix_closing, MatrixClosingMode::Spark)?;
@@ -1888,6 +2051,7 @@ where
         challenger: &mut PoseidonChallenger,
     ) -> Result<(), SpartanWhirError> {
         let validated_spark_metadata = vk.validate()?;
+        vk.ensure_spark_fixed_commitments_authenticated()?;
         if proof.matrix_closing.mode() != vk.matrix_closing {
             return Err(SpartanWhirError::ProofKindMismatch);
         }

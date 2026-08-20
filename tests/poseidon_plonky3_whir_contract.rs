@@ -8,13 +8,15 @@ use spartan_whir::{
     LinearConstraintClaim, MatrixClosingMode, MlePcs, MultilinearPoint, OcticBinExtension,
     PcsStatement, PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim, PoseidonQuarticEngine,
     PoseidonSpartanProtocol, PoseidonZkProvingKey, PoseidonZkSetupConfig,
-    PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, QuarticBinExtension as EF, SparkWhirParams,
-    SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig, WhirFoldingSchedule, WhirParams,
-    WhirPcsConfig, ZkMatrixClosingProof, MAX_SECURITY_BITS,
+    PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, ProtocolPcs, QuarticBinExtension as EF,
+    QuinticExtension, SecurityConfig, SoundnessAssumption, SparkWhirParams, SpartanSnarkConfig,
+    SpartanWhirError, SyntheticR1csConfig, WhirFoldingSchedule, WhirParams, WhirPcsConfig,
+    ZkMatrixClosingProof, MAX_SECURITY_BITS,
 };
 
 type PoseidonEngineForTest = PoseidonQuarticEngine;
 type Protocol = PoseidonSpartanProtocol<spartan_whir::QuarticBinExtension>;
+type OcticProtocol = PoseidonSpartanProtocol<OcticBinExtension>;
 type ZkProtocol = PoseidonZkSpartanProtocol<spartan_whir::QuarticBinExtension>;
 type PcsCommitment = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::Commitment;
 type PcsProof = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::Proof;
@@ -150,6 +152,31 @@ fn poseidon_direct_plonky3_whir_roundtrip() {
 }
 
 #[test]
+fn poseidon_direct_no_zk_enforces_octic_composed_security_boundary() {
+    let fixture = fixture();
+    let mut accepted = poseidon_config(MatrixClosingMode::DirectSparse);
+    accepted.security.security_level_bits = 121;
+    accepted.security.merkle_security_bits = 121;
+    OcticProtocol::setup_with_config(&fixture.shape, &accepted)
+        .expect("121-bit composed DirectSparse target is attainable");
+
+    let mut rejected = accepted;
+    rejected.security.security_level_bits = 122;
+    rejected.security.merkle_security_bits = 122;
+    let error = OcticProtocol::setup_with_config(&fixture.shape, &rejected)
+        .err()
+        .expect("122-bit composed DirectSparse target is unattainable");
+    assert!(matches!(
+        error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
+            requested_bits: 122,
+            attainable_bits: 121,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn poseidon_direct_full_zk_roundtrip() {
     let fixture = fixture();
     let (pk, vk) = setup_zk(&fixture.shape);
@@ -169,6 +196,40 @@ fn poseidon_direct_full_zk_roundtrip() {
 }
 
 #[test]
+fn poseidon_direct_full_zk_quintic_recommended_profile_roundtrips() {
+    type QuinticProtocol = PoseidonZkSpartanProtocol<QuinticExtension>;
+
+    let fixture = fixture();
+    let num_variables = fixture.shape.num_vars.next_power_of_two().ilog2() as usize;
+    let config = PoseidonZkSetupConfig {
+        matrix_closing: MatrixClosingMode::DirectSparse,
+        security: SecurityConfig {
+            security_level_bits: 116,
+            merkle_security_bits: 116,
+            soundness_assumption: SoundnessAssumption::JohnsonBound,
+        },
+        whir_params: spartan_whir::recommended_quintic_zk_whir_params(num_variables),
+        spark_whir_params: None,
+        ell_zk: spartan_whir::DEFAULT_ZK_ELL,
+        mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
+    };
+    let (pk, vk) = setup_poseidon_zk::<QuinticExtension>(fixture.shape, config)
+        .expect("116-bit quintic DirectSparse setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = QuinticProtocol::prove(
+        &pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut prover_challenger,
+    )
+    .expect("quintic DirectSparse proof succeeds");
+
+    QuinticProtocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
+        .expect("quintic DirectSparse proof verifies");
+}
+
+#[test]
 fn poseidon_direct_full_zk_rejects_unattainable_quartic_security() {
     let fixture = fixture();
     let mut config = poseidon_zk_config(MatrixClosingMode::DirectSparse);
@@ -180,7 +241,7 @@ fn poseidon_direct_full_zk_rejects_unattainable_quartic_security() {
     };
     assert!(matches!(
         error,
-        SpartanWhirError::InvalidConfig(InvalidConfigReason::FullZkSecurityExceedsExtensionField {
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
             requested_bits: MAX_SECURITY_BITS,
             ..
         })
@@ -188,13 +249,28 @@ fn poseidon_direct_full_zk_rejects_unattainable_quartic_security() {
 }
 
 #[test]
-fn poseidon_direct_full_zk_accepts_octic_maximum_security() {
+fn poseidon_direct_full_zk_enforces_octic_composed_security_boundary() {
     let fixture = fixture();
-    let mut config = poseidon_zk_config(MatrixClosingMode::DirectSparse);
-    config.security.security_level_bits = MAX_SECURITY_BITS;
-    config.security.merkle_security_bits = MAX_SECURITY_BITS;
-    setup_poseidon_zk::<OcticBinExtension>(fixture.shape, config)
-        .expect("octic setup supports the maximum target");
+    let mut accepted = poseidon_zk_config(MatrixClosingMode::DirectSparse);
+    accepted.security.security_level_bits = 118;
+    accepted.security.merkle_security_bits = 118;
+    setup_poseidon_zk::<OcticBinExtension>(fixture.shape.clone(), accepted.clone())
+        .expect("118-bit composed full-ZK DirectSparse target is attainable");
+
+    let mut rejected = accepted;
+    rejected.security.security_level_bits = 119;
+    rejected.security.merkle_security_bits = 119;
+    let error = setup_poseidon_zk::<OcticBinExtension>(fixture.shape, rejected)
+        .err()
+        .expect("119-bit composed full-ZK DirectSparse target is unattainable");
+    assert!(matches!(
+        error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
+            requested_bits: 119,
+            attainable_bits: 118,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -880,6 +956,60 @@ fn poseidon_whir_rejects_wrong_claimed_evaluation() {
         &config,
         &commitment,
         &wrong_statement,
+        &proof,
+        &mut verifier_challenger,
+    );
+    assert_eq!(result, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn poseidon_whir_rejects_batch_cancelling_forged_openings() {
+    let config = pcs_config(6);
+    let poly = sample_poly(config.num_variables);
+    let statement = point_eval_statement(&poly, config.num_variables, &[4, 13]);
+    let (commitment, proof, _) = commit_and_open(&config, &poly, &statement);
+
+    // Replay the verifier transcript the way an attacker on the unbound
+    // adapter could: domain separator, commitment, and commitment OOD claims,
+    // then sample the claim-batching challenge without absorbing any
+    // statement claims. Before the claims were bound, this draw equaled the
+    // verifier's batching challenge, so a prover knew it before choosing the
+    // claimed values.
+    let mut replay_challenger = spartan_whir::poseidon_challenger();
+    <Plonky3WhirPcs as ProtocolPcs<PoseidonEngineForTest>>::verify_parse_commitment(
+        &config,
+        &commitment,
+        &proof,
+        &mut replay_challenger,
+    )
+    .expect("commitment parses");
+    let alpha: EF = replay_challenger.sample_algebra_element();
+
+    // Shift both claimed values along the cancellation direction. The batched
+    // combination `value_0 + alpha * value_1` is unchanged, so the honest
+    // WHIR proof authenticates the forged pair whenever the batching
+    // challenge is not bound to the claims. Both individual openings are
+    // false.
+    let first = point_eval_claim(&poly, config.num_variables, 4);
+    let second = point_eval_claim(&poly, config.num_variables, 13);
+    let delta = EF::from_u32(97);
+    let forged_statement = PcsStatementBuilder::<PoseidonEngineForTest>::new()
+        .add_point_eval(PointEvalClaim {
+            point: first.point,
+            value: first.value - alpha * delta,
+        })
+        .add_point_eval(PointEvalClaim {
+            point: second.point,
+            value: second.value + delta,
+        })
+        .finalize()
+        .expect("forged statement finalizes");
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let result = <Plonky3WhirPcs as MlePcs<PoseidonEngineForTest>>::verify(
+        &config,
+        &commitment,
+        &forged_statement,
         &proof,
         &mut verifier_challenger,
     );

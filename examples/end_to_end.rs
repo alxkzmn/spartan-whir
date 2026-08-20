@@ -8,15 +8,15 @@ use std::{
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use spartan_whir::{
-    import_r1cs_path, import_witness_path, recommended_octic_zk_whir_params, CircomR1cs,
-    MatrixClosingMode, OcticBinExtension, PoseidonZkProof, PoseidonZkProvingKey,
-    PoseidonZkSetupConfig, PoseidonZkVerifyingKey, SecurityConfig, DEFAULT_ZK_ELL,
+    import_r1cs_path, import_witness_path, recommended_quintic_zk_whir_params, CircomR1cs,
+    MatrixClosingMode, PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig,
+    PoseidonZkVerifyingKey, QuinticExtension, SecurityConfig, SoundnessAssumption, DEFAULT_ZK_ELL,
     DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
 
-type ProvingKey = PoseidonZkProvingKey<OcticBinExtension>;
-type VerifyingKey = PoseidonZkVerifyingKey<OcticBinExtension>;
-type Proof = PoseidonZkProof<OcticBinExtension>;
+type ProvingKey = PoseidonZkProvingKey<QuinticExtension>;
+type VerifyingKey = PoseidonZkVerifyingKey<QuinticExtension>;
+type Proof = PoseidonZkProof<QuinticExtension>;
 
 #[derive(Debug)]
 struct ProtocolError(String);
@@ -64,8 +64,12 @@ fn setup(
     let num_variables = circuit.shape.num_vars.next_power_of_two().ilog2() as usize;
     let config = PoseidonZkSetupConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
-        security: SecurityConfig::default(),
-        whir_params: recommended_octic_zk_whir_params(num_variables),
+        security: SecurityConfig {
+            security_level_bits: 116,
+            merkle_security_bits: 116,
+            soundness_assumption: SoundnessAssumption::JohnsonBound,
+        },
+        whir_params: recommended_quintic_zk_whir_params(num_variables),
         spark_whir_params: None,
         ell_zk: DEFAULT_ZK_ELL,
         mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,

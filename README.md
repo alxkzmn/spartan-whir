@@ -36,9 +36,9 @@ protocol follows
 ## Quick Start
 
 This example compiles a KoalaBear Circom circuit, generates a witness, creates
-full-ZK DirectSparse keys, produces a proof, and verifies it. It requires a
-Circom 2.2 build with KoalaBear support, a C++ compiler, GMP, and the
-`nlohmann-json` headers.
+116-bit full-ZK DirectSparse keys over the quintic extension, produces a proof,
+and verifies it. It requires a Circom 2.2 build with KoalaBear support, a C++
+compiler, GMP, and the `nlohmann-json` headers.
 
 Create `example.circom`:
 
@@ -135,7 +135,7 @@ before proving; `prove_from_witness_generator_checked` is available when
 debugging a linked witness generator and a row-level validation error is useful.
 The path has no JSON file, `.wtns` file, subprocess, or witness re-import.
 
-### Proving Key Setup and Loading
+### Key Setup and Loading
 
 A proving key returned by `setup_poseidon`, `PoseidonProvingKey::setup`, or
 `SpartanProtocol::setup_with_config` is ready to prove. Setup builds derived
@@ -155,6 +155,22 @@ let proof = pk.prove(witness, public_inputs)?;
 `prove` treats missing derived prover data as an invalid configuration instead
 of falling back to a slower path. `Spark` proving keys may use the same
 preparation call so load paths stay uniform.
+
+SPARK verifying keys bind public matrix tables through fixed WHIR
+commitments. After deserializing a SPARK verifying key, authenticate that
+binding once before verification:
+
+```rust
+let mut vk: PoseidonZkVerifyingKey<OcticBinExtension> =
+    bincode::deserialize(&vk_bytes)?;
+vk.authenticate_spark_fixed_commitments()?;
+vk.verify(&proof)?;
+```
+
+Authentication deterministically rebuilds the SPARK tables and commitments
+from the embedded R1CS. Verifying keys returned directly by setup are ready to
+use. DirectSparse verifying keys do not carry SPARK commitments and require no
+preparation after deserialization.
 
 ## Protocol Capabilities
 
@@ -182,7 +198,9 @@ and Spark use this API.
 The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
 `PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
 `PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
-Spark, `spark_whir_params` supplies independent fixed-value, fixed-audit, and
+DirectSparse at a 116-bit end-to-end target, use `QuinticExtension` with
+`recommended_quintic_zk_whir_params`. For Spark, `spark_whir_params` supplies
+independent fixed-value, fixed-audit, and
 read-table schedules; `None` reuses the witness schedule for all three. Octic
 configurations can use `recommended_octic_spark_fixed_whir_params` for the two
 fixed tables and `recommended_octic_whir_params` for the read table.
@@ -242,24 +260,23 @@ outer rounds, `n_y` inner rounds, and inner masked-sumcheck degree `d`, the
 full-ZK Spartan algebraic error includes the conservative term
 `(15 * n_x + d * n_y + 4) / |Ext|`.
 
-Spark setup applies one composed integer budget to the Spartan algebraic terms,
-matrix batching, tuple compression, grand-product identities, product
-sumchecks, per-layer reductions, batched table openings, four WHIR arguments,
-and every Poseidon commitment-binding event. The budget derives strengthened
-internal WHIR and Merkle targets from the requested end-to-end target. Setup
-returns a structured error with the requested bits, attainable bits, and
-dominant component when the extension field, WHIR arguments, or commitments
-cannot meet that target.
+Setup applies one composed integer budget in every privacy and matrix-closing
+mode. DirectSparse accounts for the Spartan algebraic terms, its witness WHIR
+argument, and every witness commitment-binding event. Spark adds matrix
+batching, tuple compression, grand-product identities, product sumchecks,
+per-layer reductions, batched table openings, and its table WHIR arguments and
+commitments. The budget derives strengthened internal WHIR and Merkle targets
+from the requested end-to-end target. Setup returns a structured error with the
+requested bits, attainable bits, and dominant component when the extension
+field, WHIR arguments, or commitments cannot meet that target.
 
 `SecurityConfig` accepts targets from 80 through 123 bits because the
 eight-element KoalaBear Poseidon digest provides about 123.95 bits of collision
 security. Targets above 123 bits are rejected before extension-specific checks.
-At the 123-bit maximum, the DirectSparse full-ZK bound rejects the quartic
-extension; the quintic and octic extensions satisfy that bound. Spark may
-accept a lower maximum after accounting for its additional arguments and
-commitments. Setup also validates the
-length-4 and length-8 application-mask domains against the extension two-adicity
-before constructing or allocating their encodings.
+The maximum attainable end-to-end target depends on the extension field, WHIR
+schedule, privacy mode, matrix-closing mode, and commitment count. Setup also
+validates the length-4 and length-8 application-mask domains against the
+extension two-adicity before constructing or allocating their encodings.
 
 The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 
@@ -369,9 +386,22 @@ existing artifacts from `SHA256_BENCH_WORKDIR`, which defaults to
 The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
 another cached circuit. The default extension is octic; set
 `SHA256_ZK_BENCH_EXTENSION=quintic` to benchmark the quintic extension. A
-non-octic run must also set `SHA256_ZK_BENCH_SCHEDULE` to its selected schedule
-label. The benchmark selects the highest composed Johnson-bound security target
-accepted by all four variants.
+non-octic run must set `SHA256_ZK_BENCH_SCHEDULE` or all four variant-specific
+schedule variables. The benchmark selects the highest composed Johnson-bound
+security target accepted by all four variants.
+`SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE`,
+`SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE`,
+`SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE`, and
+`SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE` override the shared schedule for one
+variant. This permits Criterion comparisons of independently selected schedules
+while every other variant retains the shared schedule.
+For a proving-only DirectSparse measurement, set
+`SHA256_ZK_BENCH_PROVING_ONLY=1` and
+`SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct` or
+`full_zk_direct`. `SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end
+security target for this single-variant run. Only the selected DirectSparse key
+is constructed, which permits extension-specific schedule measurements that
+are not supported by SPARK at the same security target.
 `SHA256_BENCH_ZK_ELL` and `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the
 default ZK mask parameters.
 
@@ -424,6 +454,14 @@ over 2048 input bytes, but the resulting R1CS shapes differ:
 
 The two SPARK proving variants run as separate sequential Criterion groups, so
 their point-estimate ordering is not a paired estimate of full-ZK overhead.
+
+An independently selected full-ZK DirectSparse profile uses the quintic
+extension with `pow4/ff8/rest6/lir1/rsv6`. At the same 116-bit end-to-end
+target, the adjacent native Criterion measurement reduced witness generation
+plus proving from 86.748 ms with octic to 71.036 ms with quintic. In the
+randomized interleaved heldout run, the median proof size decreased from
+1,599,476 to 1,160,220 bytes. The common four-mode table remains octic because
+SPARK requires the larger extension at this security target.
 
 The Spartan-WHIR proving interval includes linked witness generation. The
 ProveKit interval calls `prove_with_toml`, which generates the witness and

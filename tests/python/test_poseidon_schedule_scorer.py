@@ -445,11 +445,15 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
             features,
             security_bits,
             merkle_security_bits,
+            component_security_bits,
+            component_merkle_security_bits,
         ):
             calls.append((zk_ell, zk_mask_log_inv_rate))
             self.assertEqual(features, "parallel")
-            self.assertEqual(security_bits, 123)
+            self.assertEqual(security_bits, 116)
             self.assertIsNone(merkle_security_bits)
+            self.assertIsNone(component_security_bits)
+            self.assertIsNone(component_merkle_security_bits)
             return {
                 "schema_version": 2,
                 "proof_mode": proof_mode,
@@ -487,6 +491,21 @@ class PoseidonScheduleScorerTests(unittest.TestCase):
             scorer.DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP,
         )
         self.assertEqual(dump["num_outer_rounds"], 19)
+
+    def test_component_search_accepts_rows_without_standalone_setup_config(self):
+        row = candidate("component", dft=1)
+        row["setup_config"] = None
+        dump = {
+            "schema_version": 4,
+            "proof_mode": "no-zk",
+            "component_security_override_bits": 120,
+            "component_merkle_security_override_bits": 123,
+            "candidates": [row],
+        }
+
+        report = scorer.score_dump(dump, self.calibration(), max_pow_bits=22)
+
+        self.assertEqual(report["selected"]["label"], "component")
 
     def test_rejects_mismatched_code_provenance(self):
         dump = {

@@ -13,7 +13,7 @@ use spartan_whir::{
     engine::{PoseidonChallenger, F},
     MatrixClosingMode, OcticBinExtension, PoseidonZkSetupConfig, QuarticBinExtension,
     SecurityConfig, SoundnessAssumption, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
-    FINAL_SUMCHECK_MAX_VARIABLES,
+    FINAL_SUMCHECK_MAX_VARIABLES, MAX_SECURITY_BITS,
 };
 
 mod poseidon_schedule_support;
@@ -21,7 +21,7 @@ use poseidon_schedule_support::{
     collect as collect_provenance, enabled_features, BenchmarkProvenance,
 };
 
-const DEFAULT_SECURITY_BITS: usize = 123;
+const DEFAULT_SECURITY_BITS: usize = 116;
 const DEFAULT_K_MAX: usize = 8;
 const DEFAULT_LIR_MAX: usize = 8;
 const DEFAULT_MAX_POW_BITS: usize = 22;
@@ -78,6 +78,8 @@ struct Args {
     num_outer_rounds: usize,
     security_bits: usize,
     merkle_security_bits: usize,
+    component_security_bits: Option<usize>,
+    component_merkle_security_bits: Option<usize>,
     k_max: usize,
     starting_log_inv_rate_max: usize,
     max_pow_bits: usize,
@@ -98,6 +100,9 @@ struct CandidateDump {
     num_variables: usize,
     num_outer_rounds: usize,
     target_security_bits: usize,
+    target_merkle_security_bits: usize,
+    component_security_override_bits: Option<usize>,
+    component_merkle_security_override_bits: Option<usize>,
     soundness: SoundnessAssumption,
     max_pow_bits: usize,
     proof_mode: &'static str,
@@ -119,6 +124,8 @@ struct CandidateRow {
     valid: bool,
     rejection_reason: Option<String>,
     security_bits_achieved: Option<f64>,
+    whir_component_security_bits: Option<usize>,
+    merkle_component_security_bits: Option<usize>,
     max_derived_pow_bits: Option<usize>,
     pow_work_units: u128,
     dft_work: u128,
@@ -225,13 +232,16 @@ fn main() {
     }
 
     let dump = CandidateDump {
-        schema_version: 3,
+        schema_version: 4,
         provenance,
         matrix_closing: MatrixClosingMode::DirectSparse,
         base_field: args.field.label(),
         num_variables: args.num_variables,
         num_outer_rounds: args.num_outer_rounds,
         target_security_bits: args.security_bits,
+        target_merkle_security_bits: args.merkle_security_bits,
+        component_security_override_bits: args.component_security_bits,
+        component_merkle_security_override_bits: args.component_merkle_security_bits,
         soundness: SoundnessAssumption::JohnsonBound,
         max_pow_bits: args.max_pow_bits,
         proof_mode: args.proof_mode.label(),
@@ -404,12 +414,32 @@ fn derive_for_extension<Base, Ext, Challenger>(
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let label = schedule_label(extension, &whir_params);
+    let component_security_bits = match whir_component_security_bits(args) {
+        Ok(bits) => bits,
+        Err(reason) => {
+            if args.include_invalid {
+                out.push(invalid_row(
+                    args,
+                    label,
+                    args.field.label(),
+                    Base::TWO_ADICITY,
+                    extension,
+                    extension_degree,
+                    Ext::TWO_ADICITY,
+                    Ext::bits(),
+                    whir_params,
+                    reason,
+                ));
+            }
+            return;
+        }
+    };
     let protocol_security_bits = if args.proof_mode.is_full_zk() {
-        args.security_bits
+        component_security_bits
             .checked_add(FULL_ZK_RELATION_SECURITY_SLACK_BITS)
             .unwrap_or(usize::MAX)
     } else {
-        args.security_bits
+        component_security_bits
     };
     let protocol_params = protocol_parameters(&whir_params, protocol_security_bits);
     let result = catch_unwind_silent(|| {
@@ -456,19 +486,29 @@ fn derive_for_extension<Base, Ext, Challenger>(
 
     let achieved = achieved_security_bits::<Base, Ext, Challenger>(&config);
     let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config);
+    let merkle_component_security = direct_merkle_component_security_bits(args, config.n_rounds());
+    let merkle_rejection = match &merkle_component_security {
+        Ok(bits) if *bits <= MAX_SECURITY_BITS as usize => None,
+        Ok(bits) => Some(format!(
+            "derived Merkle component target {bits} exceeds maximum {MAX_SECURITY_BITS}"
+        )),
+        Err(reason) => Some(reason.clone()),
+    };
     let zk_rejection = if args.proof_mode.is_full_zk() {
         full_zk_compatibility_error::<Base, Ext, Challenger>(args, &config)
     } else {
         None
     };
-    let valid = achieved >= args.security_bits as f64
+    let valid = achieved >= protocol_security_bits as f64
         && max_pow <= args.max_pow_bits
+        && merkle_rejection.is_none()
         && zk_rejection.is_none();
     if !valid && !args.include_invalid {
         return;
     }
 
-    let setup_config = valid.then(|| setup_config(args, whir_params.clone()));
+    let setup_config = (valid && !args.uses_component_security_overrides())
+        .then(|| setup_config(args, whir_params.clone()));
     let rounds = config
         .round_parameters
         .iter()
@@ -524,18 +564,22 @@ fn derive_for_extension<Base, Ext, Challenger>(
         field_bits: Ext::bits(),
         valid,
         rejection_reason: (!valid).then(|| {
-            if achieved < args.security_bits as f64 {
+            if achieved < protocol_security_bits as f64 {
                 format!(
                     "achieved security {:.3} below target {}",
-                    achieved, args.security_bits
+                    achieved, protocol_security_bits
                 )
             } else if max_pow > args.max_pow_bits {
                 format!("derived PoW {max_pow} exceeds max {}", args.max_pow_bits)
+            } else if let Some(reason) = merkle_rejection {
+                reason
             } else {
                 zk_rejection.unwrap_or_else(|| "candidate rejected".to_owned())
             }
         }),
         security_bits_achieved: Some(achieved),
+        whir_component_security_bits: Some(component_security_bits),
+        merkle_component_security_bits: merkle_component_security.ok(),
         max_derived_pow_bits: Some(max_pow),
         pow_work_units,
         dft_work,
@@ -1232,6 +1276,8 @@ fn invalid_row(
         valid: false,
         rejection_reason: Some(reason.into()),
         security_bits_achieved: None,
+        whir_component_security_bits: None,
+        merkle_component_security_bits: None,
         max_derived_pow_bits: None,
         pow_work_units: 0,
         dft_work: 0,
@@ -1289,6 +1335,49 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> serde_json::Value {
         }),
     }
     .expect("setup config serializes")
+}
+
+impl Args {
+    fn uses_component_security_overrides(&self) -> bool {
+        self.component_security_bits.is_some()
+    }
+}
+
+fn whir_component_security_bits(args: &Args) -> Result<usize, String> {
+    if let Some(bits) = args.component_security_bits {
+        return Ok(bits);
+    }
+    args.security_bits
+        .min(args.merkle_security_bits)
+        .checked_add(quarter_budget_slack(1)?)
+        .ok_or_else(|| "WHIR component security target overflows".to_owned())
+}
+
+fn direct_merkle_component_security_bits(
+    args: &Args,
+    witness_rounds: usize,
+) -> Result<usize, String> {
+    if let Some(bits) = args.component_merkle_security_bits {
+        return Ok(bits);
+    }
+    let events = match args.proof_mode {
+        ProofMode::NoZk => witness_rounds.checked_add(1),
+        ProofMode::FullZk => witness_rounds
+            .checked_mul(3)
+            .and_then(|rounds| rounds.checked_add(6)),
+    }
+    .ok_or_else(|| "DirectSparse commitment event count overflows".to_owned())?;
+    args.security_bits
+        .min(args.merkle_security_bits)
+        .checked_add(quarter_budget_slack(events)?)
+        .ok_or_else(|| "Merkle component security target overflows".to_owned())
+}
+
+fn quarter_budget_slack(events: usize) -> Result<usize, String> {
+    let weighted = events
+        .checked_mul(4)
+        .ok_or_else(|| "composed security event count overflows".to_owned())?;
+    Ok(usize::BITS as usize - weighted.saturating_sub(1).leading_zeros() as usize)
 }
 
 fn achieved_security_bits<Base, Ext, Challenger>(
@@ -1749,6 +1838,8 @@ mod tests {
             num_outer_rounds: 20,
             security_bits: DEFAULT_SECURITY_BITS,
             merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
@@ -1775,6 +1866,40 @@ mod tests {
                 .expect("no-ZK setup config deserializes");
         assert_eq!(config.matrix_closing, MatrixClosingMode::DirectSparse);
         assert_eq!(config.whir_params, WhirParams::default());
+    }
+
+    #[test]
+    fn direct_component_targets_are_derived_from_end_to_end_security() {
+        let mut args = Args {
+            field: FieldProfile::KoalaBear,
+            num_variables: 20,
+            num_outer_rounds: 20,
+            security_bits: 116,
+            merkle_security_bits: 116,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::NoZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 3,
+        };
+
+        assert_eq!(whir_component_security_bits(&args), Ok(118));
+        assert_eq!(direct_merkle_component_security_bits(&args, 2), Ok(120));
+
+        args.proof_mode = ProofMode::FullZk;
+        assert_eq!(whir_component_security_bits(&args), Ok(118));
+        assert_eq!(direct_merkle_component_security_bits(&args, 2), Ok(122));
+
+        args.component_security_bits = Some(120);
+        args.component_merkle_security_bits = Some(123);
+        assert_eq!(whir_component_security_bits(&args), Ok(120));
+        assert_eq!(direct_merkle_component_security_bits(&args, 2), Ok(123));
     }
 
     #[test]
@@ -1851,6 +1976,8 @@ mod tests {
             num_outer_rounds: 19,
             security_bits: DEFAULT_SECURITY_BITS,
             merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
@@ -1874,6 +2001,8 @@ mod tests {
             num_outer_rounds: 19,
             security_bits: DEFAULT_SECURITY_BITS,
             merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
@@ -1902,6 +2031,8 @@ mod tests {
             num_outer_rounds: 17,
             security_bits: DEFAULT_SECURITY_BITS,
             merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
@@ -1943,6 +2074,8 @@ fn parse_args() -> Result<Args, String> {
         num_outer_rounds: 0,
         security_bits: DEFAULT_SECURITY_BITS,
         merkle_security_bits: DEFAULT_SECURITY_BITS,
+        component_security_bits: None,
+        component_merkle_security_bits: None,
         k_max: DEFAULT_K_MAX,
         starting_log_inv_rate_max: DEFAULT_LIR_MAX,
         max_pow_bits: DEFAULT_MAX_POW_BITS,
@@ -1961,6 +2094,12 @@ fn parse_args() -> Result<Args, String> {
             "--num-outer-rounds" => args.num_outer_rounds = parse_next(&mut iter, &arg)?,
             "--security-bits" => args.security_bits = parse_next(&mut iter, &arg)?,
             "--merkle-security-bits" => args.merkle_security_bits = parse_next(&mut iter, &arg)?,
+            "--component-security-bits" => {
+                args.component_security_bits = Some(parse_next(&mut iter, &arg)?)
+            }
+            "--component-merkle-security-bits" => {
+                args.component_merkle_security_bits = Some(parse_next(&mut iter, &arg)?)
+            }
             "--k-max" => args.k_max = parse_next(&mut iter, &arg)?,
             "--starting-log-inv-rate-max" => {
                 args.starting_log_inv_rate_max = parse_next(&mut iter, &arg)?
@@ -1986,6 +2125,24 @@ fn parse_args() -> Result<Args, String> {
     }
     if args.num_outer_rounds == 0 {
         args.num_outer_rounds = args.num_variables;
+    }
+    if args.component_security_bits.is_some() != args.component_merkle_security_bits.is_some() {
+        return Err(
+            "--component-security-bits and --component-merkle-security-bits must be supplied together"
+                .to_owned(),
+        );
+    }
+    if let (Some(component), Some(component_merkle)) = (
+        args.component_security_bits,
+        args.component_merkle_security_bits,
+    ) {
+        let requested = args.security_bits.min(args.merkle_security_bits);
+        if component < requested || component_merkle < requested {
+            return Err(
+                "component security targets must not be below the requested end-to-end target"
+                    .to_owned(),
+            );
+        }
     }
     Ok(args)
 }
@@ -2033,6 +2190,6 @@ fn parse_proof_mode(
 
 fn usage() {
     eprintln!(
-        "usage: poseidon-schedule-candidates --num-variables N [--num-outer-rounds N] [--field koalabear|babybear] [--security-bits 123] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
+        "usage: poseidon-schedule-candidates --num-variables N [--num-outer-rounds N] [--field koalabear|babybear] [--security-bits 116] [--merkle-security-bits 116] [--component-security-bits N --component-merkle-security-bits N] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
     );
 }

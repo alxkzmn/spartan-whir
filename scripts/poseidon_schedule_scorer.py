@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_POW_BITS = 22
-DEFAULT_SECURITY_BITS = 123
+DEFAULT_SECURITY_BITS = 116
 DEFAULT_ZK_ELL_SWEEP = [3, 4, 8, 16]
 DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP = [1, 2, 3, 4, 5]
 DEFAULT_VALIDATION_TOLERANCE = 0.20
@@ -38,10 +38,15 @@ def main() -> None:
     parser.add_argument("--field", default="koalabear", help="Field profile: koalabear or babybear")
     parser.add_argument("--calibration", required=True, help="Component calibration JSON")
     parser.add_argument("--out-report", required=True, help="Ranked report JSON path")
-    parser.add_argument("--out-config", required=True, help="Selected PoseidonSetupConfig JSON path")
+    parser.add_argument(
+        "--out-config",
+        help="Selected DirectSparse setup config; omit for component searches",
+    )
     parser.add_argument("--max-pow-bits", type=int, default=DEFAULT_MAX_POW_BITS)
     parser.add_argument("--security-bits", type=int, default=DEFAULT_SECURITY_BITS)
     parser.add_argument("--merkle-security-bits", type=int)
+    parser.add_argument("--component-security-bits", type=int)
+    parser.add_argument("--component-merkle-security-bits", type=int)
     parser.add_argument("--constraint-work", type=int, help="Circuit constraint count for full-prover scoring")
     parser.add_argument("--case-label", help="Optional case label copied into report rows")
     parser.add_argument("--cargo", default="cargo", help="Cargo binary used when --num-variables is set")
@@ -112,6 +117,8 @@ def main() -> None:
             args.features,
             args.security_bits,
             args.merkle_security_bits,
+            args.component_security_bits,
+            args.component_merkle_security_bits,
         )
     )
     apply_case_metrics(candidates, args.constraint_work, args.case_label)
@@ -131,7 +138,14 @@ def main() -> None:
     selected = report.get("selected")
     if selected is None:
         raise SystemExit("no valid schedule found")
-    write_json(Path(args.out_config), selected["setup_config"])
+    if args.out_config:
+        setup_config = selected.get("setup_config")
+        if setup_config is None:
+            raise SystemExit(
+                "component searches do not produce standalone setup configs; "
+                "compose their reports with poseidon_spark_schedule_scorer.py"
+            )
+        write_json(Path(args.out_config), setup_config)
 
     trust = "trusted" if report["model_validation"]["trusted"] else "untrusted"
     message = (
@@ -174,6 +188,7 @@ def score_dump(
     if measurements is not None and measurements.get("proof_mode") != proof_mode:
         raise SystemExit("heldout measurements must use the scorer report's proof_mode")
     use_zk_metrics = proof_mode == "full-zk"
+    component_search = dump.get("component_security_override_bits") is not None
     scored = []
     for candidate in dump.get("candidates", []):
         row = dict(candidate)
@@ -185,7 +200,7 @@ def score_dump(
             rejection_reasons.append("missing derived PoW")
         elif int(derived_pow) > max_pow_bits:
             rejection_reasons.append(f"derived PoW {derived_pow} exceeds max {max_pow_bits}")
-        if candidate.get("setup_config") is None:
+        if candidate.get("setup_config") is None and not component_search:
             rejection_reasons.append("missing setup config")
         projected = projected_seconds(candidate, coeffs, use_zk_metrics)
         row["projected_seconds"] = projected
@@ -236,6 +251,13 @@ def score_dump(
         "source_schema_version": dump.get("schema_version"),
         "num_variables": dump.get("num_variables"),
         "target_security_bits": dump.get("target_security_bits"),
+        "target_merkle_security_bits": dump.get("target_merkle_security_bits"),
+        "component_security_override_bits": dump.get(
+            "component_security_override_bits"
+        ),
+        "component_merkle_security_override_bits": dump.get(
+            "component_merkle_security_override_bits"
+        ),
         "max_pow_bits": max_pow_bits,
         "proof_mode": proof_mode,
         "model_validation": validation,
@@ -644,6 +666,8 @@ def generate_candidates(
     features: str = "parallel",
     security_bits: int = DEFAULT_SECURITY_BITS,
     merkle_security_bits: int | None = None,
+    component_security_bits: int | None = None,
+    component_merkle_security_bits: int | None = None,
 ) -> dict[str, Any]:
     num_outer_rounds = (
         max(0, constraint_work - 1).bit_length()
@@ -663,6 +687,8 @@ def generate_candidates(
             features,
             security_bits,
             merkle_security_bits,
+            component_security_bits,
+            component_merkle_security_bits,
         )
     ell_values = zk_ell_values or DEFAULT_ZK_ELL_SWEEP
     mask_rate_values = zk_mask_log_inv_rate_values or DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP
@@ -682,6 +708,8 @@ def generate_candidates(
                     features,
                     security_bits,
                     merkle_security_bits,
+                    component_security_bits,
+                    component_merkle_security_bits,
                 )
             )
     merged = dict(dumps[0])
@@ -714,6 +742,8 @@ def generate_candidate_dump(
     features: str,
     security_bits: int,
     merkle_security_bits: int | None,
+    component_security_bits: int | None,
+    component_merkle_security_bits: int | None,
 ) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
@@ -743,6 +773,19 @@ def generate_candidate_dump(
         "--num-outer-rounds",
         str(num_outer_rounds),
     ]
+    if (component_security_bits is None) != (component_merkle_security_bits is None):
+        raise SystemExit(
+            "component security and Merkle security targets must be supplied together"
+        )
+    if component_security_bits is not None:
+        cmd.extend(
+            [
+                "--component-security-bits",
+                str(component_security_bits),
+                "--component-merkle-security-bits",
+                str(component_merkle_security_bits),
+            ]
+        )
     if zk_ell is not None:
         cmd.extend(["--zk-ell", str(zk_ell)])
     if zk_mask_log_inv_rate is not None:

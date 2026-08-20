@@ -7,9 +7,9 @@ use p3_whir::{
 };
 use spartan_whir::{
     engine::F, recommended_octic_schedule, recommended_octic_spark_fixed_whir_params,
-    recommended_octic_whir_params, recommended_octic_zk_whir_params, OcticBinExtension,
-    PoseidonChallenger, WhirFoldingSchedule, WhirParams, DEFAULT_ZK_ELL,
-    DEFAULT_ZK_MASK_LOG_INV_RATE,
+    recommended_octic_whir_params, recommended_octic_zk_whir_params,
+    recommended_quintic_zk_whir_params, OcticBinExtension, PoseidonChallenger, QuinticExtension,
+    WhirFoldingSchedule, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
 
 #[test]
@@ -128,6 +128,19 @@ fn recommended_octic_zk_whir_params_use_measured_sha256_2048_schedule() {
 }
 
 #[test]
+fn recommended_quintic_zk_whir_params_use_measured_sha256_2048_schedule() {
+    assert_eq!(
+        recommended_quintic_zk_whir_params(20),
+        recommended_octic_zk_whir_params(20)
+    );
+}
+
+#[test]
+fn recommended_quintic_zk_whir_params_reserve_small_domain_grinding() {
+    assert_eq!(recommended_quintic_zk_whir_params(1).pow_bits, 22);
+}
+
+#[test]
 fn recommended_octic_zk_whir_params_use_measured_sha256_1024_schedule() {
     let params = recommended_octic_zk_whir_params(19);
 
@@ -160,7 +173,35 @@ fn recommended_octic_zk_whir_params_are_accepted_by_zk_config() {
     }
 }
 
+#[test]
+fn recommended_quintic_zk_whir_params_are_accepted_by_zk_config() {
+    for num_variables in 1..=31 {
+        let params = recommended_quintic_zk_whir_params(num_variables);
+        ZkWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            num_variables,
+            protocol_parameters_with_security(num_variables, &params, 120),
+            ZkParameters {
+                ell_zk: DEFAULT_ZK_ELL,
+                mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
+            },
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "recommended ZK quintic WHIR params rejected at {num_variables} variables: {err}"
+            )
+        });
+    }
+}
+
 fn protocol_parameters(num_variables: usize, params: &WhirParams) -> ProtocolParameters {
+    protocol_parameters_with_security(num_variables, params, 123)
+}
+
+fn protocol_parameters_with_security(
+    num_variables: usize,
+    params: &WhirParams,
+    security_level: usize,
+) -> ProtocolParameters {
     ProtocolParameters {
         starting_log_inv_rate: params.starting_log_inv_rate,
         round_log_inv_rates: round_log_inv_rates(num_variables, params),
@@ -172,7 +213,7 @@ fn protocol_parameters(num_variables: usize, params: &WhirParams) -> ProtocolPar
             WhirFoldingSchedule::PerRound(factors) => P3FoldingFactor::PerRound(factors),
         },
         soundness_type: P3SecurityAssumption::JohnsonBound,
-        security_level: 123,
+        security_level,
         pow_bits: params.pow_bits as usize,
     }
 }

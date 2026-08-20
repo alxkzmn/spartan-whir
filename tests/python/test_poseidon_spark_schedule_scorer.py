@@ -44,6 +44,10 @@ def report(mode, variables, rows):
         "provenance": {"git_commit": "test"},
         "proof_mode": mode,
         "num_variables": variables,
+        "target_security_bits": 116,
+        "target_merkle_security_bits": 116,
+        "component_security_override_bits": 120,
+        "component_merkle_security_override_bits": 123,
         "scores": rows,
     }
 
@@ -74,11 +78,38 @@ class SparkScheduleScorerTests(unittest.TestCase):
         row = result["selected"]
         self.assertEqual(row["setup_config"]["matrix_closing"], "Spark")
         self.assertEqual(row["setup_config"]["security"]["security_level_bits"], 116)
+        self.assertEqual(result["component_security_bits"], 120)
+        self.assertEqual(result["component_merkle_security_bits"], 123)
         self.assertEqual(row["component_scores"]["witness"], 6.0)
         self.assertEqual(row["component_scores"]["fixed_value"], 8.0)
         self.assertEqual(row["component_scores"]["fixed_audit"], 12.0)
         self.assertEqual(row["component_scores"]["read"], 24.0)
         self.assertEqual(row["proof_size_bytes_estimate"], 1000)
+
+    def test_composes_no_zk_spark_config_without_zk_parameters(self):
+        reports = self.reports()
+        reports["witness"]["proof_mode"] = "no-zk"
+
+        result = MODULE.compose_report(
+            reports,
+            116,
+            116,
+            None,
+            None,
+            1,
+            10,
+            1,
+            None,
+            {"fixed_value": 27, "fixed_audit": 23},
+            None,
+            proof_mode="no-zk",
+        )
+
+        row = result["selected"]
+        self.assertEqual(result["proof_mode"], "no-zk")
+        self.assertEqual(row["proof_mode"], "no-zk")
+        self.assertNotIn("ell_zk", row["setup_config"])
+        self.assertNotIn("mask_log_inv_rate", row["setup_config"])
 
     def test_fixed_table_setup_domain_caps_filter_impractical_rates(self):
         reports = self.reports()
@@ -102,6 +133,45 @@ class SparkScheduleScorerTests(unittest.TestCase):
         )
 
         self.assertEqual(result["selected"]["component_labels"]["fixed_value"], "bounded")
+
+    def test_rejects_component_report_with_end_to_end_target_in_component_field(self):
+        reports = self.reports()
+        reports["witness"]["target_security_bits"] = 120
+        reports["witness"]["component_security_override_bits"] = None
+
+        with self.assertRaisesRegex(SystemExit, "targets end-to-end security"):
+            MODULE.compose_report(
+                reports,
+                116,
+                116,
+                3,
+                3,
+                1,
+                10,
+                1,
+                None,
+                {"fixed_value": 27, "fixed_audit": 23},
+                None,
+            )
+
+    def test_rejects_mismatched_component_targets(self):
+        reports = self.reports()
+        reports["read"]["component_security_override_bits"] = 121
+
+        with self.assertRaisesRegex(SystemExit, "different component security targets"):
+            MODULE.compose_report(
+                reports,
+                116,
+                116,
+                3,
+                3,
+                1,
+                10,
+                1,
+                None,
+                {"fixed_value": 27, "fixed_audit": 23},
+                None,
+            )
 
     def test_affine_calibration_holds_out_every_third_row(self):
         pairs = [(1.0, 3.0), (2.0, 5.0), (4.0, 9.0), (5.0, 11.0)]

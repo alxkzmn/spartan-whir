@@ -69,6 +69,12 @@ where
     full_zk_spark: Vec<(Instance<Ext>, FullZkProof<Ext>)>,
 }
 
+#[derive(Clone, Copy)]
+enum SingleProvingVariant {
+    NoZkDirect,
+    FullZkDirect,
+}
+
 fn benchmark_sha256_full_zk(c: &mut Criterion) {
     let sha256_size = env_usize("SHA256_ZK_BENCH_SIZE", DEFAULT_SHA256_SIZE);
     match env_string("SHA256_ZK_BENCH_EXTENSION", "octic").as_str() {
@@ -107,6 +113,24 @@ where
             .expect("cached linked witness generator matches SHA-256");
     }
 
+    if let Some(variant) = single_proving_variant() {
+        assert!(
+            env_flag("SHA256_ZK_BENCH_PROVING_ONLY"),
+            "SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT requires SHA256_ZK_BENCH_PROVING_ONLY=1"
+        );
+        let security_bits = env_usize("SHA256_ZK_BENCH_SECURITY_BITS", 116) as u32;
+        benchmark_single_direct_proving::<Ext>(
+            c,
+            sha256_size,
+            extension,
+            &fixture,
+            &inputs,
+            security_bits,
+            variant,
+        );
+        return;
+    }
+
     let (configs, keys, security_bits) = select_configs_and_keys::<Ext>(&fixture, extension);
     println!("benchmark_security_bits: {security_bits}");
 
@@ -137,6 +161,127 @@ where
     let proofs = build_proof_corpus::<Ext>(&fixture, &messages, &inputs, &configs, &keys);
     report_proof_sizes::<Ext>(&proofs);
     benchmark_verification::<Ext>(c, sha256_size, extension, &keys, &proofs);
+}
+
+fn benchmark_single_direct_proving<Ext>(
+    c: &mut Criterion,
+    sha256_size: usize,
+    extension: &str,
+    fixture: &Sha256Fixture,
+    inputs: &[Vec<u8>],
+    security_bits: u32,
+    variant: SingleProvingVariant,
+) where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<Commitment<Ext>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+{
+    assert!(
+        (MIN_SECURITY_BITS..=MAX_SECURITY_BITS).contains(&security_bits),
+        "SHA256_ZK_BENCH_SECURITY_BITS must be between {MIN_SECURITY_BITS} and {MAX_SECURITY_BITS}"
+    );
+    let num_variables = fixture.shape.num_vars.next_power_of_two().ilog2() as usize;
+    let security = benchmark_security(security_bits);
+    println!("benchmark_security_bits: {security_bits}");
+    let mut group = c.benchmark_group(format!(
+        "sha256_{sha256_size}b_{extension}/witness_and_prove"
+    ));
+
+    match variant {
+        SingleProvingVariant::NoZkDirect => {
+            let config = SpartanSnarkConfig {
+                matrix_closing: MatrixClosingMode::DirectSparse,
+                security,
+                whir_params: benchmark_whir_params(
+                    num_variables,
+                    extension,
+                    "SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE",
+                ),
+                spark_whir_params: None,
+            };
+            let (pk, _) = PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &config)
+                .expect("no-ZK DirectSparse setup succeeds at selected security");
+            let mut sample_index = 0usize;
+            group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
+                bencher.iter_batched(
+                    || {
+                        let input = inputs[sample_index % inputs.len()].clone();
+                        sample_index += 1;
+                        input
+                    },
+                    |input| {
+                        let (witness, public_inputs) = fixture
+                            .generator
+                            .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                            .expect("no-ZK DirectSparse witness generation succeeds");
+                        let mut challenger = spartan_whir::poseidon_challenger();
+                        black_box(
+                            PlainProtocol::<Ext>::prove_with_mode(
+                                &pk,
+                                &public_inputs,
+                                &witness,
+                                MatrixClosingMode::DirectSparse,
+                                &mut challenger,
+                            )
+                            .expect("no-ZK DirectSparse proving succeeds"),
+                        )
+                    },
+                    BatchSize::PerIteration,
+                );
+            });
+        }
+        SingleProvingVariant::FullZkDirect => {
+            let config = PoseidonZkSetupConfig {
+                matrix_closing: MatrixClosingMode::DirectSparse,
+                security,
+                whir_params: benchmark_whir_params(
+                    num_variables,
+                    extension,
+                    "SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE",
+                ),
+                spark_whir_params: None,
+                ell_zk: env_usize("SHA256_BENCH_ZK_ELL", spartan_whir::DEFAULT_ZK_ELL),
+                mask_log_inv_rate: env_usize(
+                    "SHA256_BENCH_ZK_MASK_LOG_INV_RATE",
+                    spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
+                ),
+            };
+            let (pk, _) = FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), config)
+                .expect("full-ZK DirectSparse setup succeeds at selected security");
+            let mut sample_index = 0usize;
+            group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
+                bencher.iter_batched(
+                    || {
+                        let sample = sample_index;
+                        sample_index += 1;
+                        (inputs[sample % inputs.len()].clone(), sample_rng(sample))
+                    },
+                    |(input, mut rng)| {
+                        let (witness, public_inputs) = fixture
+                            .generator
+                            .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                            .expect("full-ZK DirectSparse witness generation succeeds");
+                        let mut challenger = spartan_whir::poseidon_challenger();
+                        black_box(
+                            FullZkProtocol::<Ext>::prove_with_rng(
+                                &pk,
+                                &public_inputs,
+                                &witness,
+                                &mut challenger,
+                                &mut rng,
+                            )
+                            .expect("full-ZK DirectSparse proving succeeds"),
+                        )
+                    },
+                    BatchSize::PerIteration,
+                );
+            });
+        }
+    }
+    group.finish();
 }
 
 fn select_configs_and_keys<Ext>(
@@ -775,6 +920,21 @@ fn env_string(name: &str, default: &str) -> String {
     }
 }
 
+fn single_proving_variant() -> Option<SingleProvingVariant> {
+    let raw = env::var_os("SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT")?;
+    match raw
+        .into_string()
+        .unwrap_or_else(|_| panic!("SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT must be valid UTF-8"))
+        .as_str()
+    {
+        "no_zk_direct" => Some(SingleProvingVariant::NoZkDirect),
+        "full_zk_direct" => Some(SingleProvingVariant::FullZkDirect),
+        value => panic!(
+            "SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT must be no_zk_direct or full_zk_direct, got {value}"
+        ),
+    }
+}
+
 fn env_flag(name: &str) -> bool {
     match env::var(name) {
         Ok(value) => matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"),
@@ -789,12 +949,27 @@ fn benchmark_configs<Ext: ExtField>(
     security_bits: u32,
 ) -> BenchmarkConfigs {
     let num_variables = shape.num_vars.next_power_of_two().ilog2() as usize;
-    let security = SecurityConfig {
-        security_level_bits: security_bits,
-        merkle_security_bits: security_bits,
-        soundness_assumption: SoundnessAssumption::JohnsonBound,
-    };
-    let whir = benchmark_whir_params(num_variables, extension);
+    let security = benchmark_security(security_bits);
+    let no_zk_direct_whir = benchmark_whir_params(
+        num_variables,
+        extension,
+        "SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE",
+    );
+    let no_zk_spark_whir = benchmark_whir_params(
+        num_variables,
+        extension,
+        "SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE",
+    );
+    let full_zk_direct_whir = benchmark_whir_params(
+        num_variables,
+        extension,
+        "SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE",
+    );
+    let full_zk_spark_whir = benchmark_whir_params(
+        num_variables,
+        extension,
+        "SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE",
+    );
     let tables = preprocess_spark_tables(shape).expect("SPARK tables preprocess");
     let value_variables = tables.value_domain_size.ilog2() as usize;
     let fixed_value_variables = value_variables + spartan_whir::protocol::fixed_value_column_bits();
@@ -813,19 +988,19 @@ fn benchmark_configs<Ext: ExtField>(
     let no_zk_direct = SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
         security,
-        whir_params: whir.clone(),
+        whir_params: no_zk_direct_whir,
         spark_whir_params: None,
     };
     let no_zk_spark = SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::Spark,
         security,
-        whir_params: whir.clone(),
+        whir_params: no_zk_spark_whir,
         spark_whir_params: Some(spark_whir_params.clone()),
     };
     let full_zk_direct = PoseidonZkSetupConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
         security,
-        whir_params: whir.clone(),
+        whir_params: full_zk_direct_whir,
         spark_whir_params: None,
         ell_zk: env_usize("SHA256_BENCH_ZK_ELL", spartan_whir::DEFAULT_ZK_ELL),
         mask_log_inv_rate: env_usize(
@@ -835,8 +1010,11 @@ fn benchmark_configs<Ext: ExtField>(
     };
     let full_zk_spark = PoseidonZkSetupConfig {
         matrix_closing: MatrixClosingMode::Spark,
+        security,
+        whir_params: full_zk_spark_whir,
         spark_whir_params: Some(spark_whir_params),
-        ..full_zk_direct.clone()
+        ell_zk: full_zk_direct.ell_zk,
+        mask_log_inv_rate: full_zk_direct.mask_log_inv_rate,
     };
     BenchmarkConfigs {
         no_zk_direct,
@@ -846,29 +1024,60 @@ fn benchmark_configs<Ext: ExtField>(
     }
 }
 
-fn benchmark_whir_params(num_variables: usize, extension: &str) -> WhirParams {
-    let Some(raw) = env::var_os("SHA256_ZK_BENCH_SCHEDULE") else {
+fn benchmark_security(security_bits: u32) -> SecurityConfig {
+    SecurityConfig {
+        security_level_bits: security_bits,
+        merkle_security_bits: security_bits,
+        soundness_assumption: SoundnessAssumption::JohnsonBound,
+    }
+}
+
+fn benchmark_whir_params(num_variables: usize, extension: &str, variant_env: &str) -> WhirParams {
+    let Some(raw) = env::var_os(variant_env).or_else(|| env::var_os("SHA256_ZK_BENCH_SCHEDULE"))
+    else {
         assert_eq!(
             extension, "octic",
-            "SHA256_ZK_BENCH_SCHEDULE is required for non-octic extensions"
+            "{variant_env} or SHA256_ZK_BENCH_SCHEDULE is required for non-octic extensions"
         );
         return recommended_octic_zk_whir_params(num_variables);
     };
     let label = raw
         .into_string()
-        .unwrap_or_else(|_| panic!("SHA256_ZK_BENCH_SCHEDULE must be valid UTF-8"));
-    let parts = label.split('_').collect::<Vec<_>>();
-    assert!(
-        parts.len() == 7 && parts[0] == extension && parts[1] == "cfsr",
-        "unsupported SHA256_ZK_BENCH_SCHEDULE: {label}"
-    );
+        .unwrap_or_else(|_| panic!("{variant_env} must be valid UTF-8"));
+    parse_benchmark_schedule(num_variables, extension, &label)
+}
 
-    let pow_bits = parse_schedule_component(parts[2], "pow") as u32;
-    let first = parse_schedule_component(parts[3], "ff");
-    let rest = parse_schedule_component(parts[4], "rest");
-    let starting_log_inv_rate = parse_schedule_component(parts[5], "lir");
-    let rs_domain_initial_reduction_factor = parse_schedule_component(parts[6], "rsv");
-    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first, rest };
+fn parse_benchmark_schedule(num_variables: usize, extension: &str, label: &str) -> WhirParams {
+    let parts = label.split('_').collect::<Vec<_>>();
+    assert_eq!(parts.first().copied(), Some(extension));
+    let (pow, first, starting_log_inv_rate, rs_domain_initial_reduction_factor, schedule) =
+        match parts.as_slice() {
+            [_, "constant", pow, first, lir, rsv] => {
+                let first = parse_schedule_component(first, "ff");
+                (
+                    *pow,
+                    first,
+                    parse_schedule_component(lir, "lir"),
+                    parse_schedule_component(rsv, "rsv"),
+                    WhirFoldingSchedule::Constant(first),
+                )
+            }
+            [_, "cfsr", pow, first, rest, lir, rsv] => {
+                let first = parse_schedule_component(first, "ff");
+                (
+                    *pow,
+                    first,
+                    parse_schedule_component(lir, "lir"),
+                    parse_schedule_component(rsv, "rsv"),
+                    WhirFoldingSchedule::ConstantFromSecondRound {
+                        first,
+                        rest: parse_schedule_component(rest, "rest"),
+                    },
+                )
+            }
+            _ => panic!("unsupported SHA256_ZK_BENCH_SCHEDULE: {label}"),
+        };
+    let pow_bits = parse_schedule_component(pow, "pow") as u32;
     let round_log_inv_rates = benchmark_round_log_inv_rates(
         num_variables,
         &schedule,

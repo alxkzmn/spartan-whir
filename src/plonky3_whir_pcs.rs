@@ -336,10 +336,6 @@ where
         num_outer_rounds: usize,
         num_inner_rounds: usize,
     ) -> Result<(), SpartanWhirError> {
-        // TODO: Account for the complete no-ZK Spartan soundness error when
-        // deriving the WHIR target. This includes the outer and inner
-        // sumchecks for both modes, plus Spark's product, batching, and table
-        // opening terms when `matrix_closing` is Spark.
         let _ = (matrix_closing, num_outer_rounds, num_inner_rounds);
         build_poseidon_plain_pcs::<Ext>(config).map(|_| ())
     }
@@ -412,7 +408,14 @@ where
         let _profile = profile_scope("verify_finalize_plain");
         config.validate()?;
         let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
-        let mut eq_statement = build_plain_eq_statement(statement, config.num_variables)?;
+        let claims = statement_point_claims(statement, config.num_variables)?;
+        // Bind every claimed opening before the batching challenge below is
+        // sampled. The prover absorbs the same claims at the same position.
+        observe_statement_point_claims(&claims, challenger);
+        let mut eq_statement = EqStatement::initialize(config.num_variables);
+        for (point, eval) in claims {
+            eq_statement.add_evaluated_constraint(point, eval);
+        }
         for (point, eval) in parsed.ood_statement.iter() {
             eq_statement.add_evaluated_constraint(point.clone(), *eval);
         }
@@ -1054,6 +1057,11 @@ where
     }
     let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
     let mut claims = statement_point_claims(statement, config.num_variables)?;
+    // Bind every claimed opening before WHIR samples the claim-batching
+    // challenge inside `prove`. Without this, that challenge is independent
+    // of the claimed values, and a malicious prover can pick false openings
+    // whose batched combination cancels while each opening is wrong.
+    observe_statement_point_claims(&claims, challenger);
     claims.extend(
         prover_data
             .ood_pairs
@@ -1386,19 +1394,25 @@ where
     })
 }
 
-fn build_plain_eq_statement<Ext>(
-    statement: &PcsStatement<PoseidonEngine<Ext>>,
-    num_variables: usize,
-) -> Result<EqStatement<Ext>, SpartanWhirError>
-where
+/// Absorb the statement's claimed opening points and values into the
+/// transcript.
+///
+/// The batching challenge that folds these claims into one WHIR constraint
+/// must depend on all of them; prover and verifier call this at the same
+/// transcript position, directly before that challenge is sampled. The
+/// commitment OOD claims are excluded because the commit phase already
+/// absorbed them.
+fn observe_statement_point_claims<Ext>(
+    claims: &[(Point<Ext>, Ext)],
+    challenger: &mut PoseidonChallenger,
+) where
     Ext: ExtField,
 {
-    let claims = statement_point_claims(statement, num_variables)?;
-    let mut eq_statement = EqStatement::initialize(num_variables);
-    for (point, eval) in claims {
-        eq_statement.add_evaluated_constraint(point, eval);
+    challenger.observe(F::from_usize(claims.len()));
+    for (point, value) in claims {
+        challenger.observe_algebra_slice(point.as_slice());
+        challenger.observe_algebra_element(*value);
     }
-    Ok(eq_statement)
 }
 
 fn statement_point_claims<Ext>(

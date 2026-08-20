@@ -277,7 +277,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         )
         .expect("direct setup succeeds");
     assert_eq!(direct_pk.spark_fixed_commitments, None);
-    assert_eq!(direct_vk.spark_fixed_commitments, None);
+    assert_eq!(direct_vk.spark_fixed_commitments(), None);
 
     let mut direct_prover_challenger = spartan_whir::poseidon_challenger();
     let mut direct_verifier_challenger = spartan_whir::poseidon_challenger();
@@ -308,7 +308,7 @@ fn protocol_direct_and_spark_roundtrip_same_fixture_with_config_modes() {
         SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::setup_with_config(&shape, &spark_config)
             .expect("spark setup succeeds");
     assert!(spark_pk.spark_fixed_commitments.is_some());
-    assert!(spark_vk.spark_fixed_commitments.is_some());
+    assert!(spark_vk.spark_fixed_commitments().is_some());
 
     let mut spark_prover_challenger = spartan_whir::poseidon_challenger();
     let mut spark_verifier_challenger = spartan_whir::poseidon_challenger();
@@ -812,38 +812,18 @@ fn protocol_spark_swapped_shared_union_val_ab_openings_fail() {
 #[test]
 fn protocol_spark_verifying_key_fixed_commitment_mismatch_fails() {
     let shape = regular_shape_two_constraints();
-    let (pk, mut vk) = setup_keys(&shape);
-    let mut prover_challenger = spartan_whir::poseidon_challenger();
-    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let (_, vk) = setup_keys(&shape);
 
-    let witness = spartan_whir::R1csWitness {
-        w: vec![F::from_u32(7), F::ZERO],
-    };
-    let public_inputs = common::koala_public_inputs(7);
-
-    let (instance, proof) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove_spark(
-        &pk,
-        &public_inputs,
-        &witness,
-        &mut prover_challenger,
-    )
-    .expect("spark prove succeeds");
-
-    let commitment = &mut vk
-        .spark_fixed_commitments
-        .as_mut()
-        .expect("SPARK fixed commitments exist")
-        .value;
-    let mut roots = commitment.clone().into_roots();
-    roots[0][0] += F::ONE;
-    *commitment = roots.into();
-    let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
-        &vk,
-        &instance,
-        &proof,
-        &mut verifier_challenger,
+    let mut encoded = serde_json::to_value(&vk).expect("verifying key serializes");
+    let first_root = &mut encoded["spark_fixed_commitments"]["value"]["cap"][0][0];
+    let value = first_root.as_u64().expect("commitment limb is an integer");
+    *first_root = serde_json::json!(value + 1);
+    let mut forged: spartan_whir::VerifyingKey<PoseidonEngine, Plonky3WhirPcs> =
+        serde_json::from_value(encoded).expect("forged key deserializes");
+    assert_eq!(
+        forged.authenticate_spark_fixed_commitments(),
+        Err(SpartanWhirError::CommitmentMismatch)
     );
-    assert_eq!(verified, Err(SpartanWhirError::CommitmentMismatch));
 }
 
 #[test]

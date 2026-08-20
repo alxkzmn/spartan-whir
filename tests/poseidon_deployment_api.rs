@@ -64,6 +64,55 @@ fn generic_poseidon_spark_api_roundtrips() {
 }
 
 #[test]
+fn poseidon_spark_verifying_key_authenticates_fixed_commitments() {
+    let fixture = fixture();
+    let (_, mut vk) =
+        setup_poseidon::<QuarticBinExtension>(fixture.shape, config(MatrixClosingMode::Spark))
+            .expect("setup succeeds");
+    vk.authenticate_spark_fixed_commitments()
+        .expect("honest key authenticates");
+
+    // Preserve the shape dimensions and nonzero counts while changing the
+    // relation represented by the serialized R1CS. Safe Rust callers only
+    // receive immutable access to this commitment-bound state.
+    let mut vk_json = serde_json::to_value(&vk).expect("verifying key serializes");
+    let col = vk_json["shape_canonical"]["a"]["entries"][0]["col"]
+        .as_u64()
+        .expect("matrix column is an integer");
+    vk_json["shape_canonical"]["a"]["entries"][0]["col"] = serde_json::json!(col ^ 1);
+    let mut forged: PoseidonVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(vk_json).expect("forged key deserializes");
+    assert_eq!(
+        forged.authenticate_spark_fixed_commitments(),
+        Err(SpartanWhirError::CommitmentMismatch)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_spark_verifying_key_authenticates_fixed_commitments() {
+    let fixture = fixture();
+    let (_, mut vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::Spark),
+    )
+    .expect("setup succeeds");
+    vk.authenticate_spark_fixed_commitments()
+        .expect("honest key authenticates");
+
+    let mut vk_json = serde_json::to_value(&vk).expect("verifying key serializes");
+    let col = vk_json["shape_canonical"]["a"]["entries"][0]["col"]
+        .as_u64()
+        .expect("matrix column is an integer");
+    vk_json["shape_canonical"]["a"]["entries"][0]["col"] = serde_json::json!(col ^ 1);
+    let mut forged: PoseidonZkVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(vk_json).expect("forged key deserializes");
+    assert_eq!(
+        forged.authenticate_spark_fixed_commitments(),
+        Err(SpartanWhirError::CommitmentMismatch)
+    );
+}
+
+#[test]
 fn poseidon_deployment_types_are_serializable() {
     let fixture = fixture();
     let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
@@ -143,6 +192,15 @@ fn poseidon_verifier_rejects_malformed_serialized_key_without_panicking() {
         malformed.verify(&proof),
         Err(SpartanWhirError::InvalidR1csShape)
     );
+
+    let mut encoded = serde_json::to_value(&vk).expect("verifying key serializes");
+    encoded["pcs_config"]["security"]["security_level_bits"] = serde_json::json!(80);
+    let malformed: PoseidonVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
+    assert_eq!(
+        malformed.verify(&proof),
+        Err(SpartanWhirError::invalid_config())
+    );
 }
 
 #[test]
@@ -212,6 +270,15 @@ fn poseidon_full_zk_verifier_rejects_malformed_serialized_key_without_panicking(
     assert_eq!(
         malformed.verify(&proof),
         Err(SpartanWhirError::InvalidR1csShape)
+    );
+
+    let mut encoded = serde_json::to_value(&vk).expect("full-ZK verifying key serializes");
+    encoded["pcs_config"]["base"]["security"]["security_level_bits"] = serde_json::json!(80);
+    let malformed: PoseidonZkVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
+    assert_eq!(
+        malformed.verify(&proof),
+        Err(SpartanWhirError::invalid_config())
     );
 }
 
@@ -307,7 +374,7 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
     let vk_bytes = bincode::serialize(&vk).expect("full-ZK SPARK verifying key serializes");
     let mut restored_pk: PoseidonZkProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("full-ZK SPARK proving key deserializes");
-    let restored_vk: PoseidonZkVerifyingKey<QuarticBinExtension> =
+    let mut restored_vk: PoseidonZkVerifyingKey<QuarticBinExtension> =
         bincode::deserialize(&vk_bytes).expect("full-ZK SPARK verifying key deserializes");
     restored_pk
         .prepare_for_proving()
@@ -315,6 +382,15 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
     let restored = restored_pk
         .prove(witness, public_inputs)
         .expect("restored full-ZK SPARK key proves");
+    assert_eq!(
+        restored_vk.verify(&restored),
+        Err(SpartanWhirError::InvalidConfig(
+            InvalidConfigReason::UnauthenticatedSparkVerifyingKey
+        ))
+    );
+    restored_vk
+        .authenticate_spark_fixed_commitments()
+        .expect("restored full-ZK SPARK key authenticates");
     restored_vk
         .verify(&restored)
         .expect("restored full-ZK SPARK key verifies");
@@ -364,16 +440,25 @@ fn poseidon_spark_proving_key_is_serializable() {
 
     let mut pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
         bincode::deserialize(&pk_bytes).expect("spark proving key deserializes");
-    let vk_roundtrip: PoseidonVerifyingKey<QuarticBinExtension> =
+    let mut vk_roundtrip: PoseidonVerifyingKey<QuarticBinExtension> =
         bincode::deserialize(&vk_bytes).expect("spark verifying key deserializes");
     assert_eq!(pk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
-    assert_eq!(vk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
+    assert_eq!(vk_roundtrip.matrix_closing(), MatrixClosingMode::Spark);
     pk_roundtrip
         .prepare_for_proving()
         .expect("deserialized Spark key prepares for proving");
     let roundtrip_proof = pk_roundtrip
         .prove(witness, public_inputs)
         .expect("deserialized Spark key proves");
+    assert_eq!(
+        vk_roundtrip.verify(&roundtrip_proof),
+        Err(SpartanWhirError::InvalidConfig(
+            InvalidConfigReason::UnauthenticatedSparkVerifyingKey
+        ))
+    );
+    vk_roundtrip
+        .authenticate_spark_fixed_commitments()
+        .expect("deserialized Spark verifying key authenticates");
     vk_roundtrip
         .verify(&roundtrip_proof)
         .expect("proof from deserialized Spark key verifies");

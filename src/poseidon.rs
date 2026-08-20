@@ -17,7 +17,9 @@ use crate::{
         validate_spark_table_metadata, PoseidonZkSpartanProtocol, SparkFixedProverData,
     },
     r1cs::{DirectBindLayout, DirectMultiplyLayout},
-    security::{derive_spark_component_security, SpartanSoundnessMode},
+    security::{
+        derive_direct_component_security, derive_spark_component_security, SpartanSoundnessMode,
+    },
     DomainSeparator, MatrixClosingMode, MlePcs, Plonky3WhirPcs, R1csInstance, R1csShape,
     R1csWitness, SecurityConfig, SparkFixedCommitments, SparkPcsConfigs, SparkTableMetadata,
     SparkTables, SparkWhirParams, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
@@ -77,11 +79,16 @@ pub struct PoseidonZkVerifyingKey<Ext: ExtField> {
     pub(crate) security: SecurityConfig,
     pub(crate) whir_params: WhirParams,
     pub(crate) pcs_config: ZkWhirPcsConfig,
+    /// SPARK fixed-table Merkle roots produced at setup.
     pub(crate) spark_fixed_commitments: Option<SparkFixedCommitments<PoseidonCommitment>>,
     pub(crate) spark_pcs_configs: Option<SparkPcsConfigs>,
     #[serde(default)]
     pub(crate) spark_table_metadata: Option<SparkTableMetadata>,
     pub(crate) domain_separator: DomainSeparator,
+    /// Setup authenticates this binding directly. Serialization omits the
+    /// marker, so a restored SPARK key must re-authenticate before use.
+    #[serde(skip)]
+    pub(crate) spark_fixed_commitments_authenticated: bool,
     marker: PhantomData<Ext>,
 }
 
@@ -114,6 +121,53 @@ impl<Ext: ExtField> PoseidonZkProvingKey<Ext> {
 }
 
 impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
+    /// Check that the key's SPARK fixed-table commitments actually commit to
+    /// the matrices of the embedded R1CS.
+    ///
+    /// A restored SPARK key cannot verify until this succeeds. It re-runs
+    /// SPARK preprocessing and committing, so it costs about as much as the
+    /// SPARK part of `setup`.
+    pub fn authenticate_spark_fixed_commitments(&mut self) -> Result<(), SpartanWhirError> {
+        self.spark_fixed_commitments_authenticated = false;
+        self.validate()?;
+        match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => {
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+            MatrixClosingMode::Spark => {
+                let configs = self
+                    .spark_pcs_configs
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let expected = self
+                    .spark_fixed_commitments
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                crate::protocol::authenticate_spark_fixed_commitments::<
+                    PoseidonEngine<Ext>,
+                    Ext,
+                    Plonky3WhirPcs,
+                >(&self.shape_canonical, configs, expected)?;
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn ensure_spark_fixed_commitments_authenticated(
+        &self,
+    ) -> Result<(), SpartanWhirError> {
+        if self.matrix_closing == MatrixClosingMode::Spark
+            && !self.spark_fixed_commitments_authenticated
+        {
+            return Err(SpartanWhirError::invalid_config_reason(
+                crate::InvalidConfigReason::UnauthenticatedSparkVerifyingKey,
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result<Option<SparkTableMetadata>, SpartanWhirError> {
         validate_canonical_verifying_shape(
             &self.shape_canonical,
@@ -144,7 +198,16 @@ impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
 
         let spark_metadata = match self.matrix_closing {
             MatrixClosingMode::DirectSparse => {
-                if self.pcs_config.base.security != self.security
+                let (expected_security, _) = derive_direct_component_security::<Ext>(
+                    &self.security,
+                    &self.pcs_config.base,
+                    num_outer_rounds,
+                    self.shape_canonical.num_vars.ilog2() as usize + 1,
+                    SpartanSoundnessMode::FullZk {
+                        inner_degree: self.pcs_config.ell_zk.saturating_sub(1).max(2),
+                    },
+                )?;
+                if self.pcs_config.base.security != expected_security
                     || self.spark_fixed_commitments.is_some()
                     || self.spark_pcs_configs.is_some()
                     || self.spark_table_metadata.is_some()
@@ -316,7 +379,18 @@ where
         MatrixClosingMode::Spark => Some(preprocess_spark_tables(&shape_canonical)?),
     };
     let component_security = match spark_tables.as_ref() {
-        None => config.security,
+        None => {
+            derive_direct_component_security::<Ext>(
+                &config.security,
+                &provisional_base,
+                num_outer_rounds,
+                num_variables + 1,
+                SpartanSoundnessMode::FullZk {
+                    inner_degree: config.ell_zk.saturating_sub(1).max(2),
+                },
+            )?
+            .0
+        }
         Some(tables) => {
             let provisional_spark_configs = spark_pcs_configs_for_tables::<Ext>(
                 &provisional_base,
@@ -418,6 +492,7 @@ where
         spark_pcs_configs,
         spark_table_metadata,
         domain_separator,
+        spark_fixed_commitments_authenticated: true,
         marker: PhantomData,
     };
     Ok((pk, vk))

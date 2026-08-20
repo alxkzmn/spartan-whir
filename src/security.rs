@@ -87,6 +87,31 @@ pub(crate) struct ComposedSecurityBudget {
     pub dominant_component: SecurityBoundComponent,
 }
 
+/// Derive the witness PCS target for a DirectSparse Spartan proof.
+pub(crate) fn derive_direct_component_security<Ext>(
+    requested: &SecurityConfig,
+    witness_config: &WhirPcsConfig,
+    num_outer_rounds: usize,
+    num_inner_rounds: usize,
+    mode: SpartanSoundnessMode,
+) -> Result<(SecurityConfig, ComposedSecurityBudget), SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    requested.validate()?;
+    let algebraic_error_terms =
+        spartan_algebraic_error_terms(num_outer_rounds, num_inner_rounds, mode)?;
+    let witness_rounds =
+        whir_folding_round_count(witness_config.num_variables, &witness_config.whir)?;
+    let commitment_binding_events = witness_commitment_events(witness_rounds, mode)?;
+    compose_security_budget::<Ext>(
+        requested,
+        algebraic_error_terms,
+        1,
+        commitment_binding_events,
+    )
+}
+
 /// Derive per-argument targets for the four WHIR arguments in a SPARK proof.
 ///
 /// The composed error budget reserves one half for algebraic checks and one
@@ -128,27 +153,7 @@ where
         .checked_mul(6)
         .and_then(|terms| terms.checked_add(8))
         .ok_or_else(composed_budget_overflow)?;
-    // The constant terms include the degree-two A/B/C batching challenge and
-    // the fixed relation-batching checks for the selected Spartan protocol.
-    let spartan_terms = match mode {
-        SpartanSoundnessMode::NoZk => num_outer_rounds
-            .checked_mul(4)
-            .and_then(|terms| {
-                num_inner_rounds
-                    .checked_mul(2)
-                    .and_then(|inner| terms.checked_add(inner))
-            })
-            .and_then(|terms| terms.checked_add(2)),
-        SpartanSoundnessMode::FullZk { inner_degree } => num_outer_rounds
-            .checked_mul(15)
-            .and_then(|terms| {
-                inner_degree
-                    .checked_mul(num_inner_rounds)
-                    .and_then(|inner| terms.checked_add(inner))
-            })
-            .and_then(|terms| terms.checked_add(4)),
-    }
-    .ok_or_else(composed_budget_overflow)?;
+    let spartan_terms = spartan_algebraic_error_terms(num_outer_rounds, num_inner_rounds, mode)?;
     let algebraic_error_terms = spartan_terms
         .checked_add(tuple_terms)
         .and_then(|terms| terms.checked_add(product_sumcheck_terms))
@@ -181,22 +186,14 @@ where
                 .and_then(|read| events.checked_add(read))
         })
         .ok_or_else(composed_budget_overflow)?;
-    let witness_commitment_events = match mode {
-        SpartanSoundnessMode::NoZk => witness_rounds.checked_add(1),
-        // Witness, one application mask root, n+1 sumcheck-mask roots,
-        // two roots per code-switch round, and three base-case fresh roots.
-        SpartanSoundnessMode::FullZk { .. } => witness_rounds
-            .checked_mul(3)
-            .and_then(|events| events.checked_add(6)),
-    }
-    .ok_or_else(composed_budget_overflow)?;
+    let witness_commitment_events = witness_commitment_events(witness_rounds, mode)?;
     let commitment_binding_events = table_commitment_events
         .checked_add(witness_commitment_events)
         .ok_or_else(composed_budget_overflow)?;
 
     // Fixed value, fixed audit, shared read-table, and witness/relation.
     let whir_argument_count = 4usize;
-    compose_spark_budget::<Ext>(
+    compose_security_budget::<Ext>(
         requested,
         algebraic_error_terms,
         whir_argument_count,
@@ -204,7 +201,50 @@ where
     )
 }
 
-fn compose_spark_budget<Ext>(
+fn spartan_algebraic_error_terms(
+    num_outer_rounds: usize,
+    num_inner_rounds: usize,
+    mode: SpartanSoundnessMode,
+) -> Result<usize, SpartanWhirError> {
+    // The constant terms include the degree-two A/B/C batching challenge and
+    // the fixed relation-batching checks for the selected Spartan protocol.
+    match mode {
+        SpartanSoundnessMode::NoZk => num_outer_rounds
+            .checked_mul(4)
+            .and_then(|terms| {
+                num_inner_rounds
+                    .checked_mul(2)
+                    .and_then(|inner| terms.checked_add(inner))
+            })
+            .and_then(|terms| terms.checked_add(2)),
+        SpartanSoundnessMode::FullZk { inner_degree } => num_outer_rounds
+            .checked_mul(15)
+            .and_then(|terms| {
+                inner_degree
+                    .checked_mul(num_inner_rounds)
+                    .and_then(|inner| terms.checked_add(inner))
+            })
+            .and_then(|terms| terms.checked_add(4)),
+    }
+    .ok_or_else(composed_budget_overflow)
+}
+
+fn witness_commitment_events(
+    witness_rounds: usize,
+    mode: SpartanSoundnessMode,
+) -> Result<usize, SpartanWhirError> {
+    match mode {
+        SpartanSoundnessMode::NoZk => witness_rounds.checked_add(1),
+        // Witness, one application mask root, n+1 sumcheck-mask roots,
+        // two roots per code-switch round, and three base-case fresh roots.
+        SpartanSoundnessMode::FullZk { .. } => witness_rounds
+            .checked_mul(3)
+            .and_then(|events| events.checked_add(6)),
+    }
+    .ok_or_else(composed_budget_overflow)
+}
+
+fn compose_security_budget<Ext>(
     requested: &SecurityConfig,
     algebraic_error_terms: usize,
     whir_argument_count: usize,
@@ -295,7 +335,7 @@ mod composed_tests {
     #[test]
     fn component_targets_cover_all_additive_events() {
         let (internal, budget) =
-            compose_spark_budget::<OcticBinExtension>(&config(100), 1_000, 5, 25)
+            compose_security_budget::<OcticBinExtension>(&config(100), 1_000, 5, 25)
                 .expect("budget is attainable");
         assert_eq!(internal.security_level_bits, 105);
         assert_eq!(internal.merkle_security_bits, 107);
@@ -305,27 +345,41 @@ mod composed_tests {
 
     #[test]
     fn larger_protocols_cannot_increase_attainable_security() {
-        let (_, small) = compose_spark_budget::<OcticBinExtension>(&config(100), 100, 5, 10)
+        let (_, small) = compose_security_budget::<OcticBinExtension>(&config(100), 100, 5, 10)
             .expect("small budget is attainable");
-        let (_, large) = compose_spark_budget::<OcticBinExtension>(&config(100), 10_000, 5, 100)
+        let (_, large) = compose_security_budget::<OcticBinExtension>(&config(100), 10_000, 5, 100)
             .expect("large budget is attainable");
         assert!(large.attainable_bits <= small.attainable_bits);
     }
 
     #[test]
-    fn direct_mode_keeps_the_requested_component_targets() {
-        let direct = config(100);
-        let direct_internal = direct;
-        let (spark, _) = compose_spark_budget::<OcticBinExtension>(&direct, 1_000, 5, 25)
-            .expect("SPARK budget is attainable");
-        assert_eq!(direct_internal, direct);
-        assert!(spark.security_level_bits > direct.security_level_bits);
-        assert!(spark.merkle_security_bits > direct.merkle_security_bits);
+    fn direct_mode_reserves_component_slack() {
+        let requested = config(100);
+        let (internal, budget) =
+            compose_security_budget::<OcticBinExtension>(&requested, 42, 1, 10)
+                .expect("DirectSparse budget is attainable");
+        assert_eq!(internal.security_level_bits, 102);
+        assert_eq!(internal.merkle_security_bits, 106);
+        assert_eq!(budget.whir_argument_count, 1);
+        assert_eq!(budget.whir_slack_bits, 2);
+        assert_eq!(budget.merkle_slack_bits, 6);
+    }
+
+    #[test]
+    fn direct_and_spark_share_the_spartan_terms() {
+        assert_eq!(
+            spartan_algebraic_error_terms(5, 10, SpartanSoundnessMode::NoZk),
+            Ok(42)
+        );
+        assert_eq!(
+            spartan_algebraic_error_terms(5, 10, SpartanSoundnessMode::FullZk { inner_degree: 3 }),
+            Ok(109)
+        );
     }
 
     #[test]
     fn budget_arithmetic_rejects_overflow() {
-        let error = compose_spark_budget::<OcticBinExtension>(&config(100), 1, usize::MAX, 1)
+        let error = compose_security_budget::<OcticBinExtension>(&config(100), 1, usize::MAX, 1)
             .expect_err("overflow is rejected");
         assert_eq!(
             error,
@@ -337,7 +391,7 @@ mod composed_tests {
 
     #[test]
     fn unattainable_target_reports_the_limiting_component() {
-        let error = compose_spark_budget::<OcticBinExtension>(&config(123), 1_000, 5, 25)
+        let error = compose_security_budget::<OcticBinExtension>(&config(123), 1_000, 5, 25)
             .expect_err("component slack makes 123 bits unattainable");
         assert!(matches!(
             error,
