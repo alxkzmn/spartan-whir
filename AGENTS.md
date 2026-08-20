@@ -52,10 +52,10 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
   that benchmark:
   `tests/circuits/build_sha256_optimized_fixture.sh ../circom/target/release/circom`.
 - The Criterion target only loads existing circuit artifacts from `SHA256_BENCH_WORKDIR`; it must not compile the circuit as part of a benchmark run. Use `sha256_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
-- Use `SHA256_ZK_BENCH_SCHEDULE` for a shared four-mode schedule. Use the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` overrides when Criterion compares independently selected schedules.
+- The default `SHA256_ZK_BENCH_EXTENSION=selected` run uses quintic DirectSparse and octic Spark with the selected per-mode schedules. Set `SHA256_ZK_BENCH_EXTENSION=octic|quintic` to run all four variants over one extension. In a forced single-extension run, `SHA256_ZK_BENCH_SCHEDULE` applies one schedule to every variant; the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` values override it.
 - For an independent DirectSparse schedule measurement, set `SHA256_ZK_BENCH_PROVING_ONLY=1`, `SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct|full_zk_direct`, and `SHA256_ZK_BENCH_SECURITY_BITS=<end-to-end target>`. This constructs only the selected DirectSparse key, so the run does not depend on another mode accepting the same extension or schedule.
 - Profile the 2048-byte full-ZK Spark path without rebuilding the circuit with:
-  `SHA256_BENCH_WORKDIR=target/sha256-optimized-cache SHA256_BENCH_REUSE_ARTIFACTS=1 SHA256_BENCH_SIZES=2048 SHA256_BENCH_PROOF_MODES=full-zk SHA256_BENCH_MODES=spark-independent SHA256_BENCH_SECURITY_BITS=116 SHA256_BENCH_PROFILE=1 SHA256_BENCH_PROFILE_DETAIL=1 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo run --release --features parallel --example sha256_bench`.
+  `SHA256_BENCH_WORKDIR=target/sha256-optimized-cache SHA256_BENCH_REUSE_ARTIFACTS=1 SHA256_BENCH_SIZES=2048 SHA256_BENCH_PROOF_MODES=full-zk SHA256_BENCH_MODES=spark SHA256_BENCH_SECURITY_BITS=116 SHA256_BENCH_PROFILE=1 SHA256_BENCH_PROFILE_DETAIL=1 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo run --release --features parallel --example sha256_bench`.
 - Benchmark/profiling output intended for direct human inspection should be stable and human-readable. Prefer labeled `key: value` fields and clear tree/group structure over raw debug dumps.
 - If a benchmark fixture is only shape-similar to a real circuit, document that approximation explicitly instead of describing it as the real circuit.
 - Keep `README.md` focused on the current codebase state rather than changelog-style history; describe the format and behavior that exist now.
@@ -105,9 +105,12 @@ cargo run --release --features parallel -q --bin poseidon-schedule-candidates --
 
 Use `--proof-mode full-zk` for schedules that must satisfy hiding-WHIR mask
 slack and extension-field two-adicity limits. The fallback parameter helpers
-are `recommended_octic_whir_params` for no ZK and
-`recommended_octic_zk_whir_params` for full ZK. Use scheduler-selected
-`WhirParams` for benchmarked deployments.
+are `recommended_quintic_whir_params` and
+`recommended_quintic_zk_whir_params` for DirectSparse,
+`recommended_octic_whir_params` and `recommended_octic_zk_whir_params` for the
+Spark witness, `recommended_octic_spark_fixed_whir_params` for fixed tables,
+and `recommended_octic_spark_read_whir_params` for read tables. Use
+scheduler-selected `WhirParams` for benchmarked deployments.
 
 DirectSparse searches interpret `--security-bits` and
 `--merkle-security-bits` as end-to-end targets and derive the stronger WHIR
@@ -145,12 +148,13 @@ The default ZK sweep is `ell_zk = 3,4,8,16` and
 `mask_log_inv_rate = 1,2,3,4,5`. Include low mask rates in the sweep and let
 the backend slack checks reject invalid rows.
 
-For the 2048-byte full-ZK Spark workload at 116-bit composed security, score
-the witness, fixed-value, fixed-audit, and combined-read arguments
-independently. Their variable counts are 20, 25, 22, and 26. The composed
-budget requires 120-bit WHIR components and 123-bit Merkle binding. Component
-searches omit `--out-config`; the Spark composer produces the standalone setup
-configuration:
+For the 2048-byte Spark workload at 116-bit composed security, score the
+witness, fixed-value, fixed-audit, and combined-read arguments independently.
+Their variable counts are 20, 25, 22, and 26. The composed budget requires
+120-bit WHIR components and 123-bit Merkle binding. The table reports are
+shared by both privacy modes; generate a witness report for each privacy mode.
+Component searches omit `--out-config`; the Spark composer produces the
+standalone setup configuration:
 
 ```bash
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
@@ -158,7 +162,21 @@ python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 20 \
   --field koalabear \
   --calibration /tmp/poseidon-calibration.json \
-  --out-report /tmp/spark-witness.json \
+  --out-report /tmp/spark-witness-no-zk.json \
+  --max-pow-bits 22 \
+  --security-bits 116 \
+  --merkle-security-bits 116 \
+  --component-security-bits 120 \
+  --component-merkle-security-bits 123 \
+  --constraint-work 605424 \
+  --proof-mode no-zk
+
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 20 \
+  --field koalabear \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-witness-full-zk.json \
   --max-pow-bits 22 \
   --security-bits 116 \
   --merkle-security-bits 116 \
@@ -213,11 +231,31 @@ Compose the reports before heldout measurement:
 
 ```bash
 python3 scripts/poseidon_spark_schedule_scorer.py \
-  --witness-report /tmp/spark-witness.json \
+  --witness-report /tmp/spark-witness-no-zk.json \
   --fixed-value-report /tmp/spark-fixed-value.json \
   --fixed-audit-report /tmp/spark-fixed-audit.json \
   --read-report /tmp/spark-read.json \
-  --out-report /tmp/spark-combined.json \
+  --out-report /tmp/spark-no-zk-combined.json \
+  --proof-mode no-zk \
+  --security-bits 116 \
+  --merkle-security-bits 116 \
+  --top-per-component 16 \
+  --max-report-rows 5000 \
+  --measurement-rows 10 \
+  --max-fixed-value-log-domain 26 \
+  --max-fixed-audit-log-domain 23 \
+  --reference-witness-label octic_constant_pow0_ff8_lir1_rsv8 \
+  --reference-fixed-value-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8 \
+  --reference-fixed-audit-label octic_cfsr_pow0_ff8_rest4_lir1_rsv6 \
+  --reference-read-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8
+
+python3 scripts/poseidon_spark_schedule_scorer.py \
+  --witness-report /tmp/spark-witness-full-zk.json \
+  --fixed-value-report /tmp/spark-fixed-value.json \
+  --fixed-audit-report /tmp/spark-fixed-audit.json \
+  --read-report /tmp/spark-read.json \
+  --out-report /tmp/spark-full-zk-combined.json \
+  --proof-mode full-zk \
   --security-bits 116 \
   --merkle-security-bits 116 \
   --ell-zk 3 \
@@ -230,15 +268,15 @@ python3 scripts/poseidon_spark_schedule_scorer.py \
   --reference-witness-label octic_cfsr_pow4_ff8_rest6_lir1_rsv6 \
   --reference-fixed-value-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8 \
   --reference-fixed-audit-label octic_cfsr_pow0_ff8_rest4_lir1_rsv6 \
-  --reference-read-label octic_cfsr_pow0_ff8_rest6_lir1_rsv8
+  --reference-read-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8
 ```
 
 The composer requires all four reports to carry the requested 116-bit
 end-to-end target and the same explicit 120-bit WHIR and 123-bit Merkle
 component targets. Its `setup_config` retains the 116-bit end-to-end target.
 
-Use `/tmp/spark-combined.json` as the heldout report. After measurement, rerun
-the composer with `--measurements /tmp/spark-heldout.json`. Require
+Use the matching combined report for heldout measurement. After measurement,
+rerun the composer with `--measurements /tmp/spark-heldout.json`. Require
 `model.calibration.validation_within_ten_percent` before selecting a schedule.
 Pass all four `--reference-*-label` options to include the configured baseline
 in the shortlist when it is outside the model's top component rows.
@@ -320,7 +358,8 @@ from the full-ZK prover; never relabel a full-ZK report as no ZK. Pass
 - Use untruncated component reports before pinning a schedule. The composed
   cross-product report may be capped after auditing the best row from each
   extension, folding, and rate family inside the model-resolution band.
-- Interpret overlapping bootstrap median confidence intervals as a time tie.
+- Interpret overlapping bootstrap median confidence intervals or a measured
+  slowdown of at most 1% as a time tie.
 - Prefer smaller proofs among time-tied rows. Prefer lower PoW before label
   order because it has lower grind variance.
 - A higher-PoW row can win a median-time tie on proof size, but it carries a
@@ -352,7 +391,9 @@ the mean, and a bootstrap median confidence interval.
   `measurement_candidates`, `scores`, or `candidates`, in that order. Use
   `--include-strata` to sample across the accepted ranking.
 - `poseidon_schedule_add_heldout.py` merges heldout rows and refits component
-  scales. Heldout rows must contain every modeled component metric.
+  scales. Heldout rows must contain every modeled component metric. Keep each
+  refit scoped to one proof mode and extension; mixed workloads can be too
+  collinear to identify the component coefficients.
 - `poseidon_schedule_pareto.py` separates measured and interpolated frontier
   rows and emits `measurement_candidates` for the next batch.
 

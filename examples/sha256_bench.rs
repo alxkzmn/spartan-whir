@@ -9,29 +9,22 @@ use std::{
 };
 
 use libloading::Library;
-use p3_field::{PrimeField32, TwoAdicField};
+use p3_field::PrimeField32;
 use sha2::{Digest, Sha256};
 use spartan_whir::{
     compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_spark_fixed_whir_params,
-    recommended_octic_whir_params, recommended_octic_zk_whir_params, MatrixClosingMode,
-    OcticBinExtension, PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey,
-    PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, R1csShape, SecurityConfig,
-    SoundnessAssumption, SparkLayoutDecision, SparkWhirParams, SpartanSnarkConfig,
-    WhirFoldingSchedule, WhirParams,
+    recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
+    recommended_octic_zk_whir_params, MatrixClosingMode, OcticBinExtension,
+    PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig,
+    PoseidonZkSpartanProtocol, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
+    SparkWhirParams, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
 };
 use spartan_whir::{
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_table_column_bits},
     spark::spark_col_memory_size,
 };
 const DEFAULT_SIZES: &[usize] = &[128, 256, 512, 1024, 2048];
-const POSEIDON_DIRECT_SCHEDULE: &str = "octic_cfsr_pow8_ff8_rest6_lir1_rsv5";
-const POSEIDON_DIRECT_FOLDING_FACTOR: usize = 8;
-const POSEIDON_DIRECT_STARTING_LOG_INV_RATE: usize = 1;
-const POSEIDON_DIRECT_RS_REDUCTION_FACTOR: usize = 5;
-const POSEIDON_DIRECT_REST_FOLDING_FACTOR: usize = 6;
-const POSEIDON_DIRECT_ROUND_LOG_INV_RATES: &[usize] = &[4];
-const POSEIDON_DIRECT_POW_BITS: u32 = 8;
-const DEFAULT_POSEIDON_SECURITY_BITS: u32 = 123;
+const DEFAULT_POSEIDON_SECURITY_BITS: u32 = 116;
 
 #[derive(Debug)]
 struct ArtifactPaths {
@@ -59,7 +52,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let repeats = parse_repeats()?;
 
     println!("security: {}-bit JohnsonBound", benchmark_security_bits());
-    println!("poseidon_direct_schedule: {POSEIDON_DIRECT_SCHEDULE}");
     println!("sizes: {:?}", sizes);
     println!("proof_modes: {:?}", proof_modes);
     println!("modes: {:?}", modes);
@@ -176,24 +168,12 @@ fn run_size(
         selected_layout.union_nnz,
         selected_layout.max_matrix_nnz_padded
     );
-    let direct_configs = poseidon_direct_configs(shape.num_vars)?;
-    let spark_config = {
-        let spark_folding_factor = spark_folding_factor(selected_layout.value_domain_size)?;
-        protocol_config(
-            MatrixClosingMode::Spark,
-            legacy_spark_whir_params(spark_folding_factor),
-            None,
-        )
-    };
-    let spark_full_zk_config = protocol_config(
-        MatrixClosingMode::Spark,
-        recommended_octic_zk_whir_params(padded_shape.num_vars.ilog2() as usize),
-        None,
-    );
-    let spark_independent_config =
-        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size, false)?;
-    let spark_independent_full_zk_config =
-        independent_spark_protocol_config(&padded_shape, selected_layout.value_domain_size, true)?;
+    let no_zk_direct_configs = poseidon_direct_configs(shape.num_vars, ProofMode::NoZk)?;
+    let full_zk_direct_configs = poseidon_direct_configs(shape.num_vars, ProofMode::FullZk)?;
+    let spark_config =
+        spark_protocol_config(&padded_shape, selected_layout.value_domain_size, false)?;
+    let spark_full_zk_config =
+        spark_protocol_config(&padded_shape, selected_layout.value_domain_size, true)?;
 
     for sample in 0..repeats {
         if repeats > 1 {
@@ -209,7 +189,11 @@ fn run_size(
             for &mode in modes {
                 match mode {
                     BenchMode::Direct => {
-                        for direct in &direct_configs {
+                        let direct_configs = match proof_mode {
+                            ProofMode::NoZk => &no_zk_direct_configs,
+                            ProofMode::FullZk => &full_zk_direct_configs,
+                        };
+                        for direct in direct_configs {
                             prove_and_verify(
                                 proof_mode,
                                 &format!("direct_sparse_{}", direct.label),
@@ -228,20 +212,6 @@ fn run_size(
                         prove_and_verify(
                             proof_mode,
                             "spark",
-                            config,
-                            &shape,
-                            &loaded_generator.generator,
-                            &input_binary,
-                        )?;
-                    }
-                    BenchMode::SparkIndependent => {
-                        let config = match proof_mode {
-                            ProofMode::NoZk => &spark_independent_config,
-                            ProofMode::FullZk => &spark_independent_full_zk_config,
-                        };
-                        prove_and_verify(
-                            proof_mode,
-                            "spark_independent_whir_schedules",
                             config,
                             &shape,
                             &loaded_generator.generator,
@@ -621,7 +591,6 @@ fn parse_proof_modes() -> Result<Vec<ProofMode>, Box<dyn Error>> {
 enum BenchMode {
     Direct,
     Spark,
-    SparkIndependent,
 }
 
 fn parse_modes() -> Result<Vec<BenchMode>, Box<dyn Error>> {
@@ -636,9 +605,6 @@ fn parse_modes() -> Result<Vec<BenchMode>, Box<dyn Error>> {
         match part.trim() {
             "direct" | "direct-sparse" | "direct_sparse_no_spark" => modes.push(BenchMode::Direct),
             "spark" => modes.push(BenchMode::Spark),
-            "spark-independent" | "spark_independent" | "spark-opt" => {
-                modes.push(BenchMode::SparkIndependent)
-            }
             "both" | "all" => {
                 modes.push(BenchMode::Direct);
                 modes.push(BenchMode::Spark);
@@ -713,15 +679,6 @@ fn remove_file_if_exists(path: &Path) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn spark_folding_factor(value_domain_size: usize) -> Result<usize, Box<dyn Error>> {
-    let max_spark_num_variables = value_domain_size.ilog2() as usize + 3;
-    Ok(max_spark_num_variables
-        .checked_add(1)
-        .and_then(|v| v.checked_sub(F::TWO_ADICITY))
-        .unwrap_or(1)
-        .max(1))
-}
-
 fn protocol_config(
     matrix_closing: MatrixClosingMode,
     whir_params: WhirParams,
@@ -782,7 +739,10 @@ struct DirectBenchConfig {
     config: SpartanSnarkConfig,
 }
 
-fn poseidon_direct_configs(num_vars: usize) -> Result<Vec<DirectBenchConfig>, Box<dyn Error>> {
+fn poseidon_direct_configs(
+    num_vars: usize,
+    proof_mode: ProofMode,
+) -> Result<Vec<DirectBenchConfig>, Box<dyn Error>> {
     let num_variables = num_vars.next_power_of_two().ilog2() as usize;
     let labels = match env::var_os("SHA256_BENCH_DIRECT_SCHEDULES") {
         Some(raw) => raw
@@ -793,7 +753,16 @@ fn poseidon_direct_configs(num_vars: usize) -> Result<Vec<DirectBenchConfig>, Bo
             .filter(|part| !part.is_empty())
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>(),
-        None => vec![POSEIDON_DIRECT_SCHEDULE.to_owned()],
+        None => {
+            let whir_params = match proof_mode {
+                ProofMode::NoZk => recommended_octic_whir_params(num_variables),
+                ProofMode::FullZk => recommended_octic_zk_whir_params(num_variables),
+            };
+            return Ok(vec![DirectBenchConfig {
+                label: whir_schedule_label(&whir_params),
+                config: protocol_config(MatrixClosingMode::DirectSparse, whir_params, None),
+            }]);
+        }
     };
     if labels.is_empty() {
         return Err("SHA256_BENCH_DIRECT_SCHEDULES must not be empty".into());
@@ -811,38 +780,41 @@ fn poseidon_direct_configs(num_vars: usize) -> Result<Vec<DirectBenchConfig>, Bo
         .collect()
 }
 
-fn poseidon_direct_whir_params() -> WhirParams {
-    WhirParams {
-        pow_bits: POSEIDON_DIRECT_POW_BITS,
-        folding_factor: POSEIDON_DIRECT_FOLDING_FACTOR,
-        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
-        rs_domain_initial_reduction_factor: POSEIDON_DIRECT_RS_REDUCTION_FACTOR,
-        folding_schedule: Some(WhirFoldingSchedule::ConstantFromSecondRound {
-            first: POSEIDON_DIRECT_FOLDING_FACTOR,
-            rest: POSEIDON_DIRECT_REST_FOLDING_FACTOR,
-        }),
-        round_log_inv_rates: POSEIDON_DIRECT_ROUND_LOG_INV_RATES.to_vec(),
-        ..WhirParams::default()
-    }
-}
-
 fn poseidon_direct_whir_params_from_label(
     label: &str,
     num_variables: usize,
 ) -> Result<WhirParams, Box<dyn Error>> {
-    if label == POSEIDON_DIRECT_SCHEDULE {
-        return Ok(poseidon_direct_whir_params());
-    }
     let parts = label.split('_').collect::<Vec<_>>();
-    if parts.len() != 7 || parts[0] != "octic" || parts[1] != "cfsr" {
+    if parts.first() != Some(&"octic") {
         return Err(format!("unsupported direct schedule label: {label}").into());
     }
-    let pow_bits = parse_labeled_usize(parts[2], "pow")? as u32;
-    let first = parse_labeled_usize(parts[3], "ff")?;
-    let rest = parse_labeled_usize(parts[4], "rest")?;
-    let starting_log_inv_rate = parse_labeled_usize(parts[5], "lir")?;
-    let rs_domain_initial_reduction_factor = parse_labeled_usize(parts[6], "rsv")?;
-    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first, rest };
+    let (pow_bits, first, starting_log_inv_rate, rs_domain_initial_reduction_factor, schedule) =
+        match parts.as_slice() {
+            [_, "constant", pow, first, lir, rsv] => {
+                let first = parse_labeled_usize(first, "ff")?;
+                (
+                    parse_labeled_usize(pow, "pow")? as u32,
+                    first,
+                    parse_labeled_usize(lir, "lir")?,
+                    parse_labeled_usize(rsv, "rsv")?,
+                    WhirFoldingSchedule::Constant(first),
+                )
+            }
+            [_, "cfsr", pow, first, rest, lir, rsv] => {
+                let first = parse_labeled_usize(first, "ff")?;
+                (
+                    parse_labeled_usize(pow, "pow")? as u32,
+                    first,
+                    parse_labeled_usize(lir, "lir")?,
+                    parse_labeled_usize(rsv, "rsv")?,
+                    WhirFoldingSchedule::ConstantFromSecondRound {
+                        first,
+                        rest: parse_labeled_usize(rest, "rest")?,
+                    },
+                )
+            }
+            _ => return Err(format!("unsupported direct schedule label: {label}").into()),
+        };
     Ok(WhirParams {
         pow_bits,
         folding_factor: first,
@@ -906,17 +878,7 @@ fn derived_folding_schedule_len(num_variables: usize, schedule: &WhirFoldingSche
     len
 }
 
-fn legacy_spark_whir_params(folding_factor: usize) -> WhirParams {
-    WhirParams {
-        pow_bits: 0,
-        folding_factor,
-        starting_log_inv_rate: POSEIDON_DIRECT_STARTING_LOG_INV_RATE,
-        rs_domain_initial_reduction_factor: 1,
-        ..WhirParams::default()
-    }
-}
-
-fn independent_spark_protocol_config(
+fn spark_protocol_config(
     padded_shape: &R1csShape<F>,
     value_domain_size: usize,
     full_zk: bool,
@@ -938,7 +900,7 @@ fn independent_spark_protocol_config(
     let read_vars = value_vars + read_table_column_bits::<OcticBinExtension>();
 
     println!(
-        "spark_independent_vars: witness={witness_vars} fixed_value={fixed_value_vars} fixed_audit={fixed_audit_vars} read={read_vars}"
+        "spark_vars: witness={witness_vars} fixed_value={fixed_value_vars} fixed_audit={fixed_audit_vars} read={read_vars}"
     );
 
     let witness = if full_zk {
@@ -948,10 +910,10 @@ fn independent_spark_protocol_config(
     };
     let fixed_value = recommended_octic_spark_fixed_whir_params(fixed_value_vars);
     let fixed_audit = recommended_octic_spark_fixed_whir_params(fixed_audit_vars);
-    let read = recommended_octic_whir_params(read_vars);
+    let read = recommended_octic_spark_read_whir_params(read_vars);
 
     println!(
-        "spark_independent_schedules: witness={} fixed_value={} fixed_audit={} read={}",
+        "spark_schedules: witness={} fixed_value={} fixed_audit={} read={}",
         whir_schedule_label(&witness),
         whir_schedule_label(&fixed_value),
         whir_schedule_label(&fixed_audit),

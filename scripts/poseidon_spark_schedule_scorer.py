@@ -635,7 +635,16 @@ def select_measured(
 def measurement_is_tied(row: dict[str, Any], fastest: dict[str, Any]) -> bool:
     paired = row.get("heldout_paired_relative_median_ci")
     if isinstance(paired, list) and len(paired) == 2:
-        return float(paired[0]) <= 0.0 <= float(paired[1])
+        relative = row.get("heldout_relative_median_difference")
+        if relative is None:
+            fastest_seconds = float(fastest["measured_seconds"])
+            relative = (
+                (float(row["measured_seconds"]) - fastest_seconds) / fastest_seconds
+                if fastest_seconds > 0.0
+                else float("inf")
+            )
+        relative = float(relative)
+        return relative <= 0.01 or float(paired[0]) <= 0.0 <= float(paired[1])
     return intervals_overlap(median_interval(row), median_interval(fastest))
 
 

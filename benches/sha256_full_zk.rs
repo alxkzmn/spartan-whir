@@ -15,13 +15,14 @@ use sha256::{input_binary, message, Sha256Fixture};
 use spartan_whir::{
     engine::{ExtField, F},
     preprocess_spark_tables, recommended_octic_spark_fixed_whir_params,
-    recommended_octic_whir_params, recommended_octic_zk_whir_params, InvalidConfigReason,
-    MatrixClosingMode, MlePcs, OcticBinExtension, Plonky3WhirPcs, PoseidonChallenger,
-    PoseidonEngine, PoseidonSpartanProtocol, PoseidonZkProvingKey, PoseidonZkSetupConfig,
-    PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey, ProvingKey, QuinticExtension, R1csInstance,
-    SecurityConfig, SoundnessAssumption, SparkWhirParams, SpartanProofKind, SpartanSnarkConfig,
-    SpartanWhirError, VerifyingKey, WhirFoldingSchedule, WhirParams, ZkMatrixClosingProof,
-    ZkSpartanProof, MAX_SECURITY_BITS, MIN_SECURITY_BITS,
+    recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
+    recommended_octic_zk_whir_params, recommended_quintic_whir_params,
+    recommended_quintic_zk_whir_params, MatrixClosingMode, MlePcs, OcticBinExtension,
+    Plonky3WhirPcs, PoseidonChallenger, PoseidonEngine, PoseidonSpartanProtocol,
+    PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey,
+    ProvingKey, QuinticExtension, R1csInstance, SecurityConfig, SoundnessAssumption,
+    SparkWhirParams, SpartanProofKind, SpartanSnarkConfig, VerifyingKey, WhirFoldingSchedule,
+    WhirParams, ZkMatrixClosingProof, ZkSpartanProof, MAX_SECURITY_BITS, MIN_SECURITY_BITS,
 };
 
 const DEFAULT_SHA256_SIZE: usize = 2048;
@@ -49,14 +50,10 @@ struct BenchmarkConfigs {
 }
 
 struct BenchmarkKeys<Ext: ExtField> {
-    no_zk_direct_pk: PlainProvingKey<Ext>,
-    no_zk_direct_vk: PlainVerifyingKey<Ext>,
-    no_zk_spark_pk: PlainProvingKey<Ext>,
-    no_zk_spark_vk: PlainVerifyingKey<Ext>,
-    full_zk_direct_pk: FullZkProvingKey<Ext>,
-    full_zk_direct_vk: FullZkVerifyingKey<Ext>,
-    full_zk_spark_pk: FullZkProvingKey<Ext>,
-    full_zk_spark_vk: FullZkVerifyingKey<Ext>,
+    no_zk_direct: Option<(PlainProvingKey<Ext>, PlainVerifyingKey<Ext>)>,
+    no_zk_spark: Option<(PlainProvingKey<Ext>, PlainVerifyingKey<Ext>)>,
+    full_zk_direct: Option<(FullZkProvingKey<Ext>, FullZkVerifyingKey<Ext>)>,
+    full_zk_spark: Option<(FullZkProvingKey<Ext>, FullZkVerifyingKey<Ext>)>,
 }
 
 struct ProofCorpus<Ext: ExtField>
@@ -75,17 +72,76 @@ enum SingleProvingVariant {
     FullZkDirect,
 }
 
+#[derive(Clone, Copy)]
+struct BenchmarkVariants {
+    direct: bool,
+    spark: bool,
+}
+
+impl BenchmarkVariants {
+    const ALL: Self = Self {
+        direct: true,
+        spark: true,
+    };
+    const DIRECT: Self = Self {
+        direct: true,
+        spark: false,
+    };
+    const SPARK: Self = Self {
+        direct: false,
+        spark: true,
+    };
+}
+
 fn benchmark_sha256_full_zk(c: &mut Criterion) {
     let sha256_size = env_usize("SHA256_ZK_BENCH_SIZE", DEFAULT_SHA256_SIZE);
-    match env_string("SHA256_ZK_BENCH_EXTENSION", "octic").as_str() {
-        "octic" => benchmark_extension::<OcticBinExtension>(c, sha256_size, "octic"),
-        "quintic" => benchmark_extension::<QuinticExtension>(c, sha256_size, "quintic"),
-        extension => panic!("SHA256_ZK_BENCH_EXTENSION must be octic or quintic, got {extension}"),
+    match env_string("SHA256_ZK_BENCH_EXTENSION", "selected").as_str() {
+        "selected" if single_proving_variant().is_some() => {
+            benchmark_extension::<QuinticExtension>(
+                c,
+                sha256_size,
+                "quintic",
+                BenchmarkVariants::DIRECT,
+            );
+        }
+        "selected" => {
+            benchmark_extension::<QuinticExtension>(
+                c,
+                sha256_size,
+                "quintic",
+                BenchmarkVariants::DIRECT,
+            );
+            benchmark_extension::<OcticBinExtension>(
+                c,
+                sha256_size,
+                "octic",
+                BenchmarkVariants::SPARK,
+            );
+        }
+        "octic" => benchmark_extension::<OcticBinExtension>(
+            c,
+            sha256_size,
+            "octic",
+            BenchmarkVariants::ALL,
+        ),
+        "quintic" => benchmark_extension::<QuinticExtension>(
+            c,
+            sha256_size,
+            "quintic",
+            BenchmarkVariants::ALL,
+        ),
+        extension => {
+            panic!("SHA256_ZK_BENCH_EXTENSION must be selected, octic, or quintic, got {extension}")
+        }
     }
 }
 
-fn benchmark_extension<Ext>(c: &mut Criterion, sha256_size: usize, extension: &str)
-where
+fn benchmark_extension<Ext>(
+    c: &mut Criterion,
+    sha256_size: usize,
+    extension: &str,
+    variants: BenchmarkVariants,
+) where
     Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<Ext> + Distribution<F>,
     PoseidonChallenger: CanObserve<Commitment<Ext>>
@@ -131,7 +187,8 @@ where
         return;
     }
 
-    let (configs, keys, security_bits) = select_configs_and_keys::<Ext>(&fixture, extension);
+    let (configs, keys, security_bits) =
+        select_configs_and_keys::<Ext>(&fixture, extension, variants);
     println!("benchmark_security_bits: {security_bits}");
 
     if env_flag("SHA256_ZK_BENCH_PROVING_ONLY") {
@@ -147,7 +204,6 @@ where
         return;
     }
 
-    benchmark_setup::<Ext>(c, sha256_size, extension, &fixture, &configs);
     benchmark_proving::<Ext>(
         c,
         sha256_size,
@@ -287,6 +343,7 @@ fn benchmark_single_direct_proving<Ext>(
 fn select_configs_and_keys<Ext>(
     fixture: &Sha256Fixture,
     extension: &str,
+    variants: BenchmarkVariants,
 ) -> (BenchmarkConfigs, BenchmarkKeys<Ext>, u32)
 where
     Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
@@ -296,115 +353,38 @@ where
         + FieldChallenger<F>
         + GrindingChallenger<Witness = F>,
 {
-    for security_bits in (MIN_SECURITY_BITS..=MAX_SECURITY_BITS).rev() {
-        let configs = benchmark_configs::<Ext>(&fixture.shape, extension, security_bits);
-        let full_zk_spark = match FullZkProvingKey::<Ext>::setup(
-            fixture.shape.clone(),
-            configs.full_zk_spark.clone(),
-        ) {
-            Ok(keys) => keys,
-            Err(SpartanWhirError::InvalidConfig(
-                InvalidConfigReason::ComposedSecurityUnavailable { .. },
-            )) => continue,
-            Err(error) => panic!("full-ZK SPARK setup failed at {security_bits} bits: {error}"),
-        };
-        let no_zk_direct =
-            PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_direct)
-                .expect("no-ZK DirectSparse setup succeeds at selected security");
-        let no_zk_spark =
-            PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_spark)
-                .expect("no-ZK SPARK setup succeeds at selected security");
-        let full_zk_direct =
-            FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), configs.full_zk_direct.clone())
-                .expect("full-ZK DirectSparse setup succeeds at selected security");
-        return (
-            configs,
-            BenchmarkKeys {
-                no_zk_direct_pk: no_zk_direct.0,
-                no_zk_direct_vk: no_zk_direct.1,
-                no_zk_spark_pk: no_zk_spark.0,
-                no_zk_spark_vk: no_zk_spark.1,
-                full_zk_direct_pk: full_zk_direct.0,
-                full_zk_direct_vk: full_zk_direct.1,
-                full_zk_spark_pk: full_zk_spark.0,
-                full_zk_spark_vk: full_zk_spark.1,
-            },
-            security_bits,
-        );
-    }
-    panic!("no common supported security target for all four benchmark variants");
-}
-
-fn benchmark_setup<Ext>(
-    c: &mut Criterion,
-    sha256_size: usize,
-    extension: &str,
-    fixture: &Sha256Fixture,
-    configs: &BenchmarkConfigs,
-) where
-    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
-    StandardUniform: Distribution<Ext> + Distribution<F>,
-    PoseidonChallenger: CanObserve<Commitment<Ext>>
-        + CanSampleUniformBits<F>
-        + FieldChallenger<F>
-        + GrindingChallenger<Witness = F>,
-{
-    let mut group = c.benchmark_group(format!("sha256_{sha256_size}b_{extension}/setup"));
-    group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || (),
-            |()| {
-                black_box(
-                    PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_direct)
-                        .expect("plain-WHIR setup succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
+    let security_bits = env_usize("SHA256_ZK_BENCH_SECURITY_BITS", 116) as u32;
+    assert!(
+        (MIN_SECURITY_BITS..=MAX_SECURITY_BITS).contains(&security_bits),
+        "SHA256_ZK_BENCH_SECURITY_BITS must be between {MIN_SECURITY_BITS} and {MAX_SECURITY_BITS}"
+    );
+    let configs = benchmark_configs::<Ext>(&fixture.shape, extension, security_bits);
+    let full_zk_spark = variants.spark.then(|| {
+        FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), configs.full_zk_spark.clone())
+            .expect("full-ZK SPARK setup succeeds at selected security")
     });
-    group.bench_function(BenchmarkId::from_parameter("no_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || (),
-            |()| {
-                black_box(
-                    PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_spark)
-                        .expect("no-ZK SPARK setup succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
+    let full_zk_direct = variants.direct.then(|| {
+        FullZkProvingKey::<Ext>::setup(fixture.shape.clone(), configs.full_zk_direct.clone())
+            .expect("full-ZK DirectSparse setup succeeds at selected security")
     });
-    group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || (),
-            |()| {
-                black_box(
-                    FullZkProvingKey::<Ext>::setup(
-                        fixture.shape.clone(),
-                        configs.full_zk_direct.clone(),
-                    )
-                    .expect("full-ZK DirectSparse setup succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
+    let no_zk_direct = variants.direct.then(|| {
+        PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_direct)
+            .expect("no-ZK DirectSparse setup succeeds at selected security")
     });
-    group.bench_function(BenchmarkId::from_parameter("full_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || (),
-            |()| {
-                black_box(
-                    FullZkProvingKey::<Ext>::setup(
-                        fixture.shape.clone(),
-                        configs.full_zk_spark.clone(),
-                    )
-                    .expect("full-ZK SPARK setup succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
+    let no_zk_spark = variants.spark.then(|| {
+        PlainProtocol::<Ext>::setup_with_config(&fixture.shape, &configs.no_zk_spark)
+            .expect("no-ZK SPARK setup succeeds at selected security")
     });
-    group.finish();
+    (
+        configs,
+        BenchmarkKeys {
+            no_zk_direct,
+            no_zk_spark,
+            full_zk_direct,
+            full_zk_spark,
+        },
+        security_bits,
+    )
 }
 
 fn benchmark_proving<Ext>(
@@ -426,123 +406,131 @@ fn benchmark_proving<Ext>(
     let mut group = c.benchmark_group(format!(
         "sha256_{sha256_size}b_{extension}/witness_and_prove"
     ));
-    let mut no_zk_direct_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let input = inputs[no_zk_direct_sample % inputs.len()].clone();
-                no_zk_direct_sample += 1;
-                input
-            },
-            |input| {
-                let (witness, public_inputs) = fixture
-                    .generator
-                    .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
-                    .expect("plain-WHIR witness generation succeeds");
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    PlainProtocol::<Ext>::prove_with_mode(
-                        &keys.no_zk_direct_pk,
-                        &public_inputs,
-                        &witness,
-                        configs.no_zk_direct.matrix_closing,
-                        &mut challenger,
+    if let Some((pk, _)) = &keys.no_zk_direct {
+        let mut no_zk_direct_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let input = inputs[no_zk_direct_sample % inputs.len()].clone();
+                    no_zk_direct_sample += 1;
+                    input
+                },
+                |input| {
+                    let (witness, public_inputs) = fixture
+                        .generator
+                        .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                        .expect("plain-WHIR witness generation succeeds");
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        PlainProtocol::<Ext>::prove_with_mode(
+                            pk,
+                            &public_inputs,
+                            &witness,
+                            configs.no_zk_direct.matrix_closing,
+                            &mut challenger,
+                        )
+                        .expect("no-ZK DirectSparse proving succeeds"),
                     )
-                    .expect("no-ZK DirectSparse proving succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut no_zk_spark_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("no_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let input = inputs[no_zk_spark_sample % inputs.len()].clone();
-                no_zk_spark_sample += 1;
-                input
-            },
-            |input| {
-                let (witness, public_inputs) = fixture
-                    .generator
-                    .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
-                    .expect("no-ZK SPARK witness generation succeeds");
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    PlainProtocol::<Ext>::prove_with_mode(
-                        &keys.no_zk_spark_pk,
-                        &public_inputs,
-                        &witness,
-                        configs.no_zk_spark.matrix_closing,
-                        &mut challenger,
+    if let Some((pk, _)) = &keys.no_zk_spark {
+        let mut no_zk_spark_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("no_zk_spark"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let input = inputs[no_zk_spark_sample % inputs.len()].clone();
+                    no_zk_spark_sample += 1;
+                    input
+                },
+                |input| {
+                    let (witness, public_inputs) = fixture
+                        .generator
+                        .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                        .expect("no-ZK SPARK witness generation succeeds");
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        PlainProtocol::<Ext>::prove_with_mode(
+                            pk,
+                            &public_inputs,
+                            &witness,
+                            configs.no_zk_spark.matrix_closing,
+                            &mut challenger,
+                        )
+                        .expect("no-ZK SPARK proving succeeds"),
                     )
-                    .expect("no-ZK SPARK proving succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut full_zk_direct_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let sample = full_zk_direct_sample;
-                full_zk_direct_sample += 1;
-                let input = inputs[sample % inputs.len()].clone();
-                (input, sample_rng(sample))
-            },
-            |(input, mut rng)| {
-                let (witness, public_inputs) = fixture
-                    .generator
-                    .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
-                    .expect("full-ZK witness generation succeeds");
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    FullZkProtocol::<Ext>::prove_with_rng(
-                        &keys.full_zk_direct_pk,
-                        &public_inputs,
-                        &witness,
-                        &mut challenger,
-                        &mut rng,
+    if let Some((pk, _)) = &keys.full_zk_direct {
+        let mut full_zk_direct_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let sample = full_zk_direct_sample;
+                    full_zk_direct_sample += 1;
+                    let input = inputs[sample % inputs.len()].clone();
+                    (input, sample_rng(sample))
+                },
+                |(input, mut rng)| {
+                    let (witness, public_inputs) = fixture
+                        .generator
+                        .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                        .expect("full-ZK witness generation succeeds");
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        FullZkProtocol::<Ext>::prove_with_rng(
+                            pk,
+                            &public_inputs,
+                            &witness,
+                            &mut challenger,
+                            &mut rng,
+                        )
+                        .expect("full-ZK DirectSparse proving succeeds"),
                     )
-                    .expect("full-ZK DirectSparse proving succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut full_zk_spark_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("full_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let sample = full_zk_spark_sample;
-                full_zk_spark_sample += 1;
-                let input = inputs[sample % inputs.len()].clone();
-                (input, sample_rng(sample))
-            },
-            |(input, mut rng)| {
-                let (witness, public_inputs) = fixture
-                    .generator
-                    .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
-                    .expect("full-ZK SPARK witness generation succeeds");
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    FullZkProtocol::<Ext>::prove_with_rng(
-                        &keys.full_zk_spark_pk,
-                        &public_inputs,
-                        &witness,
-                        &mut challenger,
-                        &mut rng,
+    if let Some((pk, _)) = &keys.full_zk_spark {
+        let mut full_zk_spark_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("full_zk_spark"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let sample = full_zk_spark_sample;
+                    full_zk_spark_sample += 1;
+                    let input = inputs[sample % inputs.len()].clone();
+                    (input, sample_rng(sample))
+                },
+                |(input, mut rng)| {
+                    let (witness, public_inputs) = fixture
+                        .generator
+                        .generate_witness(&input, fixture.shape.num_vars, fixture.shape.num_io)
+                        .expect("full-ZK SPARK witness generation succeeds");
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        FullZkProtocol::<Ext>::prove_with_rng(
+                            pk,
+                            &public_inputs,
+                            &witness,
+                            &mut challenger,
+                            &mut rng,
+                        )
+                        .expect("full-ZK SPARK proving succeeds"),
                     )
-                    .expect("full-ZK SPARK proving succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
     group.finish();
 }
 
@@ -576,83 +564,71 @@ where
             .validate_input(&messages[sample], input)
             .expect("verification-corpus input matches SHA-256");
 
-        let mut prover = spartan_whir::poseidon_challenger();
-        let no_zk_direct = PlainProtocol::<Ext>::prove_with_mode(
-            &keys.no_zk_direct_pk,
-            &public_inputs,
-            &witness,
-            configs.no_zk_direct.matrix_closing,
-            &mut prover,
-        )
-        .expect("verification-corpus no-ZK DirectSparse proof succeeds");
-        let mut verifier = spartan_whir::poseidon_challenger();
-        PlainProtocol::<Ext>::verify_with_mode(
-            &keys.no_zk_direct_vk,
-            &no_zk_direct.0,
-            &no_zk_direct.1,
-            &mut verifier,
-        )
-        .expect("verification-corpus no-ZK DirectSparse proof verifies");
-        corpus.no_zk_direct.push(no_zk_direct);
+        if let Some((pk, vk)) = &keys.no_zk_direct {
+            let mut prover = spartan_whir::poseidon_challenger();
+            let proof = PlainProtocol::<Ext>::prove_with_mode(
+                pk,
+                &public_inputs,
+                &witness,
+                configs.no_zk_direct.matrix_closing,
+                &mut prover,
+            )
+            .expect("verification-corpus no-ZK DirectSparse proof succeeds");
+            let mut verifier = spartan_whir::poseidon_challenger();
+            PlainProtocol::<Ext>::verify_with_mode(vk, &proof.0, &proof.1, &mut verifier)
+                .expect("verification-corpus no-ZK DirectSparse proof verifies");
+            corpus.no_zk_direct.push(proof);
+        }
 
-        let mut prover = spartan_whir::poseidon_challenger();
-        let no_zk_spark = PlainProtocol::<Ext>::prove_with_mode(
-            &keys.no_zk_spark_pk,
-            &public_inputs,
-            &witness,
-            configs.no_zk_spark.matrix_closing,
-            &mut prover,
-        )
-        .expect("verification-corpus no-ZK SPARK proof succeeds");
-        let mut verifier = spartan_whir::poseidon_challenger();
-        PlainProtocol::<Ext>::verify_with_mode(
-            &keys.no_zk_spark_vk,
-            &no_zk_spark.0,
-            &no_zk_spark.1,
-            &mut verifier,
-        )
-        .expect("verification-corpus no-ZK SPARK proof verifies");
-        corpus.no_zk_spark.push(no_zk_spark);
+        if let Some((pk, vk)) = &keys.no_zk_spark {
+            let mut prover = spartan_whir::poseidon_challenger();
+            let proof = PlainProtocol::<Ext>::prove_with_mode(
+                pk,
+                &public_inputs,
+                &witness,
+                configs.no_zk_spark.matrix_closing,
+                &mut prover,
+            )
+            .expect("verification-corpus no-ZK SPARK proof succeeds");
+            let mut verifier = spartan_whir::poseidon_challenger();
+            PlainProtocol::<Ext>::verify_with_mode(vk, &proof.0, &proof.1, &mut verifier)
+                .expect("verification-corpus no-ZK SPARK proof verifies");
+            corpus.no_zk_spark.push(proof);
+        }
 
-        let mut rng = sample_rng(sample);
-        let mut prover = spartan_whir::poseidon_challenger();
-        let full_zk_direct = FullZkProtocol::<Ext>::prove_with_rng(
-            &keys.full_zk_direct_pk,
-            &public_inputs,
-            &witness,
-            &mut prover,
-            &mut rng,
-        )
-        .expect("verification-corpus full-ZK DirectSparse proof succeeds");
-        let mut verifier = spartan_whir::poseidon_challenger();
-        FullZkProtocol::<Ext>::verify(
-            &keys.full_zk_direct_vk,
-            &full_zk_direct.0,
-            &full_zk_direct.1,
-            &mut verifier,
-        )
-        .expect("verification-corpus full-ZK DirectSparse proof verifies");
-        corpus.full_zk_direct.push(full_zk_direct);
+        if let Some((pk, vk)) = &keys.full_zk_direct {
+            let mut rng = sample_rng(sample);
+            let mut prover = spartan_whir::poseidon_challenger();
+            let proof = FullZkProtocol::<Ext>::prove_with_rng(
+                pk,
+                &public_inputs,
+                &witness,
+                &mut prover,
+                &mut rng,
+            )
+            .expect("verification-corpus full-ZK DirectSparse proof succeeds");
+            let mut verifier = spartan_whir::poseidon_challenger();
+            FullZkProtocol::<Ext>::verify(vk, &proof.0, &proof.1, &mut verifier)
+                .expect("verification-corpus full-ZK DirectSparse proof verifies");
+            corpus.full_zk_direct.push(proof);
+        }
 
-        let mut rng = sample_rng(sample);
-        let mut prover = spartan_whir::poseidon_challenger();
-        let full_zk_spark = FullZkProtocol::<Ext>::prove_with_rng(
-            &keys.full_zk_spark_pk,
-            &public_inputs,
-            &witness,
-            &mut prover,
-            &mut rng,
-        )
-        .expect("verification-corpus full-ZK SPARK proof succeeds");
-        let mut verifier = spartan_whir::poseidon_challenger();
-        FullZkProtocol::<Ext>::verify(
-            &keys.full_zk_spark_vk,
-            &full_zk_spark.0,
-            &full_zk_spark.1,
-            &mut verifier,
-        )
-        .expect("verification-corpus full-ZK SPARK proof verifies");
-        corpus.full_zk_spark.push(full_zk_spark);
+        if let Some((pk, vk)) = &keys.full_zk_spark {
+            let mut rng = sample_rng(sample);
+            let mut prover = spartan_whir::poseidon_challenger();
+            let proof = FullZkProtocol::<Ext>::prove_with_rng(
+                pk,
+                &public_inputs,
+                &witness,
+                &mut prover,
+                &mut rng,
+            )
+            .expect("verification-corpus full-ZK SPARK proof succeeds");
+            let mut verifier = spartan_whir::poseidon_challenger();
+            FullZkProtocol::<Ext>::verify(vk, &proof.0, &proof.1, &mut verifier)
+                .expect("verification-corpus full-ZK SPARK proof verifies");
+            corpus.full_zk_spark.push(proof);
+        }
     }
     corpus
 }
@@ -672,105 +648,103 @@ fn benchmark_verification<Ext>(
         + GrindingChallenger<Witness = F>,
 {
     let mut group = c.benchmark_group(format!("sha256_{sha256_size}b_{extension}/verify"));
-    let mut no_zk_direct_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let (instance, proof) =
-                    &proofs.no_zk_direct[no_zk_direct_sample % proofs.no_zk_direct.len()];
-                no_zk_direct_sample += 1;
-                (instance, proof)
-            },
-            |(instance, proof)| {
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    PlainProtocol::<Ext>::verify_with_mode(
-                        &keys.no_zk_direct_vk,
-                        instance,
-                        proof,
-                        &mut challenger,
+    if let Some((_, vk)) = &keys.no_zk_direct {
+        let mut no_zk_direct_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("no_zk_direct"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let (instance, proof) =
+                        &proofs.no_zk_direct[no_zk_direct_sample % proofs.no_zk_direct.len()];
+                    no_zk_direct_sample += 1;
+                    (instance, proof)
+                },
+                |(instance, proof)| {
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        PlainProtocol::<Ext>::verify_with_mode(
+                            vk,
+                            instance,
+                            proof,
+                            &mut challenger,
+                        )
+                        .expect("no-ZK DirectSparse verification succeeds"),
                     )
-                    .expect("no-ZK DirectSparse verification succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut no_zk_spark_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("no_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let (instance, proof) =
-                    &proofs.no_zk_spark[no_zk_spark_sample % proofs.no_zk_spark.len()];
-                no_zk_spark_sample += 1;
-                (instance, proof)
-            },
-            |(instance, proof)| {
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    PlainProtocol::<Ext>::verify_with_mode(
-                        &keys.no_zk_spark_vk,
-                        instance,
-                        proof,
-                        &mut challenger,
+    if let Some((_, vk)) = &keys.no_zk_spark {
+        let mut no_zk_spark_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("no_zk_spark"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let (instance, proof) =
+                        &proofs.no_zk_spark[no_zk_spark_sample % proofs.no_zk_spark.len()];
+                    no_zk_spark_sample += 1;
+                    (instance, proof)
+                },
+                |(instance, proof)| {
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        PlainProtocol::<Ext>::verify_with_mode(
+                            vk,
+                            instance,
+                            proof,
+                            &mut challenger,
+                        )
+                        .expect("no-ZK SPARK verification succeeds"),
                     )
-                    .expect("no-ZK SPARK verification succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut full_zk_direct_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let (instance, proof) =
-                    &proofs.full_zk_direct[full_zk_direct_sample % proofs.full_zk_direct.len()];
-                full_zk_direct_sample += 1;
-                (instance, proof)
-            },
-            |(instance, proof)| {
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    FullZkProtocol::<Ext>::verify(
-                        &keys.full_zk_direct_vk,
-                        instance,
-                        proof,
-                        &mut challenger,
+    if let Some((_, vk)) = &keys.full_zk_direct {
+        let mut full_zk_direct_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("full_zk_direct"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let (instance, proof) =
+                        &proofs.full_zk_direct[full_zk_direct_sample % proofs.full_zk_direct.len()];
+                    full_zk_direct_sample += 1;
+                    (instance, proof)
+                },
+                |(instance, proof)| {
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        FullZkProtocol::<Ext>::verify(vk, instance, proof, &mut challenger)
+                            .expect("full-ZK DirectSparse verification succeeds"),
                     )
-                    .expect("full-ZK DirectSparse verification succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
 
-    let mut full_zk_spark_sample = 0usize;
-    group.bench_function(BenchmarkId::from_parameter("full_zk_spark"), |bencher| {
-        bencher.iter_batched(
-            || {
-                let (instance, proof) =
-                    &proofs.full_zk_spark[full_zk_spark_sample % proofs.full_zk_spark.len()];
-                full_zk_spark_sample += 1;
-                (instance, proof)
-            },
-            |(instance, proof)| {
-                let mut challenger = spartan_whir::poseidon_challenger();
-                black_box(
-                    FullZkProtocol::<Ext>::verify(
-                        &keys.full_zk_spark_vk,
-                        instance,
-                        proof,
-                        &mut challenger,
+    if let Some((_, vk)) = &keys.full_zk_spark {
+        let mut full_zk_spark_sample = 0usize;
+        group.bench_function(BenchmarkId::from_parameter("full_zk_spark"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    let (instance, proof) =
+                        &proofs.full_zk_spark[full_zk_spark_sample % proofs.full_zk_spark.len()];
+                    full_zk_spark_sample += 1;
+                    (instance, proof)
+                },
+                |(instance, proof)| {
+                    let mut challenger = spartan_whir::poseidon_challenger();
+                    black_box(
+                        FullZkProtocol::<Ext>::verify(vk, instance, proof, &mut challenger)
+                            .expect("full-ZK SPARK verification succeeds"),
                     )
-                    .expect("full-ZK SPARK verification succeeds"),
-                )
-            },
-            BatchSize::PerIteration,
-        );
-    });
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
     group.finish();
 }
 
@@ -779,12 +753,20 @@ where
     Ext: ExtField + Serialize,
     StandardUniform: Distribution<Ext>,
 {
-    report_variant_size("no_zk_direct", &proofs.no_zk_direct);
-    report_variant_size("no_zk_spark", &proofs.no_zk_spark);
-    report_variant_size("full_zk_direct", &proofs.full_zk_direct);
+    if !proofs.no_zk_direct.is_empty() {
+        report_variant_size("no_zk_direct", &proofs.no_zk_direct);
+    }
+    if !proofs.no_zk_spark.is_empty() {
+        report_variant_size("no_zk_spark", &proofs.no_zk_spark);
+    }
+    if !proofs.full_zk_direct.is_empty() {
+        report_variant_size("full_zk_direct", &proofs.full_zk_direct);
+        report_full_zk_sections("full_zk_direct", &proofs.full_zk_direct);
+    }
+    if proofs.full_zk_spark.is_empty() {
+        return;
+    }
     report_variant_size("full_zk_spark", &proofs.full_zk_spark);
-
-    report_full_zk_sections("full_zk_direct", &proofs.full_zk_direct);
     report_full_zk_sections("full_zk_spark", &proofs.full_zk_spark);
 
     let spark_products = size_stats(proofs.full_zk_spark.iter().map(|(_, proof)| {
@@ -983,7 +965,7 @@ fn benchmark_configs<Ext: ExtField>(
     let spark_whir_params = SparkWhirParams {
         fixed_value: recommended_octic_spark_fixed_whir_params(fixed_value_variables),
         fixed_audit: recommended_octic_spark_fixed_whir_params(audit_variables),
-        read: recommended_octic_whir_params(read_variables),
+        read: recommended_octic_spark_read_whir_params(read_variables),
     };
     let no_zk_direct = SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
@@ -1035,11 +1017,25 @@ fn benchmark_security(security_bits: u32) -> SecurityConfig {
 fn benchmark_whir_params(num_variables: usize, extension: &str, variant_env: &str) -> WhirParams {
     let Some(raw) = env::var_os(variant_env).or_else(|| env::var_os("SHA256_ZK_BENCH_SCHEDULE"))
     else {
-        assert_eq!(
-            extension, "octic",
-            "{variant_env} or SHA256_ZK_BENCH_SCHEDULE is required for non-octic extensions"
-        );
-        return recommended_octic_zk_whir_params(num_variables);
+        return match (extension, variant_env) {
+            ("octic", "SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE")
+            | ("octic", "SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE") => {
+                recommended_octic_whir_params(num_variables)
+            }
+            ("octic", "SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE")
+            | ("octic", "SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE") => {
+                recommended_octic_zk_whir_params(num_variables)
+            }
+            ("quintic", "SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE")
+            | ("quintic", "SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE") => {
+                recommended_quintic_whir_params(num_variables)
+            }
+            ("quintic", "SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE")
+            | ("quintic", "SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE") => {
+                recommended_quintic_zk_whir_params(num_variables)
+            }
+            _ => panic!("unsupported benchmark extension or variant: {extension} {variant_env}"),
+        };
     };
     let label = raw
         .into_string()

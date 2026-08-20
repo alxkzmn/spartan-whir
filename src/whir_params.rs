@@ -162,6 +162,20 @@ pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
     }
 }
 
+/// Plain-WHIR quintic parameters for 116-bit DirectSparse proofs.
+///
+/// The 20-variable case is the measured SHA-256 2048-byte schedule. Other
+/// sizes reserve enough grinding headroom for backend-derived parameters.
+pub fn recommended_quintic_whir_params(num_variables: usize) -> WhirParams {
+    let mut params = recommended_octic_whir_params(num_variables);
+    params.pow_bits = if num_variables == 20 {
+        4
+    } else {
+        u32::try_from(num_variables).unwrap_or(u32::MAX).max(22)
+    };
+    params
+}
+
 /// Plain-WHIR octic parameters for fixed SPARK table openings.
 ///
 /// Initial fixed-table commitments are prepared during setup. These parameters
@@ -174,6 +188,17 @@ pub fn recommended_octic_spark_fixed_whir_params(num_variables: usize) -> WhirPa
         return params;
     }
     params.rs_domain_initial_reduction_factor = params.rs_domain_initial_reduction_factor.min(6);
+    params
+}
+
+/// Plain-WHIR octic parameters for SPARK read-table openings.
+///
+/// The 26-variable case is the measured SHA-256 2048-byte schedule.
+pub fn recommended_octic_spark_read_whir_params(num_variables: usize) -> WhirParams {
+    let mut params = recommended_octic_whir_params(num_variables);
+    if num_variables == 26 {
+        params.pow_bits = 4;
+    }
     params
 }
 

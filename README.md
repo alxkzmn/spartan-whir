@@ -199,11 +199,14 @@ The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
 `PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
 `PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
 DirectSparse at a 116-bit end-to-end target, use `QuinticExtension` with
-`recommended_quintic_zk_whir_params`. For Spark, `spark_whir_params` supplies
-independent fixed-value, fixed-audit, and
-read-table schedules; `None` reuses the witness schedule for all three. Octic
-configurations can use `recommended_octic_spark_fixed_whir_params` for the two
-fixed tables and `recommended_octic_whir_params` for the read table.
+`recommended_quintic_whir_params` for no ZK or
+`recommended_quintic_zk_whir_params` for full ZK. The selected 116-bit Spark
+profile uses `OcticBinExtension`; its witness schedule comes from
+`recommended_octic_whir_params` or `recommended_octic_zk_whir_params`.
+`spark_whir_params` supplies independent fixed-value, fixed-audit, and
+read-table schedules. Use `recommended_octic_spark_fixed_whir_params` for the
+fixed tables and `recommended_octic_spark_read_whir_params` for the read
+tables.
 `PoseidonZkProof::closing_mode()` reports the proof payload's mode, and
 verification rejects a proof whose mode differs from the verifying key.
 
@@ -377,31 +380,29 @@ cargo test protocol_e2e_target_2_pow_22 -- --ignored
 
 The `sha256_full_zk` Criterion target compares no-ZK DirectSparse, no-ZK Spark,
 full-ZK DirectSparse, and full-ZK Spark on a cached SHA-256 circuit. It measures
-setup, linked witness generation plus proving, and verification separately.
-All four proving variants rotate through the same fixed corpus of valid SHA-256
-inputs, verification rotates through the corresponding corpus of valid proofs,
-and proof size is reported outside the timed intervals. The target only loads
+linked witness generation plus proving and verification. All four proving
+variants rotate through the same fixed corpus of valid SHA-256 inputs,
+verification rotates through the corresponding corpus of valid proofs, and
+proof size is reported outside the timed intervals. The target only loads
 existing artifacts from `SHA256_BENCH_WORKDIR`, which defaults to
 `target/sha256-cache`; it never compiles the circuit.
 The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
-another cached circuit. The default extension is octic; set
-`SHA256_ZK_BENCH_EXTENSION=quintic` to benchmark the quintic extension. A
-non-octic run must set `SHA256_ZK_BENCH_SCHEDULE` or all four variant-specific
-schedule variables. The benchmark selects the highest composed Johnson-bound
-security target accepted by all four variants.
+another cached circuit. The default `selected` extension mode benchmarks
+DirectSparse over the quintic extension and Spark over the octic extension.
+Set `SHA256_ZK_BENCH_EXTENSION=octic` or `quintic` to run all four variants over
+one extension. `SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end security
+target and defaults to 116.
 `SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE`,
 `SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE`,
 `SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE`, and
-`SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE` override the shared schedule for one
-variant. This permits Criterion comparisons of independently selected schedules
-while every other variant retains the shared schedule.
+`SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE` override the selected helper schedule
+for one variant. In a forced single-extension run,
+`SHA256_ZK_BENCH_SCHEDULE` supplies a shared schedule before the per-variant
+overrides are applied.
 For a proving-only DirectSparse measurement, set
 `SHA256_ZK_BENCH_PROVING_ONLY=1` and
 `SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct` or
-`full_zk_direct`. `SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end
-security target for this single-variant run. Only the selected DirectSparse key
-is constructed, which permits extension-specific schedule measurements that
-are not supported by SPARK at the same security target.
+`full_zk_direct`. Only the selected DirectSparse key is constructed.
 `SHA256_BENCH_ZK_ELL` and `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the
 default ZK mask parameters.
 
@@ -429,8 +430,8 @@ Criterion retains the raw estimates and sample data under
 `target/criterion/sha256_<size>b_<extension>_*`. Set
 `SHA256_ZK_BENCH_CORPUS_SIZE` to change the proof/input corpus size; the default
 is 16. Set `SHA256_ZK_BENCH_PROVING_ONLY=1` for a proving-only optimization
-run that skips setup measurement, proof-corpus construction, proof-size
-reporting, and verification.
+run that skips proof-corpus construction, proof-size reporting, and
+verification.
 
 #### SHA-256 2048-Byte Comparison
 
@@ -439,42 +440,43 @@ The Spartan-WHIR measurements use the optimized
 circuit. The same M4 Pro also ran the CSP benchmark implementations of
 [ProveKit](https://github.com/worldfnd/ProveKit) at `cc391c8` and
 [Spartan2](https://github.com/microsoft/Spartan2) at `80a6a26`. ProveKit and
-Spartan2 target 128-bit security; the Spartan-WHIR rows use the 116-bit common
-target selected by the four-variant benchmark. Each frontend implements SHA-256
+Spartan2 target 128-bit security; the Spartan-WHIR rows use a 116-bit
+end-to-end target. Each frontend implements SHA-256
 over 2048 input bytes, but the resulting R1CS shapes differ:
 
 | System and mode                   | Field        | Raw constraints | Padded rows | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
 | --------------------------------- | ------------ | --------------: | ----------: | -------------------: | ----------: | -----------------: |
-| Spartan-WHIR no-ZK DirectSparse   | KoalaBear x8 |         605,424 |   1,048,576 |               52.896 |      80.682 |            479,215 |
-| Spartan-WHIR full-ZK DirectSparse | KoalaBear x8 |         605,424 |   1,048,576 |               78.282 |     102.750 |          1,566,588 |
-| Spartan-WHIR no-ZK Spark          | KoalaBear x8 |         605,424 |   1,048,576 |            1,402.700 |     271.880 |          3,110,779 |
-| Spartan-WHIR full-ZK Spark        | KoalaBear x8 |         605,424 |   1,048,576 |            1,358.400 |     294.560 |          4,233,256 |
+| Spartan-WHIR no-ZK DirectSparse   | KoalaBear x5 |         605,424 |   1,048,576 |               45.320 |      45.606 |            477,631 |
+| Spartan-WHIR full-ZK DirectSparse | KoalaBear x5 |         605,424 |   1,048,576 |               65.697 |      61.945 |          1,160,108 |
+| Spartan-WHIR no-ZK Spark          | KoalaBear x8 |         605,424 |   1,048,576 |            1,446.219 |     276.818 |          3,175,131 |
+| Spartan-WHIR full-ZK Spark        | KoalaBear x8 |         605,424 |   1,048,576 |            1,434.932 |     298.363 |          4,201,168 |
 | ProveKit full ZK                  | BN254        |         345,399 |     524,288 |              971.343 |     207.381 |          3,228,336 |
 | Spartan2 full ZK                  | P-256        |         873,466 |   1,048,576 |              287.427 |      36.169 |             78,700 |
 
-The two SPARK proving variants run as separate sequential Criterion groups, so
-their point-estimate ordering is not a paired estimate of full-ZK overhead.
+The selected DirectSparse schedules are
+`quintic_constant_pow4_ff8_lir1_rsv8` for no ZK and
+`quintic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. The selected Spark witness
+schedules are `octic_constant_pow0_ff8_lir1_rsv8` for no ZK and
+`octic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. Both Spark variants use
+`octic_cfsr_pow4_ff8_rest6_lir1_rsv8` for fixed-value and read openings and
+`octic_cfsr_pow0_ff8_rest4_lir1_rsv6` for fixed-audit openings. Full ZK uses
+`ell_zk = 3` and `mask_log_inv_rate = 3`.
 
-An independently selected full-ZK DirectSparse profile uses the quintic
-extension with `pow4/ff8/rest6/lir1/rsv6`. At the same 116-bit end-to-end
-target, the adjacent native Criterion measurement reduced witness generation
-plus proving from 86.748 ms with octic to 71.036 ms with quintic. In the
-randomized interleaved heldout run, the median proof size decreased from
-1,599,476 to 1,160,220 bytes. The common four-mode table remains octic because
-SPARK requires the larger extension at this security target.
+The two Spark proving variants run as separate sequential Criterion groups, so
+their point-estimate ordering is not a paired estimate of full-ZK overhead.
 
 The Spartan-WHIR proving interval includes linked witness generation. The
 ProveKit interval calls `prove_with_toml`, which generates the witness and
 proof, while the Spartan2 interval includes `prep_prove` and `prove`. Circuit
 compilation, key preparation, and fixture construction are outside all three
 proving intervals. The Spartan-WHIR measurements use native CPU code generation,
-30 Criterion samples, and a 16-proof corpus. The competitor measurements use
+30 Criterion samples, and a 16-proof corpus. DirectSparse samples permit a
+Criterion slope estimate; the longer Spark samples use Criterion's mean
+estimate. The competitor measurements use
 ten Criterion samples with a four-second warmup and a twenty-second target
 measurement time. Competitor proof sizes come from the corresponding SHA-256
 2048-byte entries in the CSP benchmark results. Raw Spartan-WHIR timing
-artifacts are retained under the dated `boolean-inputs-2026-08-18` directories in
-its `target/criterion` tree. The competitor artifacts use
-`comparison-2026-08-18` in their respective `target/criterion` trees.
+artifacts are under `target/criterion/sha256_2048b_{quintic,octic}_*`.
 
 The optimized Spartan-WHIR circuit has 593,120 variables, 3,251,928 SPARK union
 entries, and a 4,194,304-entry SPARK value domain. It uses single-row

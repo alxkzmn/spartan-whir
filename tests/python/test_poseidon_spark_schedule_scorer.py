@@ -280,6 +280,36 @@ class SparkScheduleScorerTests(unittest.TestCase):
 
         self.assertEqual(selected["label"], "fast")
 
+    def test_measured_selection_uses_proof_size_below_one_percent(self):
+        rows = [
+            {"label": "fast", "proof_size_bytes_estimate": 20},
+            {"label": "small", "proof_size_bytes_estimate": 10},
+        ]
+        measurements = {
+            "rows": [
+                {
+                    "label": "fast",
+                    "measured_seconds": 0.994,
+                    "heldout_median_ci_seconds": [0.992, 0.996],
+                    "heldout_relative_median_difference": 0.0,
+                    "heldout_paired_relative_median_ci": [0.0, 0.0],
+                    "heldout_proof_size_median_bytes": 20,
+                },
+                {
+                    "label": "small",
+                    "measured_seconds": 1.0,
+                    "heldout_median_ci_seconds": [0.998, 1.002],
+                    "heldout_relative_median_difference": 0.006,
+                    "heldout_paired_relative_median_ci": [0.004, 0.008],
+                    "heldout_proof_size_median_bytes": 10,
+                },
+            ]
+        }
+
+        selected = MODULE.select_measured(rows, measurements)
+
+        self.assertEqual(selected["label"], "small")
+
 
 if __name__ == "__main__":
     unittest.main()

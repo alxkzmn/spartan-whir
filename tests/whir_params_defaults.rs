@@ -7,7 +7,8 @@ use p3_whir::{
 };
 use spartan_whir::{
     engine::F, recommended_octic_schedule, recommended_octic_spark_fixed_whir_params,
-    recommended_octic_whir_params, recommended_octic_zk_whir_params,
+    recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
+    recommended_octic_zk_whir_params, recommended_quintic_whir_params,
     recommended_quintic_zk_whir_params, OcticBinExtension, PoseidonChallenger, QuinticExtension,
     WhirFoldingSchedule, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
@@ -95,6 +96,30 @@ fn recommended_octic_spark_fixed_params_use_measured_sha256_2048_schedule() {
     assert_eq!(
         params.effective_folding_schedule(),
         WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 }
+    );
+}
+
+#[test]
+fn recommended_octic_spark_read_params_use_measured_sha256_2048_schedule() {
+    let params = recommended_octic_spark_read_whir_params(26);
+
+    assert_eq!(params.pow_bits, 4);
+    assert_eq!(params.rs_domain_initial_reduction_factor, 8);
+    assert_eq!(
+        params.effective_folding_schedule(),
+        WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 }
+    );
+}
+
+#[test]
+fn recommended_quintic_whir_params_use_measured_sha256_2048_schedule() {
+    let params = recommended_quintic_whir_params(20);
+
+    assert_eq!(params.pow_bits, 4);
+    assert_eq!(params.rs_domain_initial_reduction_factor, 8);
+    assert_eq!(
+        params.effective_folding_schedule(),
+        WhirFoldingSchedule::Constant(8)
     );
 }
 

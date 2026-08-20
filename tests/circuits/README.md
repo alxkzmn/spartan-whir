@@ -76,15 +76,10 @@ The benchmark reports constraints, constraints per SHA block, wires,
 `witness_and_prove_ms`, verify time, and Spark layout stats.
 `witness_and_prove_ms` starts at the linked native witness generator and ends at
 proof output. This `Instant` timing is diagnostic; use the Criterion benchmark
-for statistical comparisons. It derives the Spark folding factor from the
-packed Spark table size, so larger circuits can cross WHIR domain cliffs without
-manual retuning.
-
-Set `SHA256_BENCH_MODES=spark,spark-independent` to compare the shared Spark
-WHIR schedule against independently selected witness, fixed-value,
-fixed-audit, and read-table schedules. `spark-independent` is the mode to use
-for larger Spark layouts whose read-table commitment crosses the KoalaBear
-two-adicity bound under the shared schedule.
+for statistical comparisons. Spark uses separate selected schedules for its
+witness, fixed-value, fixed-audit, and read-table commitments. Set
+`SHA256_BENCH_MODES=direct,spark` and
+`SHA256_BENCH_PROOF_MODES=no-zk,full-zk` to run all four protocol modes.
 
 Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the
 `witness_and_prove` path. The Spark read-table profile is split into
