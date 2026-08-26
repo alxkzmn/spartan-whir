@@ -8,36 +8,36 @@
 - competitive for client-side proving,
 - suitable for comparison benchmarks against other WHIR-based systems.
 
-There are two client-side SNARK lines to keep separate:
+The two matrix-closing variants have different optimization objectives:
 
-- The current off-chain verification line is a pure client-side SNARK. For this line, optimize WHIR schedules primarily for prover speed while keeping RAM low enough for mobile feasibility.
-- A later recursive/on-chain-targeted line may care more about proof size and verifier-facing calldata, but that is contingent on future recursion/on-chain research and is not the default schedule-selection objective today.
+- DirectSparse prioritizes client-side proving time. Proof size and recursive verification cost are not selection criteria for DirectSparse.
+- Spark balances client-side proving performance with recursion friendliness. Evaluate proof size and the work imposed on the recursive verifier together with prover time.
 
-Proof size and verifier-facing calldata are primary optimization targets only for SNARK paths that explicitly target on-chain deployment or recursive verification toward on-chain deployment. For the current off-chain client-side schedule work, use proof size only as a deterministic tie-breaker behind projected proving time.
+On-chain verification targets the final recursive root proof produced by a separate wrapper SNARK. That wrapper and direct EVM verification are outside this repository.
 
 ## Default Path Invariants
 
-- Keep the current off-chain client-side default path aligned with fast proving and feasible memory use.
+- Keep DirectSparse aligned with fast client-side proving and feasible memory use.
+- Keep Spark aligned with both client-side proving and recursive verification.
 - Keep the no-ZK and full-ZK APIs separate.
 - Unqualified `Plonky3WhirPcs` means plain WHIR and is the no-ZK PCS. Full ZK uses dedicated Poseidon ZK keys and the lower-level hiding-WHIR committed-relation APIs.
 - Treat privacy and matrix closing as independent axes: no ZK and full ZK both support DirectSparse and Spark.
-- Preserve verifier-facing protocol details deliberately, but do not treat EVM verifier efficiency as the default objective for the off-chain client-side line.
+- Preserve verifier-facing protocol details deliberately, including the proof structure consumed by a recursive verifier.
 - Do not switch transcript, hash, or commitment choices as a refactor convenience. Treat those as protocol choices that need an explicit benchmark or verifier-design reason.
-- For explicitly on-chain-targeted or recursive/on-chain-targeted paths, keep the transcript and commitment choices aligned with that verifier story.
 - Treat transcript ordering, proof encoding, digest layout, and other verifier-facing details as protocol surface, not incidental implementation details.
-- The project is still pre-production / PoC. Protocol-surface changes are allowed when they improve the design, reduce meaningful complexity, or improve verifier/prover tradeoffs. Do not block them solely to preserve existing unpublished proofs or fixtures; instead, call out what changes and update affected Rust proof structs, codecs, tests, and benchmark fixtures.
+- The project is pre-production / PoC. Protocol-surface changes are allowed when they improve the design, reduce meaningful complexity, or improve the applicable DirectSparse or Spark objective. Do not block them solely to preserve existing unpublished proofs or fixtures; instead, call out what changes and update affected Rust proof structs, codecs, tests, and benchmark fixtures.
 
 ## What Is Flexible
 
-- Field choices, extension choices, proof-system tuning, and internal structure may evolve when supported by benchmarks and verifier-cost reasoning.
+- Field choices, extension choices, proof-system tuning, and internal structure may evolve when supported by client-side prover benchmarks and, for Spark, recursion analysis.
 - Additive experimental paths are welcome when they are clearly separated from the default path.
-- If you want to try a non-EVM-oriented primitive or alternative challenger, add it as an explicit experiment, feature, or separate API instead of silently changing the default.
+- Add alternative primitives or challengers as explicit experiments, features, or separate APIs instead of silently changing the default.
 
 ## Refactoring Rules
 
 - Do not broaden abstractions around cryptographic backends unless there is a concrete need in this crate.
 - Do not make "cleanups" that change verifier-relevant behavior without calling that out explicitly.
-- If a change can affect verifier gas, calldata size, proof size, transcript compatibility, or benchmark comparability, state that impact in your summary.
+- If a change can affect client-side proving, recursive verifier work, proof size, transcript compatibility, or benchmark comparability, state that impact in your summary. Recursive verifier work and proof size are optimization criteria for Spark, not DirectSparse.
 - When changing extension choices or adding a new extension, document extension-specific algebraic limits and support level explicitly. This includes `TWO_ADICITY`-dependent behavior, skip-path feasibility, and which paths are currently exercised by tests or benchmarks.
 - Prefer changes that keep `spartan-whir` representative for future client-side proving comparison benchmarks.
 
@@ -52,11 +52,12 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
   that benchmark:
   `tests/circuits/build_sha256_optimized_fixture.sh ../circom/target/release/circom`.
 - The Criterion target only loads existing circuit artifacts from `SHA256_BENCH_WORKDIR`; it must not compile the circuit as part of a benchmark run. Use `sha256_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
-- The default `SHA256_ZK_BENCH_EXTENSION=selected` run uses quintic DirectSparse and octic Spark with the selected per-mode schedules. Set `SHA256_ZK_BENCH_EXTENSION=octic|quintic` to run all four variants over one extension. In a forced single-extension run, `SHA256_ZK_BENCH_SCHEDULE` applies one schedule to every variant; the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` values override it.
+- The default `SHA256_ZK_BENCH_EXTENSION=selected` run uses quintic DirectSparse and quintic Spark with the selected per-mode schedules. Set `SHA256_ZK_BENCH_EXTENSION=octic|quintic` to run all four variants over one extension, or `SHA256_ZK_BENCH_EXTENSION=spark` to compare quintic and octic Spark in one invocation. In a forced single-extension run, `SHA256_ZK_BENCH_SCHEDULE` applies one schedule to every witness variant; the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` values override it. `SHA256_ZK_BENCH_SPARK_{FIXED_VALUE,FIXED_AUDIT,READ}_SCHEDULE` overrides the corresponding SPARK table schedule.
 - For an independent DirectSparse schedule measurement, set `SHA256_ZK_BENCH_PROVING_ONLY=1`, `SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct|full_zk_direct`, and `SHA256_ZK_BENCH_SECURITY_BITS=<end-to-end target>`. This constructs only the selected DirectSparse key, so the run does not depend on another mode accepting the same extension or schedule.
 - Profile the 2048-byte full-ZK Spark path without rebuilding the circuit with:
   `SHA256_BENCH_WORKDIR=target/sha256-optimized-cache SHA256_BENCH_REUSE_ARTIFACTS=1 SHA256_BENCH_SIZES=2048 SHA256_BENCH_PROOF_MODES=full-zk SHA256_BENCH_MODES=spark SHA256_BENCH_SECURITY_BITS=116 SHA256_BENCH_PROFILE=1 SHA256_BENCH_PROFILE_DETAIL=1 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo run --release --features parallel --example sha256_bench`.
 - Benchmark/profiling output intended for direct human inspection should be stable and human-readable. Prefer labeled `key: value` fields and clear tree/group structure over raw debug dumps.
+- Record accepted benchmark comparisons under `benchmark-results/` with the workload, commit or working-tree description, machine, toolchain, flags, sample count, confidence intervals, proof sizes, and exact commands. Update the current result snapshot in `README.md` when it quotes an affected measurement. Keep the control measurements in the dated result so later work can recover the baseline numbers without rerunning that checkout.
 - If a benchmark fixture is only shape-similar to a real circuit, document that approximation explicitly instead of describing it as the real circuit.
 - Keep `README.md` focused on the current codebase state rather than changelog-style history; describe the format and behavior that exist now.
 - Any protocol change that affects Spark fixed-table commitments must regenerate serialized `spark_fixed_commitments` and fixtures containing them.
@@ -70,10 +71,11 @@ witness, fixed-value, fixed-audit, and combined-read reports. The scorers are
 not part of setup. Generate and measure schedules for the target circuit, then
 pass the selected setup configuration into setup.
 
-Optimize the client-side line for prover time while keeping memory feasible.
-Use proof size as a deterministic tie-breaker between schedules whose measured
-proving times overlap. Use the linked native witness generator for end-to-end
-client benchmarks; reserve `.wtns` inputs for schedule-model calibration.
+For DirectSparse, optimize prover time while keeping memory feasible. Do not use
+proof size or recursive verifier cost to select a DirectSparse schedule. For
+Spark, retain candidates that balance prover time, proof size, and recursive
+verifier work. Use the linked native witness generator for end-to-end client
+benchmarks; reserve `.wtns` inputs for schedule-model calibration.
 Rerun component calibration after changes to Plonky3 kernels, SPARK batching,
 or the number or shape of commitments and openings represented by the model.
 Do not rank schedules with calibration data from a different implementation.
@@ -149,12 +151,12 @@ The default ZK sweep is `ell_zk = 3,4,8,16` and
 the backend slack checks reject invalid rows.
 
 For the 2048-byte Spark workload at 116-bit composed security, score the
-witness, fixed-value, fixed-audit, and combined-read arguments independently.
-Their variable counts are 20, 25, 22, and 26. The composed budget requires
-120-bit WHIR components and 123-bit Merkle binding. The table reports are
-shared by both privacy modes; generate a witness report for each privacy mode.
-Component searches omit `--out-config`; the Spark composer produces the
-standalone setup configuration:
+witness, fixed-value, fixed-audit, and each read group independently. Their
+variable counts are 20, 25, 22, 25, and 23. The composed budget requires
+120-bit WHIR components and 123-bit Merkle binding. Generate separate reports
+for both read groups even though the protocol stores one shared read schedule.
+The table reports are shared by both privacy modes; generate a witness report
+for each privacy mode. Component searches omit `--out-config`:
 
 ```bash
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
@@ -215,10 +217,23 @@ python3 scripts/poseidon_schedule_scorer.py \
 
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
-  --num-variables 26 \
+  --num-variables 25 \
   --field koalabear \
   --calibration /tmp/poseidon-calibration.json \
-  --out-report /tmp/spark-read.json \
+  --out-report /tmp/spark-read-25.json \
+  --max-pow-bits 22 \
+  --security-bits 116 \
+  --merkle-security-bits 116 \
+  --component-security-bits 120 \
+  --component-merkle-security-bits 123 \
+  --proof-mode no-zk
+
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 23 \
+  --field koalabear \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-read-23.json \
   --max-pow-bits 22 \
   --security-bits 116 \
   --merkle-security-bits 116 \
@@ -227,7 +242,16 @@ python3 scripts/poseidon_schedule_scorer.py \
   --proof-mode no-zk
 ```
 
-Compose the reports before heldout measurement:
+For the grouped quintic read argument, intersect schedules accepted by both
+read reports and sum their projected work and proof-size estimates. Compare the
+complete parameter tuple, not only the schedule label, and keep
+`round_log_inv_rates` derived because the two groups can have different round
+counts. Do not use the 25-variable report alone as the read cost. Confirm the
+shortlist with the full Criterion target.
+
+The Spark composer currently accepts one read report. For a layout with one
+read argument, generate `/tmp/spark-read.json` at that argument's variable
+count and compose the reports before heldout measurement:
 
 ```bash
 python3 scripts/poseidon_spark_schedule_scorer.py \
@@ -360,11 +384,14 @@ from the full-ZK prover; never relabel a full-ZK report as no ZK. Pass
   extension, folding, and rate family inside the model-resolution band.
 - Interpret overlapping bootstrap median confidence intervals or a measured
   slowdown of at most 1% as a time tie.
-- Prefer smaller proofs among time-tied rows. Prefer lower PoW before label
-  order because it has lower grind variance.
-- A higher-PoW row can win a median-time tie on proof size, but it carries a
-  tail-latency cost. Revisit the PoW-free tied row if p99 proving latency becomes
-  an objective.
+- For DirectSparse, prefer lower PoW and then stable label order among time-tied
+  rows. Proof size is not a DirectSparse selection criterion.
+- For Spark, retain the Pareto set across measured prover time, proof size, and
+  recursive verifier work. Prefer lower PoW when the relevant tradeoffs are
+  tied because it has lower grind variance.
+- A higher-PoW Spark row can win a prover-time tie through its proof size or
+  recursive verifier cost, but it carries a tail-latency cost. Revisit the
+  PoW-free tied row if p99 proving latency becomes an objective.
 - Compare absolute timings only within one heldout run. Cite the heldout
   artifact when quoting a value because medians drift across batches.
 - Use full-proof Criterion benchmarks as the final decision point.
@@ -428,4 +455,6 @@ the measured rows.
 
 ## Decision Heuristic
 
-If a change improves software neatness but makes the current off-chain client-side path slower, less representative, or materially harder to benchmark on realistic devices, reject it by default.
+- For DirectSparse, reject changes that slow client-side proving unless they are required for correctness, security, or feasible client memory use. Do not trade DirectSparse proving speed for smaller proofs or cheaper recursion.
+- For Spark, evaluate client-side prover performance and recursion friendliness together. Require benchmark evidence and recursion analysis for changes that improve one by making the other worse.
+- Treat direct EVM verification as outside the scope of `spartan-whir`. The on-chain verifier checks the final recursive root proof produced by a separate wrapper SNARK.

@@ -5,7 +5,7 @@ use crate::{
     engine::ExtField,
     error::{InvalidConfigReason, SecurityBoundComponent},
     protocol::SparkPcsConfigs,
-    spark::SparkTableMetadata,
+    spark::{spark_fixed_audit_is_embedded, SparkTableMetadata},
     whir_params::whir_folding_round_count,
     WhirPcsConfig,
 };
@@ -112,7 +112,7 @@ where
     )
 }
 
-/// Derive per-argument targets for the four WHIR arguments in a SPARK proof.
+/// Derive per-argument targets for the WHIR arguments in a SPARK proof.
 ///
 /// The composed error budget reserves one half for algebraic checks and one
 /// quarter each for WHIR soundness and Merkle binding. All arithmetic that
@@ -167,32 +167,49 @@ where
         spark_configs.fixed_value.num_variables,
         &spark_configs.fixed_value.whir,
     )?;
-    let fixed_audit_rounds = whir_folding_round_count(
-        spark_configs.fixed_audit.num_variables,
-        &spark_configs.fixed_audit.whir,
+    let fixed_audit_embedded = spark_fixed_audit_is_embedded(
+        metadata.value_domain_size,
+        metadata.row_memory_size,
+        metadata.col_memory_size,
+    );
+    let fixed_audit_rounds = if fixed_audit_embedded {
+        None
+    } else {
+        Some(whir_folding_round_count(
+            spark_configs.fixed_audit.num_variables,
+            &spark_configs.fixed_audit.whir,
+        )?)
+    };
+    let read_commitment_events = spark_configs.read.iter().try_fold(
+        0usize,
+        |events, config| -> Result<usize, SpartanWhirError> {
+            let rounds = whir_folding_round_count(config.num_variables, &config.whir)?;
+            events
+                .checked_add(rounds.checked_add(1).ok_or_else(composed_budget_overflow)?)
+                .ok_or_else(composed_budget_overflow)
+        },
     )?;
-    let read_rounds =
-        whir_folding_round_count(spark_configs.read.num_variables, &spark_configs.read.whir)?;
-    let table_commitment_events = fixed_value_rounds
+    let mut table_commitment_events = fixed_value_rounds
         .checked_add(1)
-        .and_then(|events| {
-            fixed_audit_rounds
-                .checked_add(1)
-                .and_then(|audit| events.checked_add(audit))
-        })
-        .and_then(|events| {
-            read_rounds
-                .checked_add(1)
-                .and_then(|read| events.checked_add(read))
-        })
+        .and_then(|events| events.checked_add(read_commitment_events))
         .ok_or_else(composed_budget_overflow)?;
+    if let Some(rounds) = fixed_audit_rounds {
+        table_commitment_events = table_commitment_events
+            .checked_add(rounds.checked_add(1).ok_or_else(composed_budget_overflow)?)
+            .ok_or_else(composed_budget_overflow)?;
+    }
     let witness_commitment_events = witness_commitment_events(witness_rounds, mode)?;
     let commitment_binding_events = table_commitment_events
         .checked_add(witness_commitment_events)
         .ok_or_else(composed_budget_overflow)?;
 
-    // Fixed value, fixed audit, shared read-table, and witness/relation.
-    let whir_argument_count = 4usize;
+    // Embedded audit tables share the fixed value argument. Read coordinates
+    // use one argument per power-of-two group.
+    let whir_argument_count = spark_configs
+        .read
+        .len()
+        .checked_add(if fixed_audit_embedded { 2 } else { 3 })
+        .ok_or_else(composed_budget_overflow)?;
     compose_security_budget::<Ext>(
         requested,
         algebraic_error_terms,

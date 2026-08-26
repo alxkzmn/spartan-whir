@@ -5,9 +5,10 @@ use rand::distr::{Distribution, StandardUniform};
 
 use spartan_whir::{
     engine::{ExtField, F},
-    evaluate_mle_table, MatrixClosingMode, MlePcs, MultilinearPoint, PcsStatementBuilder,
-    Plonky3WhirPcs, PointEvalClaim, PoseidonEngine, QuarticBinExtension, QuinticExtension,
-    SpartanProtocol, SpartanSnarkConfig, WhirParams, WhirPcsConfig,
+    evaluate_mle_table, read_table_group_column_counts, MatrixClosingMode, MlePcs,
+    MultilinearPoint, PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim, PoseidonEngine,
+    QuarticBinExtension, QuinticExtension, SpartanProtocol, SpartanSnarkConfig, SpartanWhirError,
+    WhirParams, WhirPcsConfig,
 };
 
 fn test_whir_config(num_variables: usize) -> WhirPcsConfig {
@@ -101,34 +102,51 @@ fn spartan_protocol_supports_quartic_and_quintic_extensions() {
         StandardUniform: Distribution<Ext>,
     {
         let shape = common::koala_shape_single_constraint(2);
-        let (pk, vk) = SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::setup_with_config(
-            &shape,
-            &SpartanSnarkConfig {
-                matrix_closing: MatrixClosingMode::DirectSparse,
-                security: common::phase3_security(),
-                whir_params: common::phase3_whir_params(),
-                spark_whir_params: None,
-            },
-        )
-        .expect("setup succeeds");
+        for matrix_closing in [MatrixClosingMode::DirectSparse, MatrixClosingMode::Spark] {
+            let (pk, vk) =
+                SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::setup_with_config(
+                    &shape,
+                    &SpartanSnarkConfig {
+                        matrix_closing,
+                        security: common::phase3_security(),
+                        whir_params: common::phase3_whir_params(),
+                        spark_whir_params: None,
+                    },
+                )
+                .expect("setup succeeds");
+            if matrix_closing == MatrixClosingMode::Spark {
+                let expected_groups =
+                    read_table_group_column_counts::<Ext>().expect("read groups are valid");
+                assert_eq!(
+                    pk.spark_pcs_configs
+                        .as_ref()
+                        .expect("SPARK configs exist")
+                        .read
+                        .len(),
+                    expected_groups.len()
+                );
+            }
 
-        let mut prover_challenger = spartan_whir::poseidon_challenger();
-        let (instance, proof) = SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::prove(
-            &pk,
-            &common::koala_public_inputs(9),
-            &common::koala_witness(9),
-            &mut prover_challenger,
-        )
-        .expect("prove succeeds");
+            let mut prover_challenger = spartan_whir::poseidon_challenger();
+            let (instance, proof) =
+                SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::prove_with_mode(
+                    &pk,
+                    &common::koala_public_inputs(9),
+                    &common::koala_witness(9),
+                    matrix_closing,
+                    &mut prover_challenger,
+                )
+                .expect("prove succeeds");
 
-        let mut verifier_challenger = spartan_whir::poseidon_challenger();
-        SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::verify(
-            &vk,
-            &instance,
-            &proof,
-            &mut verifier_challenger,
-        )
-        .expect("verify succeeds");
+            let mut verifier_challenger = spartan_whir::poseidon_challenger();
+            SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::verify_with_mode(
+                &vk,
+                &instance,
+                &proof,
+                &mut verifier_challenger,
+            )
+            .expect("verify succeeds");
+        }
     }
 
     run::<QuarticBinExtension>();
@@ -139,4 +157,56 @@ fn spartan_protocol_supports_quartic_and_quintic_extensions() {
 fn engine_aliases_match_expected_extension_dimensions() {
     assert_eq!(<QuarticBinExtension as BasedVectorSpace<F>>::DIMENSION, 4);
     assert_eq!(<QuinticExtension as BasedVectorSpace<F>>::DIMENSION, 5);
+    assert_eq!(
+        read_table_group_column_counts::<QuarticBinExtension>()
+            .expect("quartic read groups are valid"),
+        vec![8]
+    );
+    assert_eq!(
+        read_table_group_column_counts::<QuinticExtension>()
+            .expect("quintic read groups are valid"),
+        vec![8, 2]
+    );
+}
+
+#[test]
+fn quintic_spark_binds_the_second_read_commitment() {
+    type Engine = PoseidonEngine<QuinticExtension>;
+    let shape = common::koala_shape_single_constraint(2);
+    let (pk, vk) = SpartanProtocol::<Engine, Plonky3WhirPcs>::setup_with_config(
+        &shape,
+        &SpartanSnarkConfig {
+            matrix_closing: MatrixClosingMode::Spark,
+            security: common::phase3_security(),
+            whir_params: common::phase3_whir_params(),
+            spark_whir_params: None,
+        },
+    )
+    .expect("SPARK setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, mut proof) = SpartanProtocol::<Engine, Plonky3WhirPcs>::prove_spark(
+        &pk,
+        &common::koala_public_inputs(9),
+        &common::koala_witness(9),
+        &mut prover_challenger,
+    )
+    .expect("quintic SPARK prove succeeds");
+    assert_eq!(proof.spark_read_openings.groups.len(), 2);
+
+    let mut roots = proof.spark_read_openings.groups[1]
+        .commitment
+        .clone()
+        .into_roots();
+    roots[0][0] += F::ONE;
+    proof.spark_read_openings.groups[1].commitment = roots.into();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    assert_eq!(
+        SpartanProtocol::<Engine, Plonky3WhirPcs>::verify_spark(
+            &vk,
+            &instance,
+            &proof,
+            &mut verifier_challenger,
+        ),
+        Err(SpartanWhirError::TranscriptMismatch)
+    );
 }

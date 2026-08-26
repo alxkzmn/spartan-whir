@@ -27,7 +27,6 @@ const DEFAULT_LIR_MAX: usize = 8;
 const DEFAULT_MAX_POW_BITS: usize = 22;
 const DEFAULT_BEAM_WIDTH: usize = 64;
 const FULL_ZK_RELATION_SECURITY_SLACK_BITS: usize = 2;
-const POW_BITS_CANDIDATES: &[usize] = &[0, 4, 8, 12, 16, 20, 22];
 const FIELD_BYTES: u128 = 4;
 const POSEIDON_DIGEST_BYTES: u128 = 32;
 
@@ -182,11 +181,7 @@ fn main() {
     });
     let mut candidates = Vec::new();
     for schedule in schedules(&args) {
-        for pow_bits in POW_BITS_CANDIDATES
-            .iter()
-            .copied()
-            .filter(|pow| *pow <= args.max_pow_bits)
-        {
+        for pow_bits in 0..=args.max_pow_bits {
             for starting_log_inv_rate in 1..=args.starting_log_inv_rate_max {
                 let first = schedule.first_round();
                 for rsv in 1..=first {

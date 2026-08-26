@@ -197,16 +197,25 @@ and Spark use this API.
 
 The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
 `PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
-`PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
-DirectSparse at a 116-bit end-to-end target, use `QuinticExtension` with
+`PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. At a
+116-bit end-to-end target, use `QuinticExtension` with
 `recommended_quintic_whir_params` for no ZK or
-`recommended_quintic_zk_whir_params` for full ZK. The selected 116-bit Spark
-profile uses `OcticBinExtension`; its witness schedule comes from
-`recommended_octic_whir_params` or `recommended_octic_zk_whir_params`.
+`recommended_quintic_zk_whir_params` for full-ZK DirectSparse. The selected
+Spark witness schedules come from `recommended_quintic_spark_whir_params` and
+`recommended_quintic_spark_zk_whir_params`.
 `spark_whir_params` supplies independent fixed-value, fixed-audit, and
-read-table schedules. Use `recommended_octic_spark_fixed_whir_params` for the
-fixed tables and `recommended_octic_spark_read_whir_params` for the read
-tables.
+read-table schedules. Use `recommended_quintic_spark_fixed_whir_params` for
+the fixed tables and `recommended_quintic_spark_read_whir_params` for the read
+tables. The corresponding octic helpers are available for explicit octic
+configurations.
+
+Spark partitions the `erow` and `ecol` base-field coordinates into commitments
+whose column counts are descending powers of two. Quartic and octic extensions
+use one read commitment; the quintic extension uses 8-column and 2-column read
+commitments. When both audit timestamp tables fit in the unused eighth fixed
+value column, they share that commitment and opening. Other table dimensions
+use a separate fixed-audit commitment.
+
 `PoseidonZkProof::closing_mode()` reports the proof payload's mode, and
 verification rejects a proof whose mode differs from the verifying key.
 
@@ -291,7 +300,7 @@ The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
 6. `mu_tilde`, outer combining challenge, equality point, and outer rounds
 7. outer-mask evaluations, masked matrix claims, matrix batching challenge, and relation batching challenge
 8. Plonky3 HVZK inner sumcheck
-9. for Spark, fixed-table commitments, the shared read-table commitment, the memory-product proof, and fixed/read plain-WHIR openings
+9. for Spark, fixed-table commitments, the ordered read-table commitments, the memory-product proof, and fixed/read plain-WHIR openings
 10. hiding-WHIR committed-relation proof
 
 `PoseidonZkProvingKey::prove` draws mask and WHIR randomness from an
@@ -387,16 +396,20 @@ proof size is reported outside the timed intervals. The target only loads
 existing artifacts from `SHA256_BENCH_WORKDIR`, which defaults to
 `target/sha256-cache`; it never compiles the circuit.
 The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
-another cached circuit. The default `selected` extension mode benchmarks
-DirectSparse over the quintic extension and Spark over the octic extension.
-Set `SHA256_ZK_BENCH_EXTENSION=octic` or `quintic` to run all four variants over
-one extension. `SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end security
-target and defaults to 116.
+another cached circuit. The default `selected` extension mode benchmarks all
+four variants over the quintic extension. Set
+`SHA256_ZK_BENCH_EXTENSION=octic` to run all four variants over octic, or set
+it to `spark` to compare quintic and octic Spark in one invocation.
+`SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end security target and
+defaults to 116.
 `SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE`,
 `SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE`,
 `SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE`, and
 `SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE` override the selected helper schedule
-for one variant. In a forced single-extension run,
+for one witness commitment. `SHA256_ZK_BENCH_SPARK_FIXED_VALUE_SCHEDULE`,
+`SHA256_ZK_BENCH_SPARK_FIXED_AUDIT_SCHEDULE`, and
+`SHA256_ZK_BENCH_SPARK_READ_SCHEDULE` override the three SPARK table schedules.
+In a forced single-extension run,
 `SHA256_ZK_BENCH_SCHEDULE` supplies a shared schedule before the per-variant
 overrides are applied.
 For a proving-only DirectSparse measurement, set
@@ -448,19 +461,22 @@ over 2048 input bytes, but the resulting R1CS shapes differ:
 | --------------------------------- | ------------ | --------------: | ----------: | -------------------: | ----------: | -----------------: |
 | Spartan-WHIR no-ZK DirectSparse   | KoalaBear x5 |         605,424 |   1,048,576 |               45.320 |      45.606 |            477,631 |
 | Spartan-WHIR full-ZK DirectSparse | KoalaBear x5 |         605,424 |   1,048,576 |               65.697 |      61.945 |          1,160,108 |
-| Spartan-WHIR no-ZK Spark          | KoalaBear x8 |         605,424 |   1,048,576 |            1,446.219 |     276.818 |          3,175,131 |
-| Spartan-WHIR full-ZK Spark        | KoalaBear x8 |         605,424 |   1,048,576 |            1,434.932 |     298.363 |          4,201,168 |
+| Spartan-WHIR no-ZK Spark          | KoalaBear x5 |         605,424 |   1,048,576 |              917.614 |     152.782 |          2,043,072 |
+| Spartan-WHIR full-ZK Spark        | KoalaBear x5 |         605,424 |   1,048,576 |              879.275 |     168.935 |          2,729,013 |
 | ProveKit full ZK                  | BN254        |         345,399 |     524,288 |              971.343 |     207.381 |          3,228,336 |
 | Spartan2 full ZK                  | P-256        |         873,466 |   1,048,576 |              287.427 |      36.169 |             78,700 |
+
+The SPARK measurements, octic control, and clean-HEAD control are recorded in
+[`benchmark-results/2026-08-26-sha256-2048b-spark.md`](benchmark-results/2026-08-26-sha256-2048b-spark.md).
 
 The selected DirectSparse schedules are
 `quintic_constant_pow4_ff8_lir1_rsv8` for no ZK and
 `quintic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. The selected Spark witness
-schedules are `octic_constant_pow0_ff8_lir1_rsv8` for no ZK and
-`octic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. Both Spark variants use
-`octic_cfsr_pow4_ff8_rest6_lir1_rsv8` for fixed-value and read openings and
-`octic_cfsr_pow0_ff8_rest4_lir1_rsv6` for fixed-audit openings. Full ZK uses
-`ell_zk = 3` and `mask_log_inv_rate = 3`.
+schedules are `quintic_constant_pow4_ff8_lir1_rsv8` for no ZK and
+`quintic_cfsr_pow6_ff8_rest6_lir1_rsv6` for full ZK. Both Spark variants use
+`quintic_cfsr_pow9_ff8_rest4_lir1_rsv8` for fixed-value and read openings and
+`quintic_constant_pow6_ff8_lir1_rsv8` for fixed-audit configuration. Full ZK
+uses `ell_zk = 3` and `mask_log_inv_rate = 3`.
 
 The two Spark proving variants run as separate sequential Criterion groups, so
 their point-estimate ordering is not a paired estimate of full-ZK overhead.

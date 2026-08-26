@@ -42,8 +42,9 @@ use crate::sumcheck::{
 };
 use crate::{
     compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_outer,
-    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
-    verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
+    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims,
+    spark_fixed_audit_is_embedded, verify_inner, verify_outer,
+    verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims_with_metadata, CommittedPolynomialView,
     DomainSeparator, EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint,
     NoZkPcs, NoopObserver, OuterSumcheckProof, PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim,
@@ -275,10 +276,10 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub audit_num_variables: usize,
     pub audit_column_bits: usize,
     pub value_commitment: Pcs::Commitment,
-    pub audit_commitment: Pcs::Commitment,
+    pub audit_commitment: Option<Pcs::Commitment>,
     pub evals: SparkFixedTableOpeningEvals<E::EF>,
     pub value_proof: Pcs::Proof,
-    pub audit_proof: Pcs::Proof,
+    pub audit_proof: Option<Pcs::Proof>,
     marker: PhantomData<E>,
 }
 
@@ -312,15 +313,20 @@ where
     deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
 ))]
 pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
+    pub groups: Vec<SparkReadGroupOpeningProof<E, Pcs>>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
+    deserialize = "E::EF: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Proof: Deserialize<'de>"
+))]
+pub struct SparkReadGroupOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub num_variables: usize,
-    pub column_bits: usize,
+    pub column_start: usize,
+    pub column_count: usize,
     pub commitment: Pcs::Commitment,
-    pub erow_low_evals: Vec<E::EF>,
-    pub erow_high_evals: Vec<E::EF>,
-    pub ecol_low_evals: Vec<E::EF>,
-    pub ecol_high_evals: Vec<E::EF>,
-    pub erow_ops_evals: Vec<E::EF>,
-    pub ecol_ops_evals: Vec<E::EF>,
+    pub evals: Vec<Vec<E::EF>>,
     pub proof: Pcs::Proof,
     marker: PhantomData<E>,
 }
@@ -335,15 +341,26 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            groups: self.groups.clone(),
+        }
+    }
+}
+
+impl<E, Pcs> Clone for SparkReadGroupOpeningProof<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+    E::EF: Clone,
+    Pcs::Commitment: Clone,
+    Pcs::Proof: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
             num_variables: self.num_variables,
-            column_bits: self.column_bits,
+            column_start: self.column_start,
+            column_count: self.column_count,
             commitment: self.commitment.clone(),
-            erow_low_evals: self.erow_low_evals.clone(),
-            erow_high_evals: self.erow_high_evals.clone(),
-            ecol_low_evals: self.ecol_low_evals.clone(),
-            ecol_high_evals: self.ecol_high_evals.clone(),
-            erow_ops_evals: self.erow_ops_evals.clone(),
-            ecol_ops_evals: self.ecol_ops_evals.clone(),
+            evals: self.evals.clone(),
             proof: self.proof.clone(),
             marker: PhantomData,
         }
@@ -361,7 +378,7 @@ pub struct SparkWhirParams {
 pub struct SparkPcsConfigs {
     pub fixed_value: WhirPcsConfig,
     pub fixed_audit: WhirPcsConfig,
-    pub read: WhirPcsConfig,
+    pub read: Vec<WhirPcsConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,12 +410,12 @@ impl<E: SpartanWhirEngine, Pcs: MlePcs<E>> SpartanProofKind<E, Pcs> {
 }
 
 struct SparkReadProverData<E: SpartanWhirEngine, Pcs: SparkReadPcs<E>> {
-    batch: Pcs::ReadProverData,
+    groups: Vec<Pcs::ReadProverData>,
     marker: PhantomData<E>,
 }
 
 struct SparkReadCommitments<C> {
-    batch: C,
+    groups: Vec<C>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -408,7 +425,7 @@ struct SparkReadCommitments<C> {
 ))]
 pub(crate) struct SparkFixedProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     value: Pcs::ProverData,
-    audit: Pcs::ProverData,
+    audit: Option<Pcs::ProverData>,
     marker: PhantomData<E>,
 }
 
@@ -430,7 +447,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkFixedCommitments<C = [u64; 4]> {
     pub value: C,
-    pub audit: C,
+    pub audit: Option<C>,
 }
 
 struct ParsedSparkReadOpenings<E, Pcs>
@@ -438,7 +455,7 @@ where
     E: SpartanWhirEngine,
     Pcs: SparkReadPcs<E>,
 {
-    batch: Pcs::ParsedReadCommitment,
+    groups: Vec<Pcs::ParsedReadCommitment>,
 }
 
 struct ParsedSparkFixedOpenings<E, Pcs>
@@ -447,7 +464,7 @@ where
     Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
 {
     value: Pcs::ParsedCommitment,
-    audit: Pcs::ParsedCommitment,
+    audit: Option<Pcs::ParsedCommitment>,
 }
 
 pub trait SpartanContextEngine: SpartanWhirEngine<F = F>
@@ -604,10 +621,15 @@ where
             != audit_bits
                 .checked_add(fixed_audit_column_bits())
                 .ok_or_else(SpartanWhirError::invalid_config)?
-        || configs.read.num_variables
-            != value_bits
-                .checked_add(read_table_column_bits::<EF>())
-                .ok_or_else(SpartanWhirError::invalid_config)?
+        || configs.read.len() != read_coordinate_groups::<EF>()?.len()
+        || configs
+            .read
+            .iter()
+            .zip(read_coordinate_groups::<EF>()?)
+            .any(|(config, group)| {
+                Some(config.num_variables)
+                    != value_bits.checked_add(group.column_count.ilog2() as usize)
+            })
     {
         return Err(SpartanWhirError::invalid_config());
     }
@@ -676,15 +698,18 @@ where
                 .ok_or(SpartanWhirError::invalid_config())?;
             configs.fixed_value.validate()?;
             configs.fixed_audit.validate()?;
-            configs.read.validate()?;
+            configs.read.iter().try_for_each(WhirPcsConfig::validate)?;
             match &vk.domain_separator.spark_whir_params {
                 Some(params)
                     if configs.fixed_value.whir == params.fixed_value
                         && configs.fixed_audit.whir == params.fixed_audit
-                        && configs.read.whir == params.read => {}
+                        && configs.read.iter().all(|config| config.whir == params.read) => {}
                 None if configs.fixed_value.whir == vk.whir_params
                     && configs.fixed_audit.whir == vk.whir_params
-                    && configs.read.whir == vk.whir_params => {}
+                    && configs
+                        .read
+                        .iter()
+                        .all(|config| config.whir == vk.whir_params) => {}
                 _ => return Err(SpartanWhirError::invalid_config()),
             }
             let metadata = vk
@@ -703,7 +728,10 @@ where
             if vk.pcs_config.security != expected_security
                 || configs.fixed_value.security != expected_security
                 || configs.fixed_audit.security != expected_security
-                || configs.read.security != expected_security
+                || configs
+                    .read
+                    .iter()
+                    .any(|config| config.security != expected_security)
             {
                 return Err(SpartanWhirError::invalid_config());
             }
@@ -917,7 +945,7 @@ where
                     .ok_or_else(SpartanWhirError::invalid_config)?;
                 let spark_pcs_configs = spark_pcs_configs_for_tables::<E::EF>(
                     &canonical_pcs_config,
-                    &spark_tables,
+                    spark_tables,
                     config.spark_whir_params.as_ref(),
                 )?;
                 let setup = setup_spark_fixed_commitments::<E, E::EF, Pcs>(
@@ -1449,7 +1477,7 @@ where
         };
         let read_tables = {
             let _profile = profile_scope("spark_compute_read_tables");
-            compute_spark_read_tables(&spark_tables, &r_x, &r_y)?
+            compute_spark_read_tables(spark_tables, &r_x, &r_y)?
         };
         let (read_prover_data, read_commitments) = {
             let _profile = profile_scope("spark_commit_read_tables");
@@ -1462,7 +1490,7 @@ where
         let (spark_products, product_claims) = {
             let _profile = profile_scope("spark_memory_products");
             prove_spark_batched_memory_products_with_read_tables_and_leaf_claims(
-                &spark_tables,
+                spark_tables,
                 &r_x,
                 &r_y,
                 &read_tables,
@@ -1476,7 +1504,7 @@ where
                 &spark_pcs_configs.fixed_audit,
                 fixed_prover_data,
                 expected_fixed_commitments,
-                &spark_tables,
+                spark_tables,
                 &product_claims,
                 challenger,
             )?
@@ -1613,6 +1641,11 @@ where
         let parsed_fixed_openings = parse_spark_fixed_openings::<E, E::EF, Pcs>(
             &spark_pcs_configs.fixed_value,
             &spark_pcs_configs.fixed_audit,
+            spark_fixed_audit_is_embedded(
+                spark_metadata.value_domain_size,
+                spark_metadata.row_memory_size,
+                spark_metadata.col_memory_size,
+            ),
             &proof.spark_fixed_openings,
             challenger,
         )?;
@@ -2155,6 +2188,11 @@ where
                     parse_spark_fixed_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
                         &spark_pcs_configs.fixed_value,
                         &spark_pcs_configs.fixed_audit,
+                        spark_fixed_audit_is_embedded(
+                            spark_metadata.value_domain_size,
+                            spark_metadata.row_memory_size,
+                            spark_metadata.col_memory_size,
+                        ),
                         &closing.spark_fixed_openings,
                         challenger,
                     )?;
@@ -2518,7 +2556,7 @@ where
             spark_tables.col_memory_size,
             fixed_audit_whir,
         )?,
-        read: spark_read_pcs_config_with_whir::<EF>(&value_shape_config, read_whir)?,
+        read: spark_read_pcs_configs_with_whir::<EF>(&value_shape_config, read_whir)?,
     })
 }
 
@@ -2545,21 +2583,26 @@ fn spark_table_pcs_config_with_whir(
     Ok(config)
 }
 
-fn spark_read_pcs_config_with_whir<EF>(
+fn spark_read_pcs_configs_with_whir<EF>(
     value_config: &WhirPcsConfig,
     whir_params: &WhirParams,
-) -> Result<WhirPcsConfig, SpartanWhirError>
+) -> Result<Vec<WhirPcsConfig>, SpartanWhirError>
 where
     EF: ExtField,
 {
-    let mut config = value_config.clone();
-    config.num_variables = config
-        .num_variables
-        .checked_add(read_table_column_bits::<EF>())
-        .ok_or(SpartanWhirError::invalid_config())?;
-    config.whir = whir_params.clone();
-    config.validate()?;
-    Ok(config)
+    read_coordinate_groups::<EF>()?
+        .into_iter()
+        .map(|group| {
+            let mut config = value_config.clone();
+            config.num_variables = config
+                .num_variables
+                .checked_add(group.column_count.ilog2() as usize)
+                .ok_or(SpartanWhirError::invalid_config())?;
+            config.whir = whir_params.clone();
+            config.validate()?;
+            Ok(config)
+        })
+        .collect()
 }
 
 fn spark_fixed_value_pcs_config_with_whir(
@@ -2612,11 +2655,20 @@ where
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
     let value_bundle = fixed_value_bundle(tables, fixed_value_config)?;
-    let audit_bundle = fixed_audit_bundle(tables, audit_config)?;
     let (value_commitment, value) =
         <Pcs as MlePcs<E>>::commit(fixed_value_config, &value_bundle, challenger)?;
-    let (audit_commitment, audit) =
-        <Pcs as MlePcs<E>>::commit(audit_config, &audit_bundle, challenger)?;
+    let (audit_commitment, audit) = if spark_fixed_audit_is_embedded(
+        tables.value_domain_size,
+        tables.row_memory_size,
+        tables.col_memory_size,
+    ) {
+        (None, None)
+    } else {
+        let audit_bundle = fixed_audit_bundle(tables, audit_config)?;
+        let (commitment, prover_data) =
+            <Pcs as MlePcs<E>>::commit(audit_config, &audit_bundle, challenger)?;
+        (Some(commitment), Some(prover_data))
+    };
 
     Ok((
         SparkFixedProverData {
@@ -2650,7 +2702,43 @@ fn fixed_value_bundle(
     copy_rectangular_base_column(&mut packed, domain_size, 4, &tables.val_c)?;
     copy_rectangular_base_column(&mut packed, domain_size, 5, &tables.read_ts_row)?;
     copy_rectangular_base_column(&mut packed, domain_size, 6, &tables.read_ts_col)?;
+    if spark_fixed_audit_is_embedded(
+        tables.value_domain_size,
+        tables.row_memory_size,
+        tables.col_memory_size,
+    ) {
+        copy_embedded_audit_tables(&mut packed, tables)?;
+    }
     Ok(packed)
+}
+
+fn copy_embedded_audit_tables(
+    packed: &mut [F],
+    tables: &crate::SparkTables,
+) -> Result<(), SpartanWhirError> {
+    let domain_size = tables.value_domain_size;
+    let memory_domain_size = tables.row_memory_size.max(tables.col_memory_size);
+    if !spark_fixed_audit_is_embedded(domain_size, tables.row_memory_size, tables.col_memory_size) {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let column_start = 7usize
+        .checked_mul(domain_size)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let row_end = column_start
+        .checked_add(tables.audit_ts_row.len())
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let col_start = column_start
+        .checked_add(memory_domain_size)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let col_end = col_start
+        .checked_add(tables.audit_ts_col.len())
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if col_end > packed.len() || row_end > col_start {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    packed[column_start..row_end].copy_from_slice(&tables.audit_ts_row);
+    packed[col_start..col_end].copy_from_slice(&tables.audit_ts_col);
+    Ok(())
 }
 
 fn fixed_audit_bundle(
@@ -2693,7 +2781,7 @@ fn copy_rectangular_base_column(
 }
 
 fn commit_spark_read_tables<E, EF, Pcs>(
-    config: &WhirPcsConfig,
+    configs: &[WhirPcsConfig],
     read_tables: &SparkReadTables<EF>,
     challenger: &mut E::Challenger,
 ) -> Result<
@@ -2714,22 +2802,44 @@ where
         extension_read_tables_to_base_columns(&read_tables.erow, &read_tables.ecol)?
     };
     let domain_size = read_tables.erow.len();
+    let groups = read_coordinate_groups::<EF>()?;
     if domain_size == 0
         || !domain_size.is_power_of_two()
         || read_tables.ecol.len() != domain_size
-        || config.num_variables != domain_size.ilog2() as usize + read_table_column_bits::<EF>()
+        || configs.len() != groups.len()
     {
         return Err(SpartanWhirError::invalid_config());
     }
-    let (commitment, batch) =
-        Pcs::commit_read_tables(config, coordinate_columns, domain_size, challenger)?;
+    let mut commitments = Vec::with_capacity(groups.len());
+    let mut prover_data = Vec::with_capacity(groups.len());
+    for (config, group) in configs.iter().zip(groups) {
+        let start = group
+            .column_start
+            .checked_mul(domain_size)
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        let end = group
+            .column_start
+            .checked_add(group.column_count)
+            .and_then(|column| column.checked_mul(domain_size))
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        let columns = coordinate_columns
+            .get(start..end)
+            .ok_or_else(SpartanWhirError::invalid_config)?
+            .to_vec();
+        let (commitment, data) =
+            Pcs::commit_read_table(config, columns, domain_size, group.column_count, challenger)?;
+        commitments.push(commitment);
+        prover_data.push(data);
+    }
 
     Ok((
         SparkReadProverData {
-            batch,
+            groups: prover_data,
             marker: PhantomData,
         },
-        SparkReadCommitments { batch: commitment },
+        SparkReadCommitments {
+            groups: commitments,
+        },
     ))
 }
 
@@ -2751,11 +2861,12 @@ where
             prover_data.value,
             challenger,
         )?,
-        audit: <Pcs as ProtocolPcs<E>>::prepare_committed_opening(
-            audit_config,
-            prover_data.audit,
-            challenger,
-        )?,
+        audit: prover_data
+            .audit
+            .map(|audit| {
+                <Pcs as ProtocolPcs<E>>::prepare_committed_opening(audit_config, audit, challenger)
+            })
+            .transpose()?,
         marker: PhantomData,
     })
 }
@@ -2776,7 +2887,7 @@ where
     <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    let (value_claims, value_evals) = fixed_value_opening_claims_from_prover_data(
+    let (mut value_claims, value_evals) = fixed_value_opening_claims_from_prover_data(
         fixed_value_config,
         &prover_data.value,
         product_claims,
@@ -2792,6 +2903,24 @@ where
     if product_claims.ops.dotproduct_weight_evals.as_slice() != expected_weights {
         return Err(SpartanWhirError::SumcheckFailed);
     }
+    let audit_embedded = spark_fixed_audit_is_embedded(
+        tables.value_domain_size,
+        tables.row_memory_size,
+        tables.col_memory_size,
+    );
+    let embedded_audit_evals = if audit_embedded {
+        let (claims, evals) = embedded_fixed_audit_opening_claims_from_prover_data(
+            fixed_value_config,
+            &prover_data.value,
+            tables.row_memory_size,
+            tables.col_memory_size,
+            product_claims,
+        )?;
+        value_claims.extend(claims);
+        Some(evals)
+    } else {
+        None
+    };
     let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
     let value_proof = <Pcs as MlePcs<E>>::open(
         fixed_value_config,
@@ -2800,20 +2929,27 @@ where
         challenger,
     )?;
 
-    let (audit_claims, audit_evals) = fixed_audit_opening_claims_from_prover_data(
-        audit_config,
-        &prover_data.audit,
-        tables.row_memory_size,
-        tables.col_memory_size,
-        product_claims,
-    )?;
-    let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
-    let audit_proof = <Pcs as MlePcs<E>>::open(
-        audit_config,
-        prover_data.audit,
-        &audit_statement,
-        challenger,
-    )?;
+    let (audit_evals, audit_proof) = if audit_embedded {
+        (
+            embedded_audit_evals.ok_or_else(SpartanWhirError::invalid_config)?,
+            None,
+        )
+    } else {
+        let audit_data = prover_data
+            .audit
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        let (audit_claims, audit_evals) = fixed_audit_opening_claims_from_prover_data(
+            audit_config,
+            &audit_data,
+            tables.row_memory_size,
+            tables.col_memory_size,
+            product_claims,
+        )?;
+        let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
+        let audit_proof =
+            <Pcs as MlePcs<E>>::open(audit_config, audit_data, &audit_statement, challenger)?;
+        (audit_evals, Some(audit_proof))
+    };
 
     Ok(SparkFixedOpeningProof {
         value_num_variables: fixed_value_config.num_variables,
@@ -2843,7 +2979,7 @@ where
 }
 
 fn open_spark_read_tables<E, EF, Pcs>(
-    config: &WhirPcsConfig,
+    configs: &[WhirPcsConfig],
     prover_data: SparkReadProverData<E, Pcs>,
     commitments: SparkReadCommitments<<Pcs as MlePcs<E>>::Commitment>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
@@ -2855,15 +2991,20 @@ where
     Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    let value_num_variables = config
-        .num_variables
-        .checked_sub(read_table_column_bits::<EF>())
-        .ok_or(SpartanWhirError::invalid_config())?;
-    if product_claims.ops.product_point.0.len() != value_num_variables {
-        return Err(SpartanWhirError::InvalidNumVariables);
+    let value_num_variables = product_claims.ops.product_point.0.len();
+    let groups = read_coordinate_groups::<EF>()?;
+    if configs.len() != groups.len()
+        || prover_data.groups.len() != groups.len()
+        || commitments.groups.len() != groups.len()
+        || configs.iter().zip(&groups).any(|(config, group)| {
+            Some(config.num_variables)
+                != value_num_variables.checked_add(group.column_count.ilog2() as usize)
+        })
+    {
+        return Err(SpartanWhirError::invalid_config());
     }
     let points = read_opening_points(product_claims)?;
-    let points = vec![
+    let points = [
         points.erow_low,
         points.erow_high,
         points.erow_ops,
@@ -2871,10 +3012,45 @@ where
         points.ecol_high,
         points.ecol_ops,
     ];
-    let (proof, evals) = Pcs::open_read_tables(config, prover_data.batch, &points, challenger)?;
-    let [erow_low, erow_high, erow_ops, ecol_low, ecol_high, ecol_ops] = evals
-        .try_into()
-        .map_err(|_| SpartanWhirError::invalid_config())?;
+    let mut opening_groups = Vec::with_capacity(groups.len());
+    for (((config, group), data), commitment) in configs
+        .iter()
+        .zip(groups)
+        .zip(prover_data.groups)
+        .zip(commitments.groups)
+    {
+        let requests = spark_read_group_opening_requests::<EF>(group)?;
+        let opening_columns = requests
+            .iter()
+            .map(|request| request.columns.clone())
+            .collect::<Vec<_>>();
+        let opening_points = requests
+            .iter()
+            .map(|request| points[request.logical_opening].clone())
+            .collect::<Vec<_>>();
+        let (proof, evals) = Pcs::open_read_table(
+            config,
+            data,
+            group.column_count,
+            &opening_columns,
+            &opening_points,
+            challenger,
+        )?;
+        opening_groups.push(SparkReadGroupOpeningProof {
+            num_variables: config.num_variables,
+            column_start: group.column_start,
+            column_count: group.column_count,
+            commitment,
+            evals,
+            proof,
+            marker: PhantomData,
+        });
+    }
+    let proof = SparkReadOpeningProof {
+        groups: opening_groups,
+    };
+    let [erow_low, erow_high, erow_ops, ecol_low, ecol_high, ecol_ops] =
+        grouped_read_coordinate_evals::<E, EF, Pcs>(&proof)?;
     let erow_evals = [erow_low, erow_high, erow_ops];
     let ecol_evals = [ecol_low, ecol_high, ecol_ops];
     let read_evals = split_read_coordinate_evals::<EF>(&erow_evals, &ecol_evals)?;
@@ -2900,24 +3076,13 @@ where
     {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    Ok(SparkReadOpeningProof {
-        num_variables: config.num_variables,
-        column_bits: read_table_column_bits::<EF>(),
-        commitment: commitments.batch,
-        erow_low_evals: erow_evals[0].clone(),
-        erow_high_evals: erow_evals[1].clone(),
-        ecol_low_evals: ecol_evals[0].clone(),
-        ecol_high_evals: ecol_evals[1].clone(),
-        erow_ops_evals: erow_evals[2].clone(),
-        ecol_ops_evals: ecol_evals[2].clone(),
-        proof,
-        marker: PhantomData,
-    })
+    Ok(proof)
 }
 
 fn parse_spark_fixed_openings<E, EF, Pcs>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
+    audit_embedded: bool,
     proof: &SparkFixedOpeningProof<E, Pcs>,
     challenger: &mut E::Challenger,
 ) -> Result<ParsedSparkFixedOpenings<E, Pcs>, SpartanWhirError>
@@ -2927,25 +3092,39 @@ where
     Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    validate_spark_fixed_opening_shape::<E, EF, Pcs>(fixed_value_config, audit_config, proof)?;
-    Ok(ParsedSparkFixedOpenings {
-        value: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
-            fixed_value_config,
-            &proof.value_commitment,
-            &proof.value_proof,
-            challenger,
-        )?,
-        audit: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+    validate_spark_fixed_opening_shape::<E, EF, Pcs>(
+        fixed_value_config,
+        audit_config,
+        audit_embedded,
+        proof,
+    )?;
+    let value = <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+        fixed_value_config,
+        &proof.value_commitment,
+        &proof.value_proof,
+        challenger,
+    )?;
+    let audit = if audit_embedded {
+        None
+    } else {
+        Some(<Pcs as ProtocolPcs<E>>::verify_parse_commitment(
             audit_config,
-            &proof.audit_commitment,
-            &proof.audit_proof,
+            proof
+                .audit_commitment
+                .as_ref()
+                .ok_or_else(SpartanWhirError::invalid_config)?,
+            proof
+                .audit_proof
+                .as_ref()
+                .ok_or_else(SpartanWhirError::invalid_config)?,
             challenger,
-        )?,
-    })
+        )?)
+    };
+    Ok(ParsedSparkFixedOpenings { value, audit })
 }
 
 fn parse_spark_read_openings<E, EF, Pcs>(
-    config: &WhirPcsConfig,
+    configs: &[WhirPcsConfig],
     proof: &SparkReadOpeningProof<E, Pcs>,
     challenger: &mut E::Challenger,
 ) -> Result<ParsedSparkReadOpenings<E, Pcs>, SpartanWhirError>
@@ -2955,15 +3134,15 @@ where
     Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
-    Ok(ParsedSparkReadOpenings {
-        batch: Pcs::verify_parse_read_commitment(
-            config,
-            &proof.commitment,
-            &proof.proof,
-            challenger,
-        )?,
-    })
+    validate_spark_read_opening_shape::<E, EF, Pcs>(configs, proof)?;
+    let groups = configs
+        .iter()
+        .zip(&proof.groups)
+        .map(|(config, group)| {
+            Pcs::verify_parse_read_commitment(config, &group.commitment, &group.proof, challenger)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ParsedSparkReadOpenings { groups })
 }
 
 fn finalize_spark_fixed_openings<E, EF, Pcs>(
@@ -2982,8 +3161,34 @@ where
     Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    validate_spark_fixed_opening_shape::<E, EF, Pcs>(fixed_value_config, audit_config, proof)?;
-    let value_claims = fixed_value_opening_claims_from_evals(product_claims, &proof.evals)?;
+    let audit_embedded = spark_fixed_audit_is_embedded(
+        1usize
+            .checked_shl(
+                fixed_value_config
+                    .num_variables
+                    .checked_sub(fixed_value_column_bits())
+                    .ok_or_else(SpartanWhirError::invalid_config)? as u32,
+            )
+            .ok_or_else(SpartanWhirError::invalid_config)?,
+        row_memory_size,
+        col_memory_size,
+    );
+    validate_spark_fixed_opening_shape::<E, EF, Pcs>(
+        fixed_value_config,
+        audit_config,
+        audit_embedded,
+        proof,
+    )?;
+    let mut value_claims = fixed_value_opening_claims_from_evals(product_claims, &proof.evals)?;
+    if audit_embedded {
+        value_claims.extend(embedded_fixed_audit_opening_claims_from_evals(
+            fixed_value_config,
+            row_memory_size,
+            col_memory_size,
+            product_claims,
+            &proof.evals,
+        )?);
+    }
     let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
     <Pcs as ProtocolPcs<E>>::verify_finalize(
         fixed_value_config,
@@ -2992,6 +3197,10 @@ where
         &proof.value_proof,
         challenger,
     )?;
+
+    if audit_embedded {
+        return Ok(());
+    }
 
     let audit_claims = fixed_audit_opening_claims_from_evals(
         audit_config,
@@ -3003,15 +3212,21 @@ where
     let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
     <Pcs as ProtocolPcs<E>>::verify_finalize(
         audit_config,
-        &parsed.audit,
+        parsed
+            .audit
+            .as_ref()
+            .ok_or_else(SpartanWhirError::invalid_config)?,
         &audit_statement,
-        &proof.audit_proof,
+        proof
+            .audit_proof
+            .as_ref()
+            .ok_or_else(SpartanWhirError::invalid_config)?,
         challenger,
     )
 }
 
 fn finalize_spark_read_openings<E, EF, Pcs>(
-    config: &WhirPcsConfig,
+    configs: &[WhirPcsConfig],
     proof: &SparkReadOpeningProof<E, Pcs>,
     parsed: ParsedSparkReadOpenings<E, Pcs>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
@@ -3023,16 +3238,20 @@ where
     Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
-    let value_num_variables = config
-        .num_variables
-        .checked_sub(read_table_column_bits::<EF>())
-        .ok_or(SpartanWhirError::invalid_config())?;
-    if product_claims.ops.product_point.0.len() != value_num_variables {
+    validate_spark_read_opening_shape::<E, EF, Pcs>(configs, proof)?;
+    if parsed.groups.len() != proof.groups.len() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let value_num_variables = product_claims.ops.product_point.0.len();
+    let groups = read_coordinate_groups::<EF>()?;
+    if configs.iter().zip(&groups).any(|(config, group)| {
+        Some(config.num_variables)
+            != value_num_variables.checked_add(group.column_count.ilog2() as usize)
+    }) {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
     let points = read_opening_points(product_claims)?;
-    let points = vec![
+    let points = [
         points.erow_low,
         points.erow_high,
         points.erow_ops,
@@ -3040,33 +3259,37 @@ where
         points.ecol_high,
         points.ecol_ops,
     ];
-    let evals = vec![
-        proof.erow_low_evals.clone(),
-        proof.erow_high_evals.clone(),
-        proof.erow_ops_evals.clone(),
-        proof.ecol_low_evals.clone(),
-        proof.ecol_high_evals.clone(),
-        proof.ecol_ops_evals.clone(),
-    ];
-    Pcs::verify_finalize_read_tables(
-        config,
-        &parsed.batch,
-        &proof.proof,
-        &points,
-        &evals,
-        challenger,
-    )?;
+    for (((config, group), opening), parsed_group) in configs
+        .iter()
+        .zip(groups)
+        .zip(&proof.groups)
+        .zip(&parsed.groups)
+    {
+        let requests = spark_read_group_opening_requests::<EF>(group)?;
+        let opening_columns = requests
+            .iter()
+            .map(|request| request.columns.clone())
+            .collect::<Vec<_>>();
+        let opening_points = requests
+            .iter()
+            .map(|request| points[request.logical_opening].clone())
+            .collect::<Vec<_>>();
+        Pcs::verify_finalize_read_table(
+            config,
+            parsed_group,
+            &opening.proof,
+            group.column_count,
+            &opening_columns,
+            &opening_points,
+            &opening.evals,
+            challenger,
+        )?;
+    }
+    let [erow_low, erow_high, erow_ops, ecol_low, ecol_high, ecol_ops] =
+        grouped_read_coordinate_evals::<E, EF, Pcs>(proof)?;
     split_read_coordinate_evals(
-        &[
-            proof.erow_low_evals.clone(),
-            proof.erow_high_evals.clone(),
-            proof.erow_ops_evals.clone(),
-        ],
-        &[
-            proof.ecol_low_evals.clone(),
-            proof.ecol_high_evals.clone(),
-            proof.ecol_ops_evals.clone(),
-        ],
+        &[erow_low, erow_high, erow_ops],
+        &[ecol_low, ecol_high, ecol_ops],
     )
 }
 
@@ -3311,6 +3534,115 @@ where
             row_audit_ts,
             col_audit_ts,
         },
+    ))
+}
+
+fn embedded_fixed_audit_opening_claims_from_prover_data<EF, D>(
+    fixed_value_config: &WhirPcsConfig,
+    prover_data: &D,
+    row_memory_size: usize,
+    col_memory_size: usize,
+    product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+) -> Result<
+    (
+        Vec<(MultilinearPoint<EF>, EF)>,
+        SparkFixedAuditOpeningEvals<EF>,
+    ),
+    SpartanWhirError,
+>
+where
+    EF: ExtField,
+    D: CommittedPolynomialView<EF>,
+{
+    if prover_data.num_variables() != fixed_value_config.num_variables {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let (row_point, col_point) = embedded_fixed_audit_opening_points(
+        fixed_value_config,
+        row_memory_size,
+        col_memory_size,
+        product_claims,
+    )?;
+    let polynomial = prover_data.polynomial();
+    let row_audit_ts = evaluate_base_mle_table_as_extension(polynomial, &row_point.0)?;
+    let col_audit_ts = evaluate_base_mle_table_as_extension(polynomial, &col_point.0)?;
+    Ok((
+        vec![(row_point, row_audit_ts), (col_point, col_audit_ts)],
+        SparkFixedAuditOpeningEvals {
+            row_audit_ts,
+            col_audit_ts,
+        },
+    ))
+}
+
+fn embedded_fixed_audit_opening_claims_from_evals<EF>(
+    fixed_value_config: &WhirPcsConfig,
+    row_memory_size: usize,
+    col_memory_size: usize,
+    product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    evals: &SparkFixedTableOpeningEvals<EF>,
+) -> Result<Vec<(MultilinearPoint<EF>, EF)>, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    let (row_point, col_point) = embedded_fixed_audit_opening_points(
+        fixed_value_config,
+        row_memory_size,
+        col_memory_size,
+        product_claims,
+    )?;
+    Ok(vec![
+        (row_point, evals.row_audit_ts),
+        (col_point, evals.col_audit_ts),
+    ])
+}
+
+fn embedded_fixed_audit_opening_points<EF>(
+    fixed_value_config: &WhirPcsConfig,
+    row_memory_size: usize,
+    col_memory_size: usize,
+    product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+) -> Result<(MultilinearPoint<EF>, MultilinearPoint<EF>), SpartanWhirError>
+where
+    EF: ExtField,
+{
+    let value_bits = fixed_value_config
+        .num_variables
+        .checked_sub(fixed_value_column_bits())
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let value_domain_size = 1usize
+        .checked_shl(value_bits as u32)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if !spark_fixed_audit_is_embedded(value_domain_size, row_memory_size, col_memory_size) {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let memory_bits = product_claims.mem.product_point.0.len();
+    let prefix_len = value_bits
+        .checked_sub(
+            memory_bits
+                .checked_add(1)
+                .ok_or_else(SpartanWhirError::invalid_config)?,
+        )
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let row_memory_point = low_block_memory_point(
+        &product_claims.mem.product_point,
+        row_memory_size,
+        memory_bits,
+    )?;
+    let col_memory_point = low_block_memory_point(
+        &product_claims.mem.product_point,
+        col_memory_size,
+        memory_bits,
+    )?;
+    let make_point = |axis: EF, memory_point: &MultilinearPoint<EF>| {
+        let mut base_point = vec![EF::ZERO; prefix_len];
+        base_point.push(axis);
+        base_point.extend_from_slice(&memory_point.0);
+        rectangular_point::<EF>(7, fixed_value_column_bits(), &MultilinearPoint(base_point))
+    };
+    Ok((
+        make_point(EF::ZERO, &row_memory_point)?,
+        make_point(EF::ONE, &col_memory_point)?,
     ))
 }
 
@@ -3569,27 +3901,61 @@ where
     Ok(MultilinearPoint(point))
 }
 
-fn read_coordinate_column_count<EF>() -> usize
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SparkReadCoordinateGroup {
+    column_start: usize,
+    column_count: usize,
+}
+
+fn read_coordinate_groups<EF>() -> Result<Vec<SparkReadCoordinateGroup>, SpartanWhirError>
 where
     EF: ExtField,
 {
-    EF::DIMENSION.next_power_of_two()
+    let total_columns = EF::DIMENSION
+        .checked_mul(2)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if total_columns == 0 {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let mut groups = Vec::new();
+    let mut column_start = 0usize;
+    let mut remaining = total_columns;
+    while remaining != 0 {
+        let column_count = 1usize << (usize::BITS - 1 - remaining.leading_zeros());
+        groups.push(SparkReadCoordinateGroup {
+            column_start,
+            column_count,
+        });
+        column_start = column_start
+            .checked_add(column_count)
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        remaining -= column_count;
+    }
+    Ok(groups)
 }
 
-fn read_coordinate_column_bits<EF>() -> usize
-where
-    EF: ExtField,
-{
-    read_coordinate_column_count::<EF>().ilog2() as usize
-}
-
-/// Selector bits in the combined `erow` and `ecol` read-table commitment.
+/// Selector bits in the largest SPARK read-coordinate commitment.
+///
+/// Non-power-of-two widths are represented by several commitments whose
+/// column counts are the descending powers in the binary decomposition of
+/// `2 * EF::DIMENSION`.
 pub fn read_table_column_bits<EF>() -> usize
 where
     EF: ExtField,
 {
-    // One selector bit chooses erow or ecol; the rest choose an extension coordinate.
-    read_coordinate_column_bits::<EF>() + 1
+    (EF::DIMENSION * 2).ilog2() as usize
+}
+
+/// Column counts for the SPARK read-coordinate commitments.
+pub fn read_table_group_column_counts<EF>() -> Result<Vec<usize>, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    Ok(read_coordinate_groups::<EF>()?
+        .into_iter()
+        .map(|group| group.column_count)
+        .collect())
 }
 
 pub fn fixed_value_column_count() -> usize {
@@ -3628,6 +3994,7 @@ where
 fn validate_spark_fixed_opening_shape<E, EF, Pcs>(
     fixed_value_config: &WhirPcsConfig,
     audit_config: &WhirPcsConfig,
+    audit_embedded: bool,
     proof: &SparkFixedOpeningProof<E, Pcs>,
 ) -> Result<(), SpartanWhirError>
 where
@@ -3639,6 +4006,8 @@ where
         || proof.value_column_bits != fixed_value_column_bits()
         || proof.audit_num_variables != audit_config.num_variables
         || proof.audit_column_bits != fixed_audit_column_bits()
+        || audit_embedded != proof.audit_commitment.is_none()
+        || audit_embedded != proof.audit_proof.is_none()
     {
         return Err(SpartanWhirError::invalid_config());
     }
@@ -3666,7 +4035,7 @@ where
 }
 
 fn validate_spark_read_opening_shape<E, EF, Pcs>(
-    config: &WhirPcsConfig,
+    configs: &[WhirPcsConfig],
     proof: &SparkReadOpeningProof<E, Pcs>,
 ) -> Result<(), SpartanWhirError>
 where
@@ -3674,18 +4043,115 @@ where
     E: SpartanContextEngine<EF = EF>,
     Pcs: MlePcs<E, Config = WhirPcsConfig>,
 {
-    if proof.num_variables != config.num_variables
-        || proof.column_bits != read_table_column_bits::<EF>()
-        || proof.erow_low_evals.len() != EF::DIMENSION
-        || proof.erow_high_evals.len() != EF::DIMENSION
-        || proof.ecol_low_evals.len() != EF::DIMENSION
-        || proof.ecol_high_evals.len() != EF::DIMENSION
-        || proof.erow_ops_evals.len() != EF::DIMENSION
-        || proof.ecol_ops_evals.len() != EF::DIMENSION
-    {
+    let groups = read_coordinate_groups::<EF>()?;
+    if configs.len() != groups.len() || proof.groups.len() != groups.len() {
         return Err(SpartanWhirError::invalid_config());
     }
+    for ((config, expected), group) in configs.iter().zip(groups).zip(&proof.groups) {
+        let requests = spark_read_group_opening_requests::<EF>(expected)?;
+        if group.num_variables != config.num_variables
+            || group.column_start != expected.column_start
+            || group.column_count != expected.column_count
+            || group.evals.len() != requests.len()
+            || group
+                .evals
+                .iter()
+                .zip(requests)
+                .any(|(evals, request)| evals.len() != request.columns.len())
+        {
+            return Err(SpartanWhirError::invalid_config());
+        }
+    }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SparkReadOpeningRequest {
+    logical_opening: usize,
+    columns: Vec<usize>,
+}
+
+fn spark_read_group_opening_requests<EF>(
+    group: SparkReadCoordinateGroup,
+) -> Result<Vec<SparkReadOpeningRequest>, SpartanWhirError>
+where
+    EF: ExtField,
+{
+    let group_end = group
+        .column_start
+        .checked_add(group.column_count)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let mut requests = Vec::with_capacity(6);
+    for (table, table_start) in [0usize, EF::DIMENSION].into_iter().enumerate() {
+        let table_end = table_start
+            .checked_add(EF::DIMENSION)
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        let start = group.column_start.max(table_start);
+        let end = group_end.min(table_end);
+        if start >= end {
+            continue;
+        }
+        let columns = (start - group.column_start..end - group.column_start).collect::<Vec<_>>();
+        for opening in 0..3 {
+            requests.push(SparkReadOpeningRequest {
+                logical_opening: table * 3 + opening,
+                columns: columns.clone(),
+            });
+        }
+    }
+    if requests.is_empty() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    Ok(requests)
+}
+
+fn grouped_read_coordinate_evals<E, EF, Pcs>(
+    proof: &SparkReadOpeningProof<E, Pcs>,
+) -> Result<[Vec<EF>; 6], SpartanWhirError>
+where
+    EF: ExtField,
+    E: SpartanContextEngine<EF = EF>,
+    Pcs: MlePcs<E, Config = WhirPcsConfig>,
+{
+    let groups = read_coordinate_groups::<EF>()?;
+    if proof.groups.len() != groups.len() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    let mut coordinate_evals = core::array::from_fn(|_| vec![EF::ZERO; EF::DIMENSION]);
+    let mut seen: [Vec<bool>; 6] = core::array::from_fn(|_| vec![false; EF::DIMENSION]);
+    for (group, opening) in groups.into_iter().zip(&proof.groups) {
+        let requests = spark_read_group_opening_requests::<EF>(group)?;
+        if opening.evals.len() != requests.len() {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        for (request, evals) in requests.iter().zip(&opening.evals) {
+            if request.columns.len() != evals.len() {
+                return Err(SpartanWhirError::invalid_config());
+            }
+            for (&local_column, &eval) in request.columns.iter().zip(evals) {
+                let global_column = group
+                    .column_start
+                    .checked_add(local_column)
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let coordinate = if request.logical_opening < 3 {
+                    global_column
+                } else {
+                    global_column
+                        .checked_sub(EF::DIMENSION)
+                        .ok_or_else(SpartanWhirError::invalid_config)?
+                };
+                if coordinate >= EF::DIMENSION || seen[request.logical_opening][coordinate] {
+                    return Err(SpartanWhirError::invalid_config());
+                }
+                coordinate_evals[request.logical_opening][coordinate] = eval;
+                seen[request.logical_opening][coordinate] = true;
+            }
+        }
+    }
+    if seen.iter().flatten().any(|seen| !seen) {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    Ok(coordinate_evals)
 }
 
 fn split_read_coordinate_evals<EF>(

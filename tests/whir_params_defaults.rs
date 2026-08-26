@@ -1,14 +1,16 @@
 use p3_whir::{
     parameters::{
         FoldingFactor as P3FoldingFactor, ProtocolParameters,
-        SecurityAssumption as P3SecurityAssumption,
+        SecurityAssumption as P3SecurityAssumption, WhirConfig as P3WhirConfig,
     },
     pcs::zk::{ZkParameters, ZkWhirConfig},
 };
 use spartan_whir::{
     engine::F, recommended_octic_schedule, recommended_octic_spark_fixed_whir_params,
     recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
-    recommended_octic_zk_whir_params, recommended_quintic_whir_params,
+    recommended_octic_zk_whir_params, recommended_quintic_spark_fixed_whir_params,
+    recommended_quintic_spark_read_whir_params, recommended_quintic_spark_whir_params,
+    recommended_quintic_spark_zk_whir_params, recommended_quintic_whir_params,
     recommended_quintic_zk_whir_params, OcticBinExtension, PoseidonChallenger, QuinticExtension,
     WhirFoldingSchedule, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
@@ -121,6 +123,83 @@ fn recommended_quintic_whir_params_use_measured_sha256_2048_schedule() {
         params.effective_folding_schedule(),
         WhirFoldingSchedule::Constant(8)
     );
+}
+
+#[test]
+fn recommended_quintic_spark_params_use_selected_sha256_2048_schedules() {
+    assert_eq!(
+        recommended_quintic_spark_whir_params(20),
+        recommended_quintic_whir_params(20)
+    );
+
+    let zk = recommended_quintic_spark_zk_whir_params(20);
+    assert_eq!(zk.pow_bits, 6);
+    assert_eq!(
+        zk.folding_schedule,
+        Some(WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 })
+    );
+    assert_eq!(zk.rs_domain_initial_reduction_factor, 6);
+    assert_eq!(zk.round_log_inv_rates, vec![3]);
+
+    let fixed_value = recommended_quintic_spark_fixed_whir_params(25);
+    assert_eq!(fixed_value.pow_bits, 9);
+    assert_eq!(
+        fixed_value.folding_schedule,
+        Some(WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 })
+    );
+    assert_eq!(fixed_value.round_log_inv_rates, vec![1, 4, 7]);
+
+    let fixed_audit = recommended_quintic_spark_fixed_whir_params(22);
+    assert_eq!(fixed_audit.pow_bits, 6);
+    assert_eq!(
+        fixed_audit.folding_schedule,
+        Some(WhirFoldingSchedule::Constant(8))
+    );
+    assert_eq!(fixed_audit.round_log_inv_rates, vec![1]);
+
+    let read = recommended_quintic_spark_read_whir_params(25);
+    assert_eq!(read.pow_bits, 9);
+    assert_eq!(
+        read.folding_schedule,
+        Some(WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 })
+    );
+    assert!(read.round_log_inv_rates.is_empty());
+}
+
+#[test]
+fn recommended_quintic_spark_params_meet_component_security_targets() {
+    for (num_variables, params) in [
+        (20, recommended_quintic_spark_whir_params(20)),
+        (25, recommended_quintic_spark_fixed_whir_params(25)),
+        (22, recommended_quintic_spark_fixed_whir_params(22)),
+        (25, recommended_quintic_spark_read_whir_params(25)),
+        (23, recommended_quintic_spark_read_whir_params(25)),
+    ] {
+        P3WhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            num_variables,
+            protocol_parameters_with_security(num_variables, &params, 120),
+        )
+        .unwrap_or_else(|err| {
+            panic!("recommended quintic SPARK params rejected at {num_variables} variables: {err}")
+        });
+    }
+
+    let params = recommended_quintic_spark_zk_whir_params(20);
+    ZkWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+        20,
+        protocol_parameters_with_security(20, &params, 122),
+        ZkParameters {
+            ell_zk: DEFAULT_ZK_ELL,
+            mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
+        },
+    )
+    .expect("recommended full-ZK quintic SPARK witness params are valid");
+}
+
+#[test]
+fn recommended_quintic_spark_fallbacks_use_the_search_pow_limit() {
+    assert_eq!(recommended_quintic_spark_fixed_whir_params(26).pow_bits, 22);
+    assert_eq!(recommended_quintic_spark_read_whir_params(26).pow_bits, 22);
 }
 
 #[test]

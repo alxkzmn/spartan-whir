@@ -16,7 +16,9 @@ use spartan_whir::{
     engine::{ExtField, F},
     preprocess_spark_tables, recommended_octic_spark_fixed_whir_params,
     recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
-    recommended_octic_zk_whir_params, recommended_quintic_whir_params,
+    recommended_octic_zk_whir_params, recommended_quintic_spark_fixed_whir_params,
+    recommended_quintic_spark_read_whir_params, recommended_quintic_spark_whir_params,
+    recommended_quintic_spark_zk_whir_params, recommended_quintic_whir_params,
     recommended_quintic_zk_whir_params, MatrixClosingMode, MlePcs, OcticBinExtension,
     Plonky3WhirPcs, PoseidonChallenger, PoseidonEngine, PoseidonSpartanProtocol,
     PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey,
@@ -104,20 +106,12 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
                 BenchmarkVariants::DIRECT,
             );
         }
-        "selected" => {
-            benchmark_extension::<QuinticExtension>(
-                c,
-                sha256_size,
-                "quintic",
-                BenchmarkVariants::DIRECT,
-            );
-            benchmark_extension::<OcticBinExtension>(
-                c,
-                sha256_size,
-                "octic",
-                BenchmarkVariants::SPARK,
-            );
-        }
+        "selected" => benchmark_extension::<QuinticExtension>(
+            c,
+            sha256_size,
+            "quintic",
+            BenchmarkVariants::ALL,
+        ),
         "octic" => benchmark_extension::<OcticBinExtension>(
             c,
             sha256_size,
@@ -130,8 +124,24 @@ fn benchmark_sha256_full_zk(c: &mut Criterion) {
             "quintic",
             BenchmarkVariants::ALL,
         ),
+        "spark" => {
+            benchmark_extension::<QuinticExtension>(
+                c,
+                sha256_size,
+                "quintic",
+                BenchmarkVariants::SPARK,
+            );
+            benchmark_extension::<OcticBinExtension>(
+                c,
+                sha256_size,
+                "octic",
+                BenchmarkVariants::SPARK,
+            );
+        }
         extension => {
-            panic!("SHA256_ZK_BENCH_EXTENSION must be selected, octic, or quintic, got {extension}")
+            panic!(
+                "SHA256_ZK_BENCH_EXTENSION must be selected, octic, quintic, or spark, got {extension}"
+            )
         }
     }
 }
@@ -937,21 +947,31 @@ fn benchmark_configs<Ext: ExtField>(
         extension,
         "SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE",
     );
-    let no_zk_spark_whir = benchmark_whir_params(
-        num_variables,
-        extension,
-        "SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE",
-    );
+    let no_zk_spark_whir = match env::var_os("SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE")
+        .or_else(|| env::var_os("SHA256_ZK_BENCH_SCHEDULE"))
+    {
+        None if extension == "quintic" => recommended_quintic_spark_whir_params(num_variables),
+        _ => benchmark_whir_params(
+            num_variables,
+            extension,
+            "SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE",
+        ),
+    };
     let full_zk_direct_whir = benchmark_whir_params(
         num_variables,
         extension,
         "SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE",
     );
-    let full_zk_spark_whir = benchmark_whir_params(
-        num_variables,
-        extension,
-        "SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE",
-    );
+    let full_zk_spark_whir = match env::var_os("SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE")
+        .or_else(|| env::var_os("SHA256_ZK_BENCH_SCHEDULE"))
+    {
+        None if extension == "quintic" => recommended_quintic_spark_zk_whir_params(num_variables),
+        _ => benchmark_whir_params(
+            num_variables,
+            extension,
+            "SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE",
+        ),
+    };
     let tables = preprocess_spark_tables(shape).expect("SPARK tables preprocess");
     let value_variables = tables.value_domain_size.ilog2() as usize;
     let fixed_value_variables = value_variables + spartan_whir::protocol::fixed_value_column_bits();
@@ -963,9 +983,40 @@ fn benchmark_configs<Ext: ExtField>(
         + spartan_whir::protocol::fixed_audit_column_bits();
     let read_variables = value_variables + spartan_whir::protocol::read_table_column_bits::<Ext>();
     let spark_whir_params = SparkWhirParams {
-        fixed_value: recommended_octic_spark_fixed_whir_params(fixed_value_variables),
-        fixed_audit: recommended_octic_spark_fixed_whir_params(audit_variables),
-        read: recommended_octic_spark_read_whir_params(read_variables),
+        fixed_value: benchmark_spark_table_whir_params(
+            fixed_value_variables,
+            extension,
+            "SHA256_ZK_BENCH_SPARK_FIXED_VALUE_SCHEDULE",
+            match extension {
+                "quintic" => recommended_quintic_spark_fixed_whir_params(fixed_value_variables),
+                "octic" => recommended_octic_spark_fixed_whir_params(fixed_value_variables),
+                _ => unreachable!("validated extension"),
+            },
+        ),
+        fixed_audit: benchmark_spark_table_whir_params(
+            audit_variables,
+            extension,
+            "SHA256_ZK_BENCH_SPARK_FIXED_AUDIT_SCHEDULE",
+            match extension {
+                "quintic" => recommended_quintic_spark_fixed_whir_params(audit_variables),
+                "octic" => recommended_octic_spark_fixed_whir_params(audit_variables),
+                _ => unreachable!("validated extension"),
+            },
+        ),
+        read: {
+            let mut params = benchmark_spark_table_whir_params(
+                read_variables,
+                extension,
+                "SHA256_ZK_BENCH_SPARK_READ_SCHEDULE",
+                match extension {
+                    "quintic" => recommended_quintic_spark_read_whir_params(read_variables),
+                    "octic" => recommended_octic_spark_read_whir_params(read_variables),
+                    _ => unreachable!("validated extension"),
+                },
+            );
+            params.round_log_inv_rates.clear();
+            params
+        },
     };
     let no_zk_direct = SpartanSnarkConfig {
         matrix_closing: MatrixClosingMode::DirectSparse,
@@ -1040,6 +1091,21 @@ fn benchmark_whir_params(num_variables: usize, extension: &str, variant_env: &st
     let label = raw
         .into_string()
         .unwrap_or_else(|_| panic!("{variant_env} must be valid UTF-8"));
+    parse_benchmark_schedule(num_variables, extension, &label)
+}
+
+fn benchmark_spark_table_whir_params(
+    num_variables: usize,
+    extension: &str,
+    schedule_env: &str,
+    default: WhirParams,
+) -> WhirParams {
+    let Some(raw) = env::var_os(schedule_env) else {
+        return default;
+    };
+    let label = raw
+        .into_string()
+        .unwrap_or_else(|_| panic!("{schedule_env} must be valid UTF-8"));
     parse_benchmark_schedule(num_variables, extension, &label)
 }
 

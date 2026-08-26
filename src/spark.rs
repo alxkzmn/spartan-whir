@@ -64,7 +64,6 @@ pub struct SparkLayoutEstimate {
     pub wasted_value_slots: usize,
     pub wasted_value_slot_ratio_ppm: u64,
     pub setup_commitments: usize,
-    pub per_proof_commitments: usize,
     pub size_n_polynomials: usize,
     pub size_m_polynomials: usize,
     pub grand_product_checks: usize,
@@ -145,7 +144,9 @@ pub struct SparkVerifierOperationReport {
     pub per_proof_commitments: usize,
     pub fixed_value_columns: usize,
     pub fixed_audit_columns: usize,
+    pub fixed_audit_embedded: bool,
     pub proof_time_read_columns: usize,
+    pub read_commitment_count: usize,
     pub proof_ops_product_count: usize,
     pub proof_ops_dotproduct_count: usize,
     pub proof_mem_product_count: usize,
@@ -166,6 +167,25 @@ pub struct SparkVerifierOperationReport {
     pub estimated_opening_eval_bytes: usize,
     pub estimated_spark_payload_bytes_excluding_whir: usize,
     pub aggregation_soundness_error_numerator: usize,
+}
+
+/// Return whether both fixed audit timestamp tables fit in the unused eighth
+/// column of the fixed value bundle.
+///
+/// The decision depends only on authenticated table dimensions. Shapes that do
+/// not satisfy it retain the separate fixed audit commitment.
+pub fn spark_fixed_audit_is_embedded(
+    value_domain_size: usize,
+    row_memory_size: usize,
+    col_memory_size: usize,
+) -> bool {
+    let memory_domain_size = row_memory_size.max(col_memory_size);
+    value_domain_size.is_power_of_two()
+        && row_memory_size.is_power_of_two()
+        && col_memory_size.is_power_of_two()
+        && memory_domain_size
+            .checked_mul(2)
+            .is_some_and(|audit_slots| audit_slots <= value_domain_size)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,6 +467,7 @@ struct SparkMemoryProductValues<EF> {
     audit: Vec<EF>,
 }
 
+#[cfg(test)]
 struct SparkAxisProductTerms<EF> {
     init: Vec<EF>,
     read: Vec<EF>,
@@ -565,7 +586,10 @@ impl SparkVerifierOperationReport {
         &self,
         model: SparkSolidityGasModel,
     ) -> Result<SparkSolidityGasEstimate, SpartanWhirError> {
-        let whir_opening_count = 3;
+        let whir_opening_count = self
+            .setup_commitments
+            .checked_add(self.read_commitment_count)
+            .ok_or(SpartanWhirError::invalid_config())?;
         let product_sumcheck_replay_gas = checked_mul(
             self.total_product_sumcheck_rounds,
             model.cubic_sumcheck_round_replay_gas,
@@ -611,12 +635,14 @@ fn spark_verifier_operation_report(
     }
     let proof_time_read_columns = extension_dimension
         .checked_mul(2)
-        .and_then(usize::checked_next_power_of_two)
         .ok_or(SpartanWhirError::invalid_config())?;
+    let read_commitment_count = proof_time_read_columns.count_ones() as usize;
     let memory_domain_size = row_memory_size
         .max(col_memory_size)
         .checked_next_power_of_two()
         .ok_or(SpartanWhirError::invalid_config())?;
+    let fixed_audit_embedded =
+        spark_fixed_audit_is_embedded(value_domain_size, row_memory_size, col_memory_size);
     let proof_ops_layers = log2_power_of_two(value_domain_size);
     let proof_mem_layers = log2_power_of_two(memory_domain_size);
     let proof_ops_sumcheck_rounds = triangular_round_count(proof_ops_layers)?;
@@ -658,7 +684,11 @@ fn spark_verifier_operation_report(
         .checked_add(read_opening_eval_ext_elements)
         .ok_or(SpartanWhirError::invalid_config())?;
     let extension_element_bytes = checked_mul(4, extension_dimension)?;
-    let duplicate_commitment_bytes: usize = 3 * 32;
+    let setup_commitments = if fixed_audit_embedded { 1usize } else { 2usize };
+    let duplicate_commitment_bytes = setup_commitments
+        .checked_add(read_commitment_count)
+        .and_then(|count| count.checked_mul(32))
+        .ok_or(SpartanWhirError::invalid_config())?;
     let estimated_product_proof_bytes =
         checked_mul(product_proof_ext_elements, extension_element_bytes)?;
     let estimated_opening_eval_bytes =
@@ -680,11 +710,13 @@ fn spark_verifier_operation_report(
         proof_ops_sumcheck_rounds,
         proof_mem_sumcheck_rounds,
         total_product_sumcheck_rounds,
-        setup_commitments: 2,
-        per_proof_commitments: 1,
+        setup_commitments,
+        per_proof_commitments: read_commitment_count,
         fixed_value_columns: 8,
         fixed_audit_columns: 2,
+        fixed_audit_embedded,
         proof_time_read_columns,
+        read_commitment_count,
         proof_ops_product_count,
         proof_ops_dotproduct_count,
         proof_mem_product_count,
@@ -851,8 +883,15 @@ pub fn compare_spark_layout_profile(
             union_domain.saturating_sub(union_nnz),
             union_domain,
         ),
-        setup_commitments: 2,
-        per_proof_commitments: 1,
+        setup_commitments: if spark_fixed_audit_is_embedded(
+            union_domain,
+            profile.num_rows,
+            profile.num_cols,
+        ) {
+            1
+        } else {
+            2
+        },
         size_n_polynomials: 7,
         size_m_polynomials: 2,
         grand_product_checks: 2,
@@ -879,8 +918,15 @@ pub fn compare_spark_layout_profile(
             joint_with_split_vals_domain.saturating_sub(total_nnz),
             joint_with_split_vals_domain,
         ),
-        setup_commitments: 2,
-        per_proof_commitments: 1,
+        setup_commitments: if spark_fixed_audit_is_embedded(
+            joint_with_split_vals_domain,
+            profile.num_rows,
+            profile.num_cols,
+        ) {
+            1
+        } else {
+            2
+        },
         size_n_polynomials: 7,
         size_m_polynomials: 2,
         grand_product_checks: 8,
@@ -1570,10 +1616,11 @@ where
     let beta = challenger.sample_algebra_element::<EF>();
     let gamma = challenger.sample_algebra_element::<EF>();
 
-    let mem_domain_size = tables.row_memory_size.max(tables.col_memory_size);
-    let (ops_terms, mem_terms) = {
-        let _profile = profile_scope("spark_product_terms");
-        spark_product_terms_for_axes(tables, r_x, r_y, read_tables, beta, gamma, mem_domain_size)?
+    // Build and consume the operation leaves before allocating the memory
+    // leaves so both four-vector batches are not resident at the same time.
+    let ops_terms = {
+        let _profile = profile_scope("spark_ops_product_terms");
+        spark_ops_product_terms_for_axes(tables, read_tables, beta, gamma)?
     };
     let value_dotproducts = {
         let _profile = profile_scope("spark_value_dotproducts");
@@ -1585,6 +1632,11 @@ where
         prove_spark_batched_product_with_dotproducts(ops_terms, value_dotproducts, challenger)?
     };
     let matrix_evals = matrix_evals_from_split_dotproduct_claims(&proof_ops.dotproduct_claims)?;
+    let mem_domain_size = tables.row_memory_size.max(tables.col_memory_size);
+    let mem_terms = {
+        let _profile = profile_scope("spark_mem_product_terms");
+        spark_mem_product_terms_for_axes(tables, r_x, r_y, beta, gamma, mem_domain_size)?
+    };
     let (proof_mem, mem_claims) = {
         let _profile = profile_scope("spark_prove_mem_products");
         prove_spark_batched_product_with_dotproducts(
@@ -4186,52 +4238,67 @@ where
     Ok((row_values, col_values))
 }
 
-fn spark_product_terms_for_axes<EF>(
+fn spark_ops_product_terms_for_axes<EF>(
     tables: &SparkTables,
-    r_x: &MultilinearPoint<EF>,
-    r_y: &MultilinearPoint<EF>,
     read_tables: &SparkReadTables<EF>,
     beta: EF,
     gamma: EF,
-    memory_domain_size: usize,
-) -> Result<(Vec<Vec<EF>>, Vec<Vec<EF>>), SpartanWhirError>
+) -> Result<Vec<Vec<EF>>, SpartanWhirError>
 where
     EF: ExtensionField<F> + Send + Sync,
 {
-    // Organization inspired by ProveKit's SPARK prover (World Foundation, MIT;
-    // https://github.com/worldfnd/provekit): construct compressed product leaves
-    // directly instead of materializing an intermediate memory-tuple table.
     validate_read_tables(tables, read_tables)?;
-    let row = spark_axis_product_terms(
+    let (row_read, row_write) = spark_axis_ops_product_terms(
         tables.row_memory_size,
-        memory_domain_size,
         &tables.rows,
         &tables.read_ts_row,
-        &tables.audit_ts_row,
-        &r_x.0,
         &read_tables.erow,
         beta,
         gamma,
     )?;
-    let col = spark_axis_product_terms(
+    let (col_read, col_write) = spark_axis_ops_product_terms(
         tables.col_memory_size,
-        memory_domain_size,
         &tables.cols,
         &tables.read_ts_col,
-        &tables.audit_ts_col,
-        &r_y.0,
         &read_tables.ecol,
         beta,
         gamma,
     )?;
+    Ok(vec![row_read, row_write, col_read, col_write])
+}
 
-    Ok((
-        vec![row.read, row.write, col.read, col.write],
-        vec![row.init, row.audit, col.init, col.audit],
-    ))
+fn spark_mem_product_terms_for_axes<EF>(
+    tables: &SparkTables,
+    r_x: &MultilinearPoint<EF>,
+    r_y: &MultilinearPoint<EF>,
+    beta: EF,
+    gamma: EF,
+    padded_memory_size: usize,
+) -> Result<Vec<Vec<EF>>, SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    let (row_init, row_audit) = spark_axis_mem_product_terms(
+        tables.row_memory_size,
+        padded_memory_size,
+        &tables.audit_ts_row,
+        &r_x.0,
+        beta,
+        gamma,
+    )?;
+    let (col_init, col_audit) = spark_axis_mem_product_terms(
+        tables.col_memory_size,
+        padded_memory_size,
+        &tables.audit_ts_col,
+        &r_y.0,
+        beta,
+        gamma,
+    )?;
+    Ok(vec![row_init, row_audit, col_init, col_audit])
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn spark_axis_product_terms<EF>(
     memory_size: usize,
     padded_memory_size: usize,
@@ -4258,6 +4325,45 @@ where
         return Err(SpartanWhirError::InvalidR1csShape);
     }
 
+    let (init, audit) = spark_axis_mem_product_terms(
+        memory_size,
+        padded_memory_size,
+        audit_ts,
+        point,
+        beta,
+        gamma,
+    )?;
+    let (read, write) =
+        spark_axis_ops_product_terms(memory_size, addrs, read_ts, read_values, beta, gamma)?;
+
+    Ok(SparkAxisProductTerms {
+        init,
+        read,
+        write,
+        audit,
+    })
+}
+
+fn spark_axis_mem_product_terms<EF>(
+    memory_size: usize,
+    padded_memory_size: usize,
+    audit_ts: &[F],
+    point: &[EF],
+    beta: EF,
+    gamma: EF,
+) -> Result<(Vec<EF>, Vec<EF>), SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if memory_size == 0
+        || !memory_size.is_power_of_two()
+        || padded_memory_size < memory_size
+        || !padded_memory_size.is_power_of_two()
+        || audit_ts.len() != memory_size
+        || point.len() != log2_power_of_two(memory_size)
+    {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
     let beta_squared = beta.square();
     let memory_values = EqPolynomial::evals_from_point(point);
     let mut init = vec![EF::ONE; padded_memory_size];
@@ -4282,8 +4388,28 @@ where
             audit[index] = init[index] + beta_squared * EF::from(audit_ts[index]);
         }
     }
-    drop(memory_values);
+    Ok((init, audit))
+}
 
+fn spark_axis_ops_product_terms<EF>(
+    memory_size: usize,
+    addrs: &[F],
+    read_ts: &[F],
+    read_values: &[EF],
+    beta: EF,
+    gamma: EF,
+) -> Result<(Vec<EF>, Vec<EF>), SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if memory_size == 0
+        || !memory_size.is_power_of_two()
+        || addrs.len() != read_ts.len()
+        || read_values.len() != addrs.len()
+    {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+    let beta_squared = beta.square();
     let mut read = vec![EF::ZERO; addrs.len()];
     let mut write = vec![EF::ZERO; addrs.len()];
     if should_parallelize_spark_round(addrs.len()) {
@@ -4313,13 +4439,7 @@ where
             write[index] = read[index] + beta_squared;
         }
     }
-
-    Ok(SparkAxisProductTerms {
-        init,
-        read,
-        write,
-        audit,
-    })
+    Ok((read, write))
 }
 
 fn spark_ops_product_terms<EF>(
@@ -5535,9 +5655,7 @@ mod tests {
         let report = compare_spark_layouts(&shape).expect("layout comparison succeeds");
 
         assert_eq!(report.joint.setup_commitments, 2);
-        assert_eq!(report.joint.per_proof_commitments, 1);
         assert_eq!(report.per_matrix.setup_commitments, 2);
-        assert_eq!(report.per_matrix.per_proof_commitments, 1);
         assert!(report.joint.wasted_value_slot_ratio_ppm > 0);
     }
 
@@ -5581,9 +5699,7 @@ mod tests {
         .expect("profile comparison succeeds");
 
         assert_eq!(report.joint.setup_commitments, 2);
-        assert_eq!(report.joint.per_proof_commitments, 1);
         assert_eq!(report.per_matrix.setup_commitments, 2);
-        assert_eq!(report.per_matrix.per_proof_commitments, 1);
     }
 
     #[test]

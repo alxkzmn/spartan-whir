@@ -176,6 +176,84 @@ pub fn recommended_quintic_whir_params(num_variables: usize) -> WhirParams {
     params
 }
 
+/// Plain-WHIR quintic parameters for SPARK witness commitments.
+///
+/// The 20-variable case is the selected SHA-256 2048-byte schedule.
+pub fn recommended_quintic_spark_whir_params(num_variables: usize) -> WhirParams {
+    recommended_quintic_whir_params(num_variables)
+}
+
+/// Quintic parameters for full-ZK SPARK witness commitments.
+///
+/// The 20-variable case satisfies the 122-bit full-ZK witness component
+/// target used by a 116-bit SPARK proof.
+pub fn recommended_quintic_spark_zk_whir_params(num_variables: usize) -> WhirParams {
+    if num_variables != 20 {
+        return recommended_quintic_zk_whir_params(num_variables);
+    }
+
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+    WhirParams {
+        pow_bits: 6,
+        folding_factor: 8,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 6,
+        folding_schedule: Some(schedule.clone()),
+        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 6),
+    }
+}
+
+/// Plain-WHIR quintic parameters for fixed SPARK table openings.
+///
+/// The 25-variable fixed-value table and 22-variable audit table are the
+/// selected SHA-256 2048-byte schedules. Other sizes use the 22-bit search
+/// limit and require workload-specific validation.
+pub fn recommended_quintic_spark_fixed_whir_params(num_variables: usize) -> WhirParams {
+    let (pow_bits, schedule) = match num_variables {
+        25 => (
+            9,
+            WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 },
+        ),
+        22 => (6, WhirFoldingSchedule::Constant(8)),
+        _ => {
+            let mut params = recommended_octic_spark_fixed_whir_params(num_variables);
+            params.pow_bits = 22;
+            return params;
+        }
+    };
+    WhirParams {
+        pow_bits,
+        folding_factor: 8,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 8,
+        folding_schedule: Some(schedule.clone()),
+        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 8),
+    }
+}
+
+/// Plain-WHIR quintic parameters for SPARK read-table openings.
+///
+/// The 25-variable SHA-256 2048-byte schedule is shared by the 25- and
+/// 23-variable read groups. Other sizes use the 22-bit search limit and
+/// require workload-specific validation.
+pub fn recommended_quintic_spark_read_whir_params(num_variables: usize) -> WhirParams {
+    if num_variables != 25 {
+        let mut params = recommended_octic_spark_read_whir_params(num_variables);
+        params.pow_bits = 22;
+        return params;
+    }
+
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 };
+    WhirParams {
+        pow_bits: 9,
+        folding_factor: 8,
+        starting_log_inv_rate: 1,
+        rs_domain_initial_reduction_factor: 8,
+        folding_schedule: Some(schedule.clone()),
+        round_log_inv_rates: Vec::new(),
+    }
+}
+
 /// Plain-WHIR octic parameters for fixed SPARK table openings.
 ///
 /// Initial fixed-table commitments are prepared during setup. These parameters

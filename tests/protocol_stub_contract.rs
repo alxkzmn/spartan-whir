@@ -374,6 +374,14 @@ fn protocol_spark_roundtrip_regular_shape() {
         &mut prover_challenger,
     )
     .expect("spark prove succeeds");
+    assert!(pk
+        .spark_fixed_commitments
+        .as_ref()
+        .expect("SPARK fixed commitments exist")
+        .audit
+        .is_none());
+    assert!(proof.spark_fixed_openings.audit_commitment.is_none());
+    assert!(proof.spark_fixed_openings.audit_proof.is_none());
 
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
@@ -407,6 +415,14 @@ fn protocol_spark_roundtrip_shared_union_shape() {
         &mut prover_challenger,
     )
     .expect("spark prove succeeds");
+    assert!(pk
+        .spark_fixed_commitments
+        .as_ref()
+        .expect("SPARK fixed commitments exist")
+        .audit
+        .is_some());
+    assert!(proof.spark_fixed_openings.audit_commitment.is_some());
+    assert!(proof.spark_fixed_openings.audit_proof.is_some());
 
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
@@ -574,9 +590,12 @@ fn protocol_spark_tampered_read_opening_commitment_fails() {
     )
     .expect("spark prove succeeds");
 
-    let mut roots = proof.spark_read_openings.commitment.clone().into_roots();
+    let mut roots = proof.spark_read_openings.groups[0]
+        .commitment
+        .clone()
+        .into_roots();
     roots[0][0] += F::ONE;
-    proof.spark_read_openings.commitment = roots.into();
+    proof.spark_read_openings.groups[0].commitment = roots.into();
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
         &instance,
@@ -606,8 +625,7 @@ fn protocol_spark_tampered_read_opening_proof_fails() {
     )
     .expect("spark prove succeeds");
 
-    *proof
-        .spark_read_openings
+    *proof.spark_read_openings.groups[0]
         .proof
         .initial_ood_answers
         .first_mut()
@@ -641,7 +659,7 @@ fn protocol_spark_tampered_read_opening_eval_fails() {
     )
     .expect("spark prove succeeds");
 
-    proof.spark_read_openings.erow_low_evals[0] += EF::ONE;
+    proof.spark_read_openings.groups[0].evals[0][0] += EF::ONE;
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
         &instance,
@@ -671,7 +689,7 @@ fn protocol_spark_tampered_ecol_read_opening_eval_fails() {
     )
     .expect("spark prove succeeds");
 
-    proof.spark_read_openings.ecol_low_evals[0] += EF::ONE;
+    proof.spark_read_openings.groups[0].evals[3][0] += EF::ONE;
     let verified = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
         &vk,
         &instance,
@@ -745,6 +763,66 @@ fn protocol_spark_tampered_fixed_opening_eval_fails() {
         &mut verifier_challenger,
     );
     assert_eq!(verified, Err(SpartanWhirError::WhirVerifyFailed));
+}
+
+#[test]
+fn protocol_spark_tampered_embedded_audit_opening_eval_fails() {
+    let shape = regular_shape_two_constraints();
+    let (pk, vk) = setup_keys(&shape);
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let witness = spartan_whir::R1csWitness {
+        w: vec![F::from_u32(7), F::ZERO],
+    };
+    let (instance, mut proof) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove_spark(
+        &pk,
+        &common::koala_public_inputs(7),
+        &witness,
+        &mut prover_challenger,
+    )
+    .expect("spark prove succeeds");
+
+    assert!(proof.spark_fixed_openings.audit_proof.is_none());
+    proof.spark_fixed_openings.evals.row_audit_ts += EF::ONE;
+    assert_eq!(
+        SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
+            &vk,
+            &instance,
+            &proof,
+            &mut verifier_challenger,
+        ),
+        Err(SpartanWhirError::WhirVerifyFailed)
+    );
+}
+
+#[test]
+fn protocol_spark_tampered_separate_audit_opening_eval_fails() {
+    let shape = shared_union_shape_two_constraints();
+    let (pk, vk) = setup_keys(&shape);
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    let witness = spartan_whir::R1csWitness {
+        w: vec![F::from_u32(7), F::ZERO],
+    };
+    let (instance, mut proof) = SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::prove_spark(
+        &pk,
+        &common::koala_public_inputs(7),
+        &witness,
+        &mut prover_challenger,
+    )
+    .expect("spark prove succeeds");
+
+    assert!(proof.spark_fixed_openings.audit_proof.is_some());
+    proof.spark_fixed_openings.evals.row_audit_ts += EF::ONE;
+    assert_eq!(
+        SpartanProtocol::<PoseidonEngine, Plonky3WhirPcs>::verify_spark(
+            &vk,
+            &instance,
+            &proof,
+            &mut verifier_challenger,
+        ),
+        Err(SpartanWhirError::WhirVerifyFailed)
+    );
 }
 
 #[test]

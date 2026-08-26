@@ -5,6 +5,7 @@ use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
     engine::F, DomainSeparator, MatrixClosingMode, QuarticBinExtension, SecurityConfig,
     SparkWhirParams, WhirFoldingSchedule, WhirParams, FULL_ZK_PROTOCOL_ID, NO_ZK_PROTOCOL_ID,
+    SPARK_MATRIX_CLOSING_VERSION,
 };
 
 fn expected_shared_direct_body() -> Vec<u8> {
@@ -112,6 +113,10 @@ fn domain_separator_changes_when_matrix_closing_changes() {
     assert_ne!(direct.to_bytes(), spark.to_bytes());
     assert_eq!(direct.to_bytes()[NO_ZK_PROTOCOL_ID.len()], 0);
     assert_eq!(spark.to_bytes()[NO_ZK_PROTOCOL_ID.len()], 1);
+    assert_eq!(
+        spark.to_bytes()[NO_ZK_PROTOCOL_ID.len() + 1],
+        SPARK_MATRIX_CLOSING_VERSION
+    );
 }
 
 #[test]

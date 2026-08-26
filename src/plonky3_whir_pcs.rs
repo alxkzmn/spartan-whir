@@ -452,31 +452,32 @@ where
     type ReadProverData = PoseidonSparkReadProverData<Ext>;
     type ParsedReadCommitment = PoseidonCommitment;
 
-    fn commit_read_tables(
+    fn commit_read_table(
         config: &WhirPcsConfig,
         coordinate_columns: Evaluations<F>,
         domain_size: usize,
+        column_count: usize,
         challenger: &mut PoseidonChallenger,
     ) -> Result<(Self::Commitment, Self::ReadProverData), SpartanWhirError> {
         let _profile = profile_scope("spark_commit_read_batch");
-        let coordinate_count = Ext::DIMENSION;
         let expected_len = domain_size
-            .checked_mul(2)
-            .and_then(|len| len.checked_mul(coordinate_count))
+            .checked_mul(column_count)
             .ok_or_else(SpartanWhirError::invalid_config)?;
         if domain_size == 0
             || !domain_size.is_power_of_two()
+            || column_count == 0
+            || !column_count.is_power_of_two()
             || coordinate_columns.len() != expected_len
         {
             return Err(SpartanWhirError::InvalidPolynomialLength);
         }
-        validate_spark_read_batch_config::<Ext>(config, domain_size.ilog2() as usize)?;
+        validate_spark_read_batch_config(config, domain_size.ilog2() as usize, column_count)?;
 
-        // Plonky3's table PCS stacks the 2 * DIMENSION base-coordinate columns
-        // into one committed polynomial. One selector bit chooses erow or ecol,
-        // while both tables share the encoding, Merkle tree, and WHIR opening.
-        // The shared read-table commitment follows ProveKit's `commit_e_values`
-        // organization (World Foundation, MIT; https://github.com/worldfnd/provekit).
+        // Plonky3's table PCS stacks this power-of-two coordinate group into one
+        // committed polynomial. The surrounding protocol may place erow and
+        // ecol coordinates in the same group. This follows ProveKit's
+        // `commit_e_values` organization (World Foundation, MIT;
+        // https://github.com/worldfnd/provekit).
         let table = {
             let _profile = profile_scope("spark_read_batch_pack");
             Table::new(RowMajorMatrix::new(coordinate_columns, domain_size))
@@ -496,14 +497,16 @@ where
         Ok((commitment, prover_data))
     }
 
-    fn open_read_tables(
+    fn open_read_table(
         config: &WhirPcsConfig,
         prover_data: Self::ReadProverData,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[crate::MultilinearPoint<Ext>],
         challenger: &mut PoseidonChallenger,
     ) -> Result<(Self::Proof, Vec<Vec<Ext>>), SpartanWhirError> {
         let _profile = profile_scope("spark_open_read_batch");
-        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        let protocol = spark_read_opening_protocol(config, column_count, opening_columns)?;
         if points.len() != protocol.num_openings() {
             return Err(SpartanWhirError::invalid_config());
         }
@@ -549,19 +552,24 @@ where
         Ok(commitment.clone())
     }
 
-    fn verify_finalize_read_tables(
+    fn verify_finalize_read_table(
         config: &WhirPcsConfig,
         parsed: &Self::ParsedReadCommitment,
         proof: &Self::Proof,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[crate::MultilinearPoint<Ext>],
         evals: &[Vec<Ext>],
         challenger: &mut PoseidonChallenger,
     ) -> Result<(), SpartanWhirError> {
         let _profile = profile_scope("spark_verify_read_batch");
-        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        let protocol = spark_read_opening_protocol(config, column_count, opening_columns)?;
         if points.len() != protocol.num_openings()
             || evals.len() != protocol.num_openings()
-            || evals.iter().any(|batch| batch.len() != Ext::DIMENSION)
+            || evals
+                .iter()
+                .zip(opening_columns)
+                .any(|(batch, columns)| batch.len() != columns.len())
         {
             return Err(SpartanWhirError::invalid_config());
         }
@@ -586,47 +594,42 @@ where
     }
 }
 
-fn spark_read_opening_protocol<Ext>(
+fn spark_read_opening_protocol(
     config: &WhirPcsConfig,
-) -> Result<OpeningProtocol, SpartanWhirError>
-where
-    Ext: ExtField,
-{
-    let column_count = Ext::DIMENSION
-        .checked_mul(2)
-        .ok_or_else(SpartanWhirError::invalid_config)?;
-    if !column_count.is_power_of_two() {
+    column_count: usize,
+    opening_columns: &[Vec<usize>],
+) -> Result<OpeningProtocol, SpartanWhirError> {
+    if column_count == 0
+        || !column_count.is_power_of_two()
+        || opening_columns.is_empty()
+        || opening_columns.iter().any(|columns| {
+            columns.is_empty() || columns.iter().any(|&column| column >= column_count)
+        })
+    {
         return Err(SpartanWhirError::invalid_config());
     }
     let local_num_variables = config
         .num_variables
         .checked_sub(log2_strict_usize(column_count))
         .ok_or_else(SpartanWhirError::invalid_config)?;
-    let erow = (0..Ext::DIMENSION).collect::<Vec<_>>();
-    let ecol = (Ext::DIMENSION..column_count).collect::<Vec<_>>();
     Ok(OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(local_num_variables, column_count),
-        vec![
-            OpeningBatch::new(erow.clone(), Vec::new()),
-            OpeningBatch::new(erow.clone(), Vec::new()),
-            OpeningBatch::new(erow, Vec::new()),
-            OpeningBatch::new(ecol.clone(), Vec::new()),
-            OpeningBatch::new(ecol.clone(), Vec::new()),
-            OpeningBatch::new(ecol, Vec::new()),
-        ],
+        opening_columns
+            .iter()
+            .cloned()
+            .map(|columns| OpeningBatch::new(columns, Vec::new()))
+            .collect(),
     )]))
 }
 
-fn validate_spark_read_batch_config<Ext>(
+fn validate_spark_read_batch_config(
     config: &WhirPcsConfig,
     local_num_variables: usize,
-) -> Result<(), SpartanWhirError>
-where
-    Ext: ExtField,
-{
-    let column_count = Ext::DIMENSION
-        .checked_mul(2)
-        .ok_or_else(SpartanWhirError::invalid_config)?;
+    column_count: usize,
+) -> Result<(), SpartanWhirError> {
+    if column_count == 0 || !column_count.is_power_of_two() {
+        return Err(SpartanWhirError::invalid_config());
+    }
     let expected = local_num_variables
         .checked_add(log2_strict_usize(column_count))
         .ok_or_else(SpartanWhirError::invalid_config)?;
