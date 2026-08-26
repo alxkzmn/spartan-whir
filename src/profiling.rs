@@ -1,13 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
-#[cfg(feature = "circom")]
 use alloc::string::{String, ToString};
-#[cfg(feature = "circom")]
 use core::cell::{Cell, RefCell};
-#[cfg(feature = "circom")]
 use std::{env, thread_local, time::Instant};
-#[cfg(feature = "circom")]
 use tracing::info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,26 +28,22 @@ pub struct NoopObserver;
 
 impl ProtocolObserver for NoopObserver {}
 
-#[cfg(feature = "circom")]
 #[derive(Debug, Clone)]
 struct ProfileContext {
     engine: String,
     mode: String,
 }
 
-#[cfg(feature = "circom")]
 thread_local! {
     static PROFILE_CONTEXT: RefCell<Option<ProfileContext>> = const { RefCell::new(None) };
     static PROFILE_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
     static PROFILE_DETAIL_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-#[cfg(feature = "circom")]
 pub struct ProfileContextGuard {
     previous: Option<ProfileContext>,
 }
 
-#[cfg(feature = "circom")]
 impl Drop for ProfileContextGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
@@ -61,14 +53,12 @@ impl Drop for ProfileContextGuard {
     }
 }
 
-#[cfg(feature = "circom")]
 pub struct ProfileScope {
     phase: &'static str,
     start: Option<Instant>,
     enabled: bool,
 }
 
-#[cfg(feature = "circom")]
 impl Drop for ProfileScope {
     fn drop(&mut self) {
         if !self.enabled {
@@ -80,7 +70,6 @@ impl Drop for ProfileScope {
     }
 }
 
-#[cfg(feature = "circom")]
 pub fn profile_enabled() -> bool {
     PROFILE_ENABLED.with(|enabled| {
         if let Some(value) = enabled.get() {
@@ -92,7 +81,6 @@ pub fn profile_enabled() -> bool {
     })
 }
 
-#[cfg(feature = "circom")]
 pub fn profile_detail_enabled() -> bool {
     profile_enabled()
         && PROFILE_DETAIL_ENABLED.with(|enabled| {
@@ -105,7 +93,6 @@ pub fn profile_detail_enabled() -> bool {
         })
 }
 
-#[cfg(feature = "circom")]
 fn env_flag(name: &str) -> bool {
     env::var_os(name)
         .and_then(|value| value.into_string().ok())
@@ -115,17 +102,6 @@ fn env_flag(name: &str) -> bool {
         })
 }
 
-#[cfg(not(feature = "circom"))]
-pub const fn profile_enabled() -> bool {
-    false
-}
-
-#[cfg(not(feature = "circom"))]
-pub const fn profile_detail_enabled() -> bool {
-    false
-}
-
-#[cfg(feature = "circom")]
 pub fn set_profile_context(engine: &str, mode: &str) -> ProfileContextGuard {
     let next = profile_enabled().then(|| ProfileContext {
         engine: engine.to_string(),
@@ -135,15 +111,6 @@ pub fn set_profile_context(engine: &str, mode: &str) -> ProfileContextGuard {
     ProfileContextGuard { previous }
 }
 
-#[cfg(not(feature = "circom"))]
-pub struct ProfileContextGuard;
-
-#[cfg(not(feature = "circom"))]
-pub const fn set_profile_context(_engine: &str, _mode: &str) -> ProfileContextGuard {
-    ProfileContextGuard
-}
-
-#[cfg(feature = "circom")]
 pub fn profile_scope(phase: &'static str) -> ProfileScope {
     let enabled = profile_enabled();
     ProfileScope {
@@ -153,7 +120,6 @@ pub fn profile_scope(phase: &'static str) -> ProfileScope {
     }
 }
 
-#[cfg(feature = "circom")]
 pub fn profile_detail_scope(phase: &'static str) -> ProfileScope {
     let enabled = profile_detail_enabled();
     ProfileScope {
@@ -163,20 +129,6 @@ pub fn profile_detail_scope(phase: &'static str) -> ProfileScope {
     }
 }
 
-#[cfg(not(feature = "circom"))]
-pub struct ProfileScope;
-
-#[cfg(not(feature = "circom"))]
-pub const fn profile_scope(_phase: &'static str) -> ProfileScope {
-    ProfileScope
-}
-
-#[cfg(not(feature = "circom"))]
-pub const fn profile_detail_scope(_phase: &'static str) -> ProfileScope {
-    ProfileScope
-}
-
-#[cfg(feature = "circom")]
 pub fn record_profile_phase(phase: &'static str, elapsed: std::time::Duration) {
     if !profile_enabled() {
         return;
@@ -195,9 +147,6 @@ pub fn record_profile_phase(phase: &'static str, elapsed: std::time::Duration) {
         elapsed.as_micros()
     );
 }
-
-#[cfg(not(feature = "circom"))]
-pub fn record_profile_phase(_phase: &'static str, _elapsed: core::time::Duration) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofSizeSection {

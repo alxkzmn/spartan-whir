@@ -20,6 +20,11 @@ use spartan_whir::{
     QuinticExtension,
 };
 
+mod poseidon_schedule_support;
+use poseidon_schedule_support::{
+    collect as collect_provenance, enabled_features, BenchmarkProvenance,
+};
+
 const DEFAULT_MIN_LOG_SIZE: usize = 14;
 const DEFAULT_MAX_LOG_SIZE: usize = 18;
 const DEFAULT_STEP: usize = 2;
@@ -53,6 +58,7 @@ struct Args {
 #[derive(Debug, Serialize)]
 struct Calibration {
     schema_version: u32,
+    provenance: BenchmarkProvenance,
     measurement_kind: &'static str,
     units: &'static str,
     build_profile: String,
@@ -178,7 +184,8 @@ fn main() {
     };
 
     let calibration = Calibration {
-        schema_version: 1,
+        schema_version: 2,
+        provenance: collect_provenance(enabled_features()).expect("collect benchmark provenance"),
         measurement_kind: "poseidon_schedule_component_calibration",
         units: "seconds",
         build_profile: if cfg!(debug_assertions) {
@@ -189,7 +196,7 @@ fn main() {
         target_cpu_native: env::var("RUSTFLAGS")
             .map(|flags| flags.contains("target-cpu=native"))
             .unwrap_or(false),
-        features: enabled_features(),
+        features: enabled_features().to_owned(),
         args: CalibrationArgs {
             min_log_size: args.min_log_size,
             max_log_size: args.max_log_size,
@@ -450,17 +457,6 @@ fn parse_next_string(
 ) -> Result<String, String> {
     iter.next()
         .ok_or_else(|| format!("{name} requires a value"))
-}
-
-fn enabled_features() -> String {
-    let mut features = Vec::new();
-    if cfg!(feature = "parallel") {
-        features.push("parallel");
-    }
-    if cfg!(feature = "circom") {
-        features.push("circom");
-    }
-    features.join(",")
 }
 
 fn usage() {

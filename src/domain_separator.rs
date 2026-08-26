@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, WhirParams};
 
+pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v0";
+pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v0";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {
     DirectSparse,
@@ -61,12 +64,47 @@ impl DomainSeparator {
         matrix_closing: MatrixClosingMode,
         spark_whir_params: Option<SparkWhirParams>,
     ) -> Self {
+        Self::new_with_protocol_id(
+            NO_ZK_PROTOCOL_ID,
+            shape,
+            security,
+            whir_params,
+            matrix_closing,
+            spark_whir_params,
+        )
+    }
+
+    pub fn new_full_zk<F>(
+        shape: &R1csShape<F>,
+        security: &SecurityConfig,
+        whir_params: &WhirParams,
+        matrix_closing: MatrixClosingMode,
+        spark_whir_params: Option<SparkWhirParams>,
+    ) -> Self {
+        Self::new_with_protocol_id(
+            FULL_ZK_PROTOCOL_ID,
+            shape,
+            security,
+            whir_params,
+            matrix_closing,
+            spark_whir_params,
+        )
+    }
+
+    fn new_with_protocol_id<F>(
+        protocol_id: &[u8],
+        shape: &R1csShape<F>,
+        security: &SecurityConfig,
+        whir_params: &WhirParams,
+        matrix_closing: MatrixClosingMode,
+        spark_whir_params: Option<SparkWhirParams>,
+    ) -> Self {
         let spark_whir_params = match matrix_closing {
             MatrixClosingMode::DirectSparse => None,
             MatrixClosingMode::Spark => spark_whir_params,
         };
         Self {
-            protocol_id: b"spartan-whir-v0".to_vec(),
+            protocol_id: protocol_id.to_vec(),
             matrix_closing,
             num_cons: shape.num_cons,
             num_vars: shape.num_vars,

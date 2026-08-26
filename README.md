@@ -1,18 +1,127 @@
 # spartan-whir
 
-`spartan-whir` is a Spartan-oriented proving system built on Plonky3 fields.
-Its Poseidon instantiation uses upstream Plonky3 WHIR as its multilinear PCS
-backend.
+`spartan-whir` is a Spartan-based SNARK built on
+[Plonky3](https://github.com/Plonky3/Plonky3). Its Poseidon instantiation uses
+Plonky3's KoalaBear arithmetic, Poseidon2 primitives, sumcheck implementation,
+and WHIR PCS.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph F["Frontend tooling"]
+        C["Circom fork with<br/>KoalaBear support"] -->|"generated C++"| W["Native Witgen"]
+    end
+
+    subgraph Z["spartan-whir SNARK"]
+        S["Spartan IOP"] -->|"polynomial claims"| H["Plonky3 WHIR PCS"]
+    end
+
+    C -->|"R1CS"| S
+    W -->|"witness"| S
+    H -->|"proof"| A["Your application"]
+```
+
+The frontend is the
+[KoalaBear Circom fork](https://github.com/alxkzmn/circom/tree/koala-bear). It
+emits the R1CS and the
+[native C++ witness generator](https://github.com/alxkzmn/circom/tree/koala-bear/code_producers/src/c_elements).
+The `spartan-whir` SNARK combines the
+[Spartan](https://eprint.iacr.org/2019/550) IOP with the
+[Plonky3 WHIR PCS](https://github.com/Plonky3/Plonky3/tree/main/whir),
+which implements [WHIR](https://eprint.iacr.org/2024/1586). Its full-ZK
+protocol follows
+[Zero-Knowledge IOPPs for Constrained Interleaved Codes](https://eprint.iacr.org/2026/391).
+
+## Quick Start
+
+This example compiles a KoalaBear Circom circuit, generates a witness, creates
+116-bit full-ZK DirectSparse keys over the quintic extension, produces a proof,
+and verifies it. It requires a Circom 2.2 build with KoalaBear support, a C++
+compiler, GMP, and the `nlohmann-json` headers.
+
+Create `example.circom`:
+
+```circom
+pragma circom 2.2.0;
+
+template Example() {
+    signal input x;
+    signal input secret;
+    signal output y;
+    signal t0;
+    signal t1;
+    signal t2;
+
+    t0 <== x * secret;
+    t1 <== t0 + x;
+    t2 <== t1 * t1;
+    y <== t2 + 3;
+}
+
+component main { public [x] } = Example();
+```
+
+Create `input.json`:
+
+```json
+{ "x": "5", "secret": "7" }
+```
+
+Compile the circuit and generate the witness:
+
+```bash
+mkdir -p build
+circom example.circom --prime koalabear --r1cs --c -o build
+make -C build/example_cpp
+build/example_cpp/example input.json build/example.wtns
+```
+
+On macOS with Homebrew, pass the dependency paths explicitly if the compiler
+does not find them:
+
+```bash
+make -C build/example_cpp \
+  CC="g++ -L$(brew --prefix gmp)/lib" \
+  CFLAGS="-std=c++11 -O3 -I. -I$(brew --prefix gmp)/include -I$(brew --prefix nlohmann-json)/include"
+build/example_cpp/example input.json build/example.wtns
+```
+
+Generate the proving and verifying keys:
+
+```bash
+cargo run --release --features parallel --example end_to_end -- \
+  setup build/example.r1cs build/proving-key.bin build/verifying-key.bin
+```
+
+Generate a proof from the witness:
+
+```bash
+cargo run --release --features parallel --example end_to_end -- \
+  prove build/proving-key.bin build/example.wtns build/proof.bin
+```
+
+Verify the proof:
+
+```bash
+cargo run --release --features parallel --example end_to_end -- \
+  verify build/verifying-key.bin build/proof.bin
+```
+
+Setup is circuit-specific and can be reused for multiple witnesses. The proof
+contains its public Spartan instance, so verification needs only the verifying
+key and proof files. The example stores keys and proofs with `bincode` and
+rebuilds derived proving-key caches after loading the proving key.
 
 ## SNARK Instantiations
 
 `PoseidonEngine<Ext>` is the client-side SNARK instantiation. It uses the
-KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. The Circom frontend
-circuits are written over KoalaBear.
+KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. Circuits are written
+over KoalaBear.
 
-#### Poseidon Deployment Witness Generation
+### Linked Witness Generation
 
-The Poseidon deployment API uses a linked native witness generator. A
+The Poseidon proving API uses a linked native witness generator. A
 `PoseidonWitnessGenerator` loads a circuit `.dat` payload once through the
 linked loader and stores the returned circuit handle plus FFI function pointers.
 `PoseidonProvingKey::prove_from_witness_generator` passes an application-defined
@@ -26,7 +135,7 @@ before proving; `prove_from_witness_generator_checked` is available when
 debugging a linked witness generator and a row-level validation error is useful.
 The path has no JSON file, `.wtns` file, subprocess, or witness re-import.
 
-#### Proving Key Setup and Loading
+### Key Setup and Loading
 
 A proving key returned by `setup_poseidon`, `PoseidonProvingKey::setup`, or
 `SpartanProtocol::setup_with_config` is ready to prove. Setup builds derived
@@ -47,15 +156,154 @@ let proof = pk.prove(witness, public_inputs)?;
 of falling back to a slower path. `Spark` proving keys may use the same
 preparation call so load paths stay uniform.
 
+SPARK verifying keys bind public matrix tables through fixed WHIR
+commitments. After deserializing a SPARK verifying key, authenticate that
+binding once before verification:
+
+```rust
+let mut vk: PoseidonZkVerifyingKey<OcticBinExtension> =
+    bincode::deserialize(&vk_bytes)?;
+vk.authenticate_spark_fixed_commitments()?;
+vk.verify(&proof)?;
+```
+
+Authentication deterministically rebuilds the SPARK tables and commitments
+from the embedded R1CS. Verifying keys returned directly by setup are ready to
+use. DirectSparse verifying keys do not carry SPARK commitments and require no
+preparation after deserialization.
+
 ## Protocol Capabilities
 
-- Real outer cubic and inner quadratic sumchecks
-- Real R1CS operations: `pad_regular`, `multiply_vec`, `bind_row_vars`, `evaluate_with_tables`, `witness_to_mle`
+- Outer cubic and inner quadratic sumchecks
+- R1CS operations: `pad_regular`, `multiply_vec`, `bind_row_vars`, `evaluate_with_tables`, `witness_to_mle`
 - Public instance is external to the proof: `verify(vk, instance, proof, challenger)`
 - `prove` returns `(instance, proof)`
 - WHIR verification is split into commitment-parse and finalize phases to preserve transcript continuity
 - The `SpartanProtocol` PCS statement path accepts point-evaluation claims
-- Linear and tensor-product PCS constraints are unsupported by the Spartan/WHIR path
+
+### Privacy and Matrix Closing
+
+Privacy and matrix closing are independent configuration choices:
+
+| Privacy | DirectSparse |       Spark |
+| ------- | -----------: | ----------: |
+| No ZK   |  Implemented | Implemented |
+| Full ZK |  Implemented | Implemented |
+
+The no-ZK API uses `PoseidonProvingKey`, `PoseidonVerifyingKey`,
+`PoseidonProof`, and `PoseidonSpartanProtocol`. The unqualified
+`Plonky3WhirPcs` name means plain WHIR and is the no-ZK PCS. Both DirectSparse
+and Spark use this API.
+
+The full-ZK API uses `PoseidonZkProvingKey`, `PoseidonZkVerifyingKey`,
+`PoseidonZkProof`, and `PoseidonZkSpartanProtocol`. Set
+`PoseidonZkSetupConfig::matrix_closing` to select DirectSparse or Spark. For
+DirectSparse at a 116-bit end-to-end target, use `QuinticExtension` with
+`recommended_quintic_whir_params` for no ZK or
+`recommended_quintic_zk_whir_params` for full ZK. The selected 116-bit Spark
+profile uses `OcticBinExtension`; its witness schedule comes from
+`recommended_octic_whir_params` or `recommended_octic_zk_whir_params`.
+`spark_whir_params` supplies independent fixed-value, fixed-audit, and
+read-table schedules. Use `recommended_octic_spark_fixed_whir_params` for the
+fixed tables and `recommended_octic_spark_read_whir_params` for the read
+tables.
+`PoseidonZkProof::closing_mode()` reports the proof payload's mode, and
+verification rejects a proof whose mode differs from the verifying key.
+
+Both proving-key families expose `prove`, witness-generator proving, and their
+checked variants. Full-ZK callers that need deterministic test randomness can
+use `PoseidonZkProvingKey::prove_with_rng`.
+
+The outer protocol follows Construction 11.4 of
+_Zero-Knowledge IOPPs for Constrained Interleaved Codes_, adapted to
+the independently padded row and column domains used here:
+
+- `3 * num_outer_rounds` cubic inner masks hide the `A`, `B`, and `C` claims;
+  every mask vanishes at zero and one.
+- `num_outer_rounds` degree-seven outer masks hide the round polynomials.
+- The outer combining challenge is sampled after `mu_tilde`; the final outer
+  challenge is rejection-sampled outside `{0, 1}` so the inner-mask evaluation
+  is nonzero as required by the simulator argument.
+- A fresh batching challenge authenticates the inner-mask endpoint constraints,
+  the disclosed outer-mask evaluations, and the masked matrix claim in one
+  committed relation.
+
+The inner product is proved with Plonky3's HVZK sumcheck. Its application-mask
+claim is passed as the auxiliary claim, so the carried covectors receive the
+same `eps * 2^-k` scale as in Plonky3's WHIR composition. The final
+`HidingWhirVerifier::verify_relation` call settles the witness equality term,
+the application masks, and the inner-sumcheck masks without disclosing a
+witness evaluation. The integration calls the lower-level
+`HidingWhirProver::prove_relation` and `HidingWhirVerifier::verify_relation`
+methods directly.
+
+The composition adapts Construction 11.4's succinct-linear-form handoff by
+retaining an explicit HVZK inner sumcheck and passing one equality constraint
+to hiding WHIR. DirectSparse computes the three matrix evaluations from the
+verifying key. Spark authenticates the same evaluations with its memory-product
+argument and plain-WHIR openings of the fixed and read tables. Those tables
+contain only the public R1CS or values derived from public transcript challenges,
+so their commitments do not require hiding. The authenticated matrix RLC is the
+coefficient used by the final hiding-WHIR witness relation.
+
+RBR soundness composes because the fresh batching challenge binds every
+disclosed mask equation before the inner sumcheck, and the final WHIR relation
+binds the resulting source and mask covectors. The
+powers-of-the-batching-challenge combination is the paper's zero-evader
+instantiation. For honest-verifier zero knowledge, the endpoint-zero inner masks
+one-time-pad the three matrix claims at the non-Boolean final point, the
+degree-seven masks simulate the outer wires, Plonky3's sumcheck simulator covers
+the inner transcript, and hiding WHIR simulates the committed relation. Tests
+include a witness-free accepting simulator for the outer transcript,
+fixed-witness transcript divergence, masked-claim checks, and Plonky3's own
+sumcheck and WHIR simulator suites.
+
+Setup enforces extension-aware soundness bounds before proving. For `n_x`
+outer rounds, `n_y` inner rounds, and inner masked-sumcheck degree `d`, the
+full-ZK Spartan algebraic error includes the conservative term
+`(15 * n_x + d * n_y + 4) / |Ext|`.
+
+Setup applies one composed integer budget in every privacy and matrix-closing
+mode. DirectSparse accounts for the Spartan algebraic terms, its witness WHIR
+argument, and every witness commitment-binding event. Spark adds matrix
+batching, tuple compression, grand-product identities, product sumchecks,
+per-layer reductions, batched table openings, and its table WHIR arguments and
+commitments. The budget derives strengthened internal WHIR and Merkle targets
+from the requested end-to-end target. Setup returns a structured error with the
+requested bits, attainable bits, and dominant component when the extension
+field, WHIR arguments, or commitments cannot meet that target.
+
+`SecurityConfig` accepts targets from 80 through 123 bits because the
+eight-element KoalaBear Poseidon digest provides about 123.95 bits of collision
+security. Targets above 123 bits are rejected before extension-specific checks.
+The maximum attainable end-to-end target depends on the extension field, WHIR
+schedule, privacy mode, matrix-closing mode, and commitment count. Setup also
+validates the length-4 and length-8 application-mask domains against the
+extension two-adicity before constructing or allocating their encodings.
+
+The full-ZK `spartan-whir-full-zk-v0` Fiat-Shamir order is:
+
+1. ZK domain separator, ZK geometry, and public inputs
+2. inner-mask commitment
+3. hiding-WHIR relation domain separator
+4. witness commitment
+5. outer-mask commitment
+6. `mu_tilde`, outer combining challenge, equality point, and outer rounds
+7. outer-mask evaluations, masked matrix claims, matrix batching challenge, and relation batching challenge
+8. Plonky3 HVZK inner sumcheck
+9. for Spark, fixed-table commitments, the shared read-table commitment, the memory-product proof, and fixed/read plain-WHIR openings
+10. hiding-WHIR committed-relation proof
+
+`PoseidonZkProvingKey::prove` draws mask and WHIR randomness from an
+operating-system-seeded `StdRng`. `prove_with_rng` accepts a caller-supplied
+`Rng + CryptoRng`, which supports deterministic protocol tests without
+weakening the public API's RNG requirement.
+
+No-ZK transcripts use `spartan-whir-no-zk-v0`. The no-ZK and full-ZK domain
+separators have the same canonical body after their protocol identifiers, but
+produce different transcript challenges. The plain-WHIR point-evaluation PCS
+and hiding-WHIR committed-relation proof also have separate transcript domain
+separators.
 
 ## Extension Support
 
@@ -63,9 +311,7 @@ preparation call so load paths stay uniform.
 - Octic is available in the engine surface and is used by the SHA-256 benchmarks
 - Benchmarking with different extensions is expected to be workload-dependent; extension choice is part of the measurement surface
 
-WHIR univariate-skip support is disabled. Extension-specific two-adicity limits
-apply to any skip-enabled configuration; for KoalaBear quintic, skip width must
-stay within 24.
+The WHIR integration disables univariate skip.
 
 ## Implemented Modules
 
@@ -77,11 +323,13 @@ stay within 24.
 - `src/r1cs.rs`
   - Canonical padding and sparse-matrix evaluation helpers
 - `src/sumcheck.rs`
-  - Transcript-driven outer/inner sumcheck prove/verify
+  - Transcript-driven outer and inner sumcheck proving
+- `src/sumcheck_replay.rs`
+  - Verifier replay of compact sumcheck rounds using Plonky3 interpolation
 - `src/protocol.rs`
-  - Real Spartan setup/prove/verify orchestration
+  - Spartan setup, proving, and verification orchestration
 - `src/profiling.rs`
-  - No-op protocol hooks (`ProtocolObserver`, `ProtocolStage`)
+  - Protocol hooks (`ProtocolObserver`, `ProtocolStage`)
   - Tracing span emission for proof-size breakdown (`trace_proof_size_report`)
 
 ## Related Design Notes
@@ -96,162 +344,8 @@ stay within 24.
   - `generate_satisfiable_fixture(...)`
   - `generate_satisfiable_fixture_for_pow2(k)`
 - These helpers produce satisfiable regular R1CS tuples `(shape, witness, public_inputs)` with witness length exactly `2^k`.
-- This is intended for large-size protocol tests and benchmark scaffolding.
-- The benchmark fixtures are synthetic and only shape-similar to target circuits such as Spartan2 SHA-256.
-- They model rough constraint count / witness size / row sparsity for benchmark scaffolding.
-
-## Poseidon Schedule Scoring
-
-The Poseidon Plonky3-WHIR prover has a manual schedule-scoring workflow for
-`MatrixClosingMode::DirectSparse` with Johnson-bound soundness. The scorer does
-not run during setup. A user generates candidate schedules, scores them with a
-calibration file, optionally validates the top rows with proof-only heldout
-measurements, and then passes the selected `PoseidonSetupConfig` into
-`setup_poseidon`. Deployment prover benchmarks should use the linked native
-witness-generator path and report `witness_and_prove_ms`; `.wtns` inputs in this
-workflow are only for schedule-model calibration.
-
-#### Workflow
-
-1. Measure local component costs:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" \
-cargo run --release -p spartan-whir --features parallel \
-  --bin poseidon-schedule-calibration -- \
-  --out /tmp/poseidon-calibration.json
-```
-
-2. Enumerate backend-derived candidate schedules:
-
-```bash
-cargo run -q -p spartan-whir --bin poseidon-schedule-candidates -- \
-  --num-variables 19 \
-  --field koalabear \
-  --security-bits 128 \
-  --max-pow-bits 22 \
-  > /tmp/poseidon-candidates.json
-```
-
-3. Score candidates and write the selected setup config:
-
-```bash
-python3 scripts/poseidon_schedule_scorer.py \
-  --candidates /tmp/poseidon-candidates.json \
-  --calibration /tmp/poseidon-calibration.json \
-  --constraint-work 519678 \
-  --out-report /tmp/poseidon-report.json \
-  --out-config /tmp/poseidon-config.json
-```
-
-4. Measure proof-only heldout rows for schedule-model calibration:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" \
-cargo run --release -p spartan-whir --features circom,parallel \
-  --bin poseidon-schedule-heldout -- \
-  --r1cs circuit.r1cs \
-  --wtns witness.wtns \
-  --report /tmp/poseidon-report.json \
-  --out /tmp/poseidon-heldout.json \
-  --extension octic \
-  --max-rows 5 \
-  --include-strata
-```
-
-5. Add heldout measurements to the calibration and refit component scales:
-
-```bash
-python3 scripts/poseidon_schedule_add_heldout.py \
-  --calibration /tmp/poseidon-calibration.json \
-  --heldout /tmp/poseidon-heldout.json \
-  --out /tmp/poseidon-calibration-heldout.json \
-  --replace \
-  --recalibrate
-```
-
-#### Artifacts
-
-- `poseidon-schedule-calibration` writes component coefficients and raw
-  microbenchmark measurements. Sumcheck coefficients are stored per extension
-  (`quartic`, `quintic`, `octic`).
-- `poseidon-schedule-candidates` writes the backend-derived schedule rows,
-  achieved security, derived PoW bits, WHIR round data, work units, and the
-  candidate `PoseidonSetupConfig`. The `--field` flag selects the field profile
-  used for scheduler constants and two-adicity checks; currently supported
-  values are `koalabear` and `babybear`.
-- `poseidon_schedule_scorer.py` writes a ranked report with projected time,
-  per-component `cost_breakdown`, validation status, and one selected config.
-- `poseidon-schedule-heldout` writes proof-only heldout rows for the selected
-  circuit. With `--include-strata`, it samples across the accepted ranking
-  instead of measuring only the first `--max-rows` rows.
-- `poseidon_schedule_add_heldout.py` merges heldout rows into the calibration
-  and can refit component scale factors.
-  Heldout files must contain every component metric used by the scorer. Re-run
-  `poseidon-schedule-heldout` after adding calibration components such as
-  `merkle_path`.
-
-#### Scope And Trust
-
-Candidate validity and achieved security come from constructing Plonky3 WHIR
-configs. The scorer has no independent security derivation. Rows are rejected
-when backend derivation fails, achieved security is below the target, derived
-PoW exceeds the policy cap, or the schedule exceeds field two-adicity limits.
-
-The scorer is a linear component model:
-
-```text
-projected_time = fixed_overhead + dft + merkle + merkle_path + row_opening + sumcheck + pow + spartan
-```
-
-The report marks recommendations as untrusted until heldout rows for the target
-circuit and extension are within the configured error tolerance. The model is
-intended for schedule selection. Full-proof benchmarks remain the deployment
-decision point.
-
-#### Field Profile Caveat
-
-The `--field babybear` scheduler mode is useful for testing whether a higher
-base-field two-adicity changes schedule validity or ranking, but it should not
-be read as a full BabyBear prover benchmark. The current WHIR backend keeps the
-post-first-fold domain inside the base field's two-adic subgroup, so the
-relevant validity bound is `num_variables + starting_log_inv_rate -
-first_folding_factor <= F::TWO_ADICITY`.
-
-For the SHA-256 benchmark commitment sizes swept so far (`18..27` variables),
-BabyBear's higher base two-adicity makes additional low-first-fold candidates
-valid, but the scorer still selects the same octic schedules as KoalaBear. That
-only rules out a schedule-selection advantage for the current benchmark sizes.
-It does not rule out an advantage on larger commitments, where KoalaBear reaches
-the `first_folding_factor <= 8` cliff at `32` variables with
-`starting_log_inv_rate = 1`, while BabyBear pushes that cliff to `35` variables.
-Any claim about BabyBear arithmetic or Poseidon speed still needs a full
-field-specific prover benchmark.
-
-Heldout recalibration updates the sumcheck coefficient only for extensions that
-appear in the measured rows. A calibration validated with octic heldouts does
-not make quintic or quartic recommendations trusted.
-
-The Merkle commitment term is calibrated against opened matrix field elements,
-and the Merkle-path term is calibrated against path depth. The row-opening term
-tracks opened row field elements separately. Clustered schedules should still be
-confirmed with heldout measurements because cache behavior and shared backend
-work are intentionally not modeled as separate interaction terms.
-
-Candidate rows include `proof_size_bytes_estimate`, a verifier-facing proxy that
-counts opened field elements, Merkle path digests, and round commitments. It is
-used as the ranking tie-breaker when projected times match. It is not a
-byte-exact serialization size.
-
-The PoW term counts expected Bernoulli trials for each grind slot. The hard cap
-is `--max-pow-bits`; the default candidate set is
-`0, 4, 8, 12, 16, 20, 22`.
-
-## Unsupported Features
-
-- Zero-knowledge mode
-- Full EVM verifier contract implementation
-- Gas-cost modeling and on-chain calldata benchmarking
+- These helpers support protocol tests across selected witness-commitment sizes
+  and sparse R1CS layouts.
 
 ## Run Tests
 
@@ -263,8 +357,7 @@ Test suite includes:
 
 - Plonky3-WHIR PCS lifecycle and ordering regression tests
 - R1CS canonicalization and table-evaluation consistency tests
-- Sumcheck roundtrip and tamper/round-count checks
-- Direct quadratic/cubic round-polynomial interpolation spot checks
+- Sumcheck roundtrip, replay, tamper, round-count, and interpolation checks
 - Spartan protocol end-to-end success/failure scenarios
   - tampered commitment rejection
   - tampered outer claims rejection
@@ -279,4 +372,134 @@ Additional targeted-size commands:
 ```bash
 cargo test protocol_e2e_target_2_pow_18
 cargo test protocol_e2e_target_2_pow_22 -- --ignored
+```
+
+## Run Benchmarks
+
+### SHA-256 No-ZK and Full-ZK
+
+The `sha256_full_zk` Criterion target compares no-ZK DirectSparse, no-ZK Spark,
+full-ZK DirectSparse, and full-ZK Spark on a cached SHA-256 circuit. It measures
+linked witness generation plus proving and verification. All four proving
+variants rotate through the same fixed corpus of valid SHA-256 inputs,
+verification rotates through the corresponding corpus of valid proofs, and
+proof size is reported outside the timed intervals. The target only loads
+existing artifacts from `SHA256_BENCH_WORKDIR`, which defaults to
+`target/sha256-cache`; it never compiles the circuit.
+The default workload is 2048 bytes; set `SHA256_ZK_BENCH_SIZE=1024` to select
+another cached circuit. The default `selected` extension mode benchmarks
+DirectSparse over the quintic extension and Spark over the octic extension.
+Set `SHA256_ZK_BENCH_EXTENSION=octic` or `quintic` to run all four variants over
+one extension. `SHA256_ZK_BENCH_SECURITY_BITS` selects the end-to-end security
+target and defaults to 116.
+`SHA256_ZK_BENCH_NO_ZK_DIRECT_SCHEDULE`,
+`SHA256_ZK_BENCH_NO_ZK_SPARK_SCHEDULE`,
+`SHA256_ZK_BENCH_FULL_ZK_DIRECT_SCHEDULE`, and
+`SHA256_ZK_BENCH_FULL_ZK_SPARK_SCHEDULE` override the selected helper schedule
+for one variant. In a forced single-extension run,
+`SHA256_ZK_BENCH_SCHEDULE` supplies a shared schedule before the per-variant
+overrides are applied.
+For a proving-only DirectSparse measurement, set
+`SHA256_ZK_BENCH_PROVING_ONLY=1` and
+`SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct` or
+`full_zk_direct`. Only the selected DirectSparse key is constructed.
+`SHA256_BENCH_ZK_ELL` and `SHA256_BENCH_ZK_MASK_LOG_INV_RATE` override the
+default ZK mask parameters.
+
+The `sha256_bench` example exposes privacy and matrix closing as separate
+axes. Set `SHA256_BENCH_PROOF_MODES=no-zk,full-zk` and
+`SHA256_BENCH_MODES=direct,spark` for diagnostic schedule screening. The
+example's `Instant` output is diagnostic; use Criterion results for performance
+comparisons.
+
+Build the optimized 2048-byte SHA-256 artifact bundle before running the
+Criterion benchmark:
+
+```sh
+tests/circuits/build_sha256_optimized_fixture.sh \
+  ../circom/target/release/circom
+```
+
+```sh
+RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
+SHA256_BENCH_WORKDIR=target/sha256-optimized-cache \
+cargo bench --features parallel --bench sha256_full_zk
+```
+
+Criterion retains the raw estimates and sample data under
+`target/criterion/sha256_<size>b_<extension>_*`. Set
+`SHA256_ZK_BENCH_CORPUS_SIZE` to change the proof/input corpus size; the default
+is 16. Set `SHA256_ZK_BENCH_PROVING_ONLY=1` for a proving-only optimization
+run that skips proof-corpus construction, proof-size reporting, and
+verification.
+
+#### SHA-256 2048-Byte Comparison
+
+The Spartan-WHIR measurements use the optimized
+[`tests/circuits/optimized/sha256_2048b.circom`](tests/circuits/optimized/sha256_2048b.circom)
+circuit. The same M4 Pro also ran the CSP benchmark implementations of
+[ProveKit](https://github.com/worldfnd/ProveKit) at `cc391c8` and
+[Spartan2](https://github.com/microsoft/Spartan2) at `80a6a26`. ProveKit and
+Spartan2 target 128-bit security; the Spartan-WHIR rows use a 116-bit
+end-to-end target. Each frontend implements SHA-256
+over 2048 input bytes, but the resulting R1CS shapes differ:
+
+| System and mode                   | Field        | Raw constraints | Padded rows | Witness + prove (ms) | Verify (ms) | Proof size (bytes) |
+| --------------------------------- | ------------ | --------------: | ----------: | -------------------: | ----------: | -----------------: |
+| Spartan-WHIR no-ZK DirectSparse   | KoalaBear x5 |         605,424 |   1,048,576 |               45.320 |      45.606 |            477,631 |
+| Spartan-WHIR full-ZK DirectSparse | KoalaBear x5 |         605,424 |   1,048,576 |               65.697 |      61.945 |          1,160,108 |
+| Spartan-WHIR no-ZK Spark          | KoalaBear x8 |         605,424 |   1,048,576 |            1,446.219 |     276.818 |          3,175,131 |
+| Spartan-WHIR full-ZK Spark        | KoalaBear x8 |         605,424 |   1,048,576 |            1,434.932 |     298.363 |          4,201,168 |
+| ProveKit full ZK                  | BN254        |         345,399 |     524,288 |              971.343 |     207.381 |          3,228,336 |
+| Spartan2 full ZK                  | P-256        |         873,466 |   1,048,576 |              287.427 |      36.169 |             78,700 |
+
+The selected DirectSparse schedules are
+`quintic_constant_pow4_ff8_lir1_rsv8` for no ZK and
+`quintic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. The selected Spark witness
+schedules are `octic_constant_pow0_ff8_lir1_rsv8` for no ZK and
+`octic_cfsr_pow4_ff8_rest6_lir1_rsv6` for full ZK. Both Spark variants use
+`octic_cfsr_pow4_ff8_rest6_lir1_rsv8` for fixed-value and read openings and
+`octic_cfsr_pow0_ff8_rest4_lir1_rsv6` for fixed-audit openings. Full ZK uses
+`ell_zk = 3` and `mask_log_inv_rate = 3`.
+
+The two Spark proving variants run as separate sequential Criterion groups, so
+their point-estimate ordering is not a paired estimate of full-ZK overhead.
+
+The Spartan-WHIR proving interval includes linked witness generation. The
+ProveKit interval calls `prove_with_toml`, which generates the witness and
+proof, while the Spartan2 interval includes `prep_prove` and `prove`. Circuit
+compilation, key preparation, and fixture construction are outside all three
+proving intervals. The Spartan-WHIR measurements use native CPU code generation,
+30 Criterion samples, and a 16-proof corpus. DirectSparse samples permit a
+Criterion slope estimate; the longer Spark samples use Criterion's mean
+estimate. The competitor measurements use
+ten Criterion samples with a four-second warmup and a twenty-second target
+measurement time. Competitor proof sizes come from the corresponding SHA-256
+2048-byte entries in the CSP benchmark results. Raw Spartan-WHIR timing
+artifacts are under `target/criterion/sha256_2048b_{quintic,octic}_*`.
+
+The optimized Spartan-WHIR circuit has 593,120 variables, 3,251,928 SPARK union
+entries, and a 4,194,304-entry SPARK value domain. It uses single-row
+three-input XOR and majority identities. Lower-sigma lanes whose shifted
+operand is zero use a determined two-input XOR row. The circuit also reuses
+each round's `new_e` value in the `new_a` addition and precomputes the fixed
+final padding block's message schedule. It constrains each of its 16,384
+private message limbs with `x * (x - 1) = 0` before using identities determined
+on Boolean inputs.
+
+ProveKit's 345,399-constraint result uses a compiler-level spread SHA
+construction with transcript-derived LogUp range checks and a witness split
+across pre-challenge and post-challenge phases. Its implementation also requires
+a field larger than 64 bits. The KoalaBear circuit uses segmented additions
+with carry checks. Its 605,424 constraints are 75.3% above ProveKit's
+lookup-assisted count.
+
+### Sumcheck Replay
+
+The sumcheck replay benchmark isolates verifier replay for the quadratic inner,
+cubic outer, and quartic Spark round shapes used by the IOP:
+
+```bash
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+cargo bench --bench sumcheck_replay --features parallel -- --noplot
 ```

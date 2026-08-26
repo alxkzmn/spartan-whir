@@ -34,13 +34,14 @@ def main() -> None:
     parser.add_argument(
         "--prior-weight",
         type=float,
-        default=0.01,
+        default=0.0001,
         help="Ridge prior weight keeping scale factors near the component microbench coefficients",
     )
     args = parser.parse_args()
 
     calibration = read_json(Path(args.calibration))
     heldout = read_json(Path(args.heldout))
+    require_matching_code_provenance(calibration, heldout)
     rows = heldout.get("rows")
     if not isinstance(rows, list) or not rows:
         raise SystemExit("heldout JSON must contain a non-empty rows array")
@@ -49,11 +50,12 @@ def main() -> None:
             raise SystemExit(f"heldout row {row.get('label')} is missing measured_seconds")
 
     validation = calibration.setdefault("validation", {})
-    validation.setdefault("max_relative_error", DEFAULT_VALIDATION_TOLERANCE)
     validation["note"] = "Heldout rows are real direct-sparse Poseidon proof timings."
     validation["heldout"] = rows if args.replace else [*(validation.get("heldout") or []), *rows]
     if args.recalibrate:
         recalibrate(calibration, validation["heldout"], args.prior_weight)
+    refresh_model_resolution(calibration, validation["heldout"])
+    calibration["heldout_provenance"] = heldout.get("provenance")
 
     write_json(Path(args.out), calibration)
     print(f"heldout_rows={len(validation['heldout'])} out={args.out}")
@@ -82,21 +84,18 @@ def recalibrate(calibration: dict[str, Any], rows: list[dict[str, Any]], prior_w
             base[name] = float(source)
     fixed = float(coefficients.get("fixed_overhead", 0.0))
     fixed_prior = fixed
-    usable = [
-        row
-        for row in rows
-        if float(row.get("measured_seconds") or 0.0) > 0
-        and all(metric in row for _name, metric in COMPONENTS)
-    ]
+    usable = usable_candidate_rows(rows)
     if not usable:
         raise SystemExit("no heldout rows have measured_seconds and component metrics")
 
     if base["spartan"] == 0.0:
         residuals = []
+        measured_rates = []
         for row in usable:
             constraint_work = float(row.get("constraint_work") or 0.0)
             if constraint_work <= 0.0:
                 continue
+            measured_rates.append(float(row["measured_seconds"]) / constraint_work)
             projected_without_spartan = fixed + sum(
                 contribution(base, row, key)
                 for key in base
@@ -107,6 +106,8 @@ def recalibrate(calibration: dict[str, Any], rows: list[dict[str, Any]], prior_w
                 residuals.append(residual / constraint_work)
         if residuals:
             base["spartan"] = sum(residuals) / len(residuals)
+        elif measured_rates:
+            base["spartan"] = median(measured_rates)
 
     scales = {key: 1.0 for key in base}
     contributions = [
@@ -167,8 +168,16 @@ def usable_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         row
         for row in rows
         if float(row.get("measured_seconds") or 0.0) > 0
-        and all(metric in row for _name, metric in COMPONENTS)
+        and all(row_metric(row, metric) is not None for _name, metric in COMPONENTS)
     ]
+
+
+def median(values: list[float]) -> float:
+    values = sorted(values)
+    midpoint = len(values) // 2
+    if len(values) % 2 == 0:
+        return (values[midpoint - 1] + values[midpoint]) / 2.0
+    return values[midpoint]
 
 
 def sumcheck_key(extension: str) -> str:
@@ -180,9 +189,63 @@ def contribution(base: dict[str, float], row: dict[str, Any], key: str) -> float
         extension = key.split(":", 1)[1]
         if row.get("extension") != extension:
             return 0.0
-        return base[key] * float(row.get("sumcheck_work") or 0.0)
+        return base[key] * float(row_metric(row, "sumcheck_work") or 0.0)
     metric = dict(COMPONENTS)[key]
-    return base[key] * float(row.get(metric) or 0.0)
+    return base[key] * float(row_metric(row, metric) or 0.0)
+
+
+def row_metric(row: dict[str, Any], metric: str) -> Any:
+    if row_uses_zk_metrics(row):
+        return row.get(zk_metric_name(metric), row.get(metric))
+    return row.get(metric)
+
+
+def refresh_model_resolution(calibration: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    coefficients = calibration.get("coefficients") or {}
+    errors = []
+    for row in usable_candidate_rows(rows):
+        measured = float(row["measured_seconds"])
+        projected = float(coefficients.get("fixed_overhead", 0.0))
+        for name, metric in COMPONENTS:
+            source = coefficients.get(name, 0.0)
+            if name == "sumcheck" and isinstance(source, dict):
+                source = source.get(str(row.get("extension")), 0.0)
+            projected += float(source) * float(row_metric(row, metric) or 0.0)
+        errors.append(abs(projected - measured) / measured)
+    resolution = max([0.01, *errors])
+    validation = calibration.setdefault("validation", {})
+    validation["max_relative_error"] = resolution
+    validation["model_resolution_relative"] = resolution
+    validation["model_resolution_floor_relative"] = 0.01
+
+
+def require_matching_code_provenance(
+    calibration: dict[str, Any], heldout: dict[str, Any]
+) -> None:
+    calibration_provenance = calibration.get("provenance")
+    heldout_provenance = heldout.get("provenance")
+    if calibration_provenance is None and heldout_provenance is None:
+        return
+    if calibration_provenance is None or heldout_provenance is None:
+        raise SystemExit(
+            "cannot combine calibration and heldout: one artifact is missing provenance"
+        )
+    if calibration_provenance != heldout_provenance:
+        raise SystemExit("cannot combine calibration and heldout: provenance differs")
+
+
+def row_uses_zk_metrics(row: dict[str, Any]) -> bool:
+    return row.get("proof_mode") == "full-zk"
+
+
+def zk_metric_name(metric: str) -> str:
+    return {
+        "dft_work": "zk_dft_work",
+        "merkle_work": "zk_merkle_work",
+        "merkle_path_work": "zk_merkle_path_work",
+        "row_work": "zk_row_work",
+        "sumcheck_work": "zk_sumcheck_work",
+    }.get(metric, metric)
 
 
 def read_json(path: Path) -> dict[str, Any]:

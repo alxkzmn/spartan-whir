@@ -6,7 +6,8 @@ use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::profiling::profile_scope;
+use crate::profiling::{profile_detail_scope, profile_scope};
+use crate::sumcheck_replay::{observe_sumcheck_claim, replay_compact_rounds};
 use crate::{
     engine::F, evaluate_mle_table, CubicRoundPoly, EqPolynomial, MultilinearPoint, R1csShape,
     SparseMatrix, SpartanWhirError,
@@ -112,6 +113,15 @@ pub struct SparkTables {
     pub slot_mapping: [SparkMatrixSlot; 4],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkTableMetadata {
+    pub layout: SparkLayoutKind,
+    pub row_memory_size: usize,
+    pub col_memory_size: usize,
+    pub value_domain_size: usize,
+    pub matrix_nnz_padded: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SparkReadTables<EF> {
     pub erow: Vec<EF>,
@@ -179,6 +189,12 @@ pub struct SparkSolidityGasEstimate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueRoundPoly<EF>(pub Vec<EF>);
 
+impl<EF> AsRef<[EF]> for SparkValueRoundPoly<EF> {
+    fn as_ref(&self) -> &[EF] {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkValueSumcheckProof<EF> {
     pub rounds: Vec<SparkValueRoundPoly<EF>>,
@@ -226,6 +242,72 @@ pub struct SparkDotProductCircuit<EF> {
     pub left: Vec<EF>,
     pub right: Vec<EF>,
     pub weight: Vec<EF>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SparkProverDotProductWeight<EF> {
+    Base(Vec<F>),
+    Extension(Vec<EF>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SparkProverDotProductCircuit<EF> {
+    left: Vec<EF>,
+    right: Vec<EF>,
+    weight: SparkProverDotProductWeight<EF>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SparkProverDotProductBatch<EF> {
+    lefts: Vec<Vec<EF>>,
+    rights: Vec<Vec<EF>>,
+    weights: Vec<SparkProverDotProductWeight<EF>>,
+    pair_indices: Vec<usize>,
+}
+
+impl<EF> SparkProverDotProductBatch<EF> {
+    fn empty() -> Self {
+        Self {
+            lefts: Vec::new(),
+            rights: Vec::new(),
+            weights: Vec::new(),
+            pair_indices: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.weights.is_empty()
+    }
+}
+
+impl<EF> From<SparkDotProductCircuit<EF>> for SparkProverDotProductCircuit<EF> {
+    fn from(dotproduct: SparkDotProductCircuit<EF>) -> Self {
+        Self {
+            left: dotproduct.left,
+            right: dotproduct.right,
+            weight: SparkProverDotProductWeight::Extension(dotproduct.weight),
+        }
+    }
+}
+
+impl<EF> From<Vec<SparkProverDotProductCircuit<EF>>> for SparkProverDotProductBatch<EF> {
+    fn from(dotproducts: Vec<SparkProverDotProductCircuit<EF>>) -> Self {
+        let mut lefts = Vec::with_capacity(dotproducts.len());
+        let mut rights = Vec::with_capacity(dotproducts.len());
+        let mut weights = Vec::with_capacity(dotproducts.len());
+        for dotproduct in dotproducts {
+            lefts.push(dotproduct.left);
+            rights.push(dotproduct.right);
+            weights.push(dotproduct.weight);
+        }
+        let pair_indices = (0..weights.len()).collect();
+        Self {
+            lefts,
+            rights,
+            weights,
+            pair_indices,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,7 +447,24 @@ struct SparkMemoryProductValues<EF> {
     audit: Vec<EF>,
 }
 
+struct SparkAxisProductTerms<EF> {
+    init: Vec<EF>,
+    read: Vec<EF>,
+    write: Vec<EF>,
+    audit: Vec<EF>,
+}
+
 impl SparkTables {
+    pub fn metadata(&self) -> SparkTableMetadata {
+        SparkTableMetadata {
+            layout: self.layout,
+            row_memory_size: self.row_memory_size,
+            col_memory_size: self.col_memory_size,
+            value_domain_size: self.value_domain_size,
+            matrix_nnz_padded: self.matrix_nnz_padded,
+        }
+    }
+
     pub fn verifier_operation_report(
         &self,
         extension_dimension: usize,
@@ -374,6 +473,64 @@ impl SparkTables {
             self.layout,
             self.union_nnz,
             self.union_ratio_ppm,
+            self.value_domain_size,
+            self.matrix_nnz_padded,
+            self.row_memory_size,
+            self.col_memory_size,
+            extension_dimension,
+        )
+    }
+}
+
+impl SparkTableMetadata {
+    pub fn validate(&self) -> Result<(), SpartanWhirError> {
+        if self.row_memory_size == 0
+            || self.col_memory_size == 0
+            || self.value_domain_size == 0
+            || self.matrix_nnz_padded == 0
+            || !self.row_memory_size.is_power_of_two()
+            || !self.col_memory_size.is_power_of_two()
+            || !self.value_domain_size.is_power_of_two()
+            || !self.matrix_nnz_padded.is_power_of_two()
+        {
+            return Err(SpartanWhirError::InvalidR1csShape);
+        }
+
+        match self.layout {
+            SparkLayoutKind::SharedUnion => {
+                let max_value_domain = self
+                    .matrix_nnz_padded
+                    .checked_mul(4)
+                    .ok_or(SpartanWhirError::InvalidR1csShape)?;
+                if self.value_domain_size < self.matrix_nnz_padded
+                    || self.value_domain_size > max_value_domain
+                {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+            SparkLayoutKind::Joint | SparkLayoutKind::PerMatrix => {
+                if self.value_domain_size
+                    != self
+                        .matrix_nnz_padded
+                        .checked_mul(4)
+                        .ok_or(SpartanWhirError::InvalidR1csShape)?
+                {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn verifier_operation_report(
+        &self,
+        extension_dimension: usize,
+    ) -> Result<SparkVerifierOperationReport, SpartanWhirError> {
+        self.validate()?;
+        spark_verifier_operation_report(
+            self.layout,
+            0,
+            0,
             self.value_domain_size,
             self.matrix_nnz_padded,
             self.row_memory_size,
@@ -985,6 +1142,7 @@ where
     let num_rounds = log2_power_of_two(tables.value_domain_size);
     let mut rounds = Vec::with_capacity(num_rounds);
     let mut alpha = Vec::with_capacity(num_rounds);
+    observe_sumcheck_claim::<F, EF, C>(challenger, claim);
 
     for _ in 0..num_rounds {
         let round = compute_value_round(
@@ -1043,21 +1201,17 @@ where
     if proof.rounds.len() != expected_rounds {
         return Err(SpartanWhirError::InvalidRoundCount);
     }
-    for round in &proof.rounds {
-        if !matches!(round.0.len(), 3 | 4) {
-            return Err(SpartanWhirError::InvalidRoundPolynomial);
-        }
+    let degree = proof.rounds.first().map_or(3, |round| round.0.len());
+    if !matches!(degree, 3 | 4) {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
     }
-
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(expected_rounds);
-
-    for round in &proof.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
+    let (alpha, claim) = replay_compact_rounds::<F, EF, C, _>(
+        &proof.rounds,
+        initial_claim,
+        expected_rounds,
+        degree,
+        challenger,
+    )?;
 
     let expected_final = proof.final_evals.selector
         * proof.final_evals.val
@@ -1067,7 +1221,7 @@ where
         return Err(SpartanWhirError::SumcheckFailed);
     }
 
-    Ok((MultilinearPoint(alpha), claim))
+    Ok((alpha, claim))
 }
 
 pub fn verify_spark_value_sumcheck_with_tables<EF, C>(
@@ -1416,32 +1570,28 @@ where
     let beta = challenger.sample_algebra_element::<EF>();
     let gamma = challenger.sample_algebra_element::<EF>();
 
-    let (row_values, col_values) = {
-        let _profile = profile_scope("spark_memory_product_values");
-        spark_memory_values_for_axes(tables, r_x, r_y, &read_tables, beta)?
-    };
-    let ops_terms = {
-        let _profile = profile_scope("spark_ops_product_terms");
-        spark_ops_product_terms(&row_values, &col_values, gamma)?
+    let mem_domain_size = tables.row_memory_size.max(tables.col_memory_size);
+    let (ops_terms, mem_terms) = {
+        let _profile = profile_scope("spark_product_terms");
+        spark_product_terms_for_axes(tables, r_x, r_y, read_tables, beta, gamma, mem_domain_size)?
     };
     let value_dotproducts = {
         let _profile = profile_scope("spark_value_dotproducts");
-        spark_value_dotproducts(tables, &read_tables)?
-    };
-    let mem_domain_size = tables.row_memory_size.max(tables.col_memory_size);
-    let mem_terms = {
-        let _profile = profile_scope("spark_mem_product_terms");
-        spark_mem_product_terms(&row_values, &col_values, gamma, mem_domain_size)?
+        spark_base_value_dotproducts(tables, read_tables)?
     };
 
     let (proof_ops, ops_claims) = {
         let _profile = profile_scope("spark_prove_ops_products");
-        prove_spark_batched_product_owned(ops_terms, value_dotproducts, challenger)?
+        prove_spark_batched_product_with_dotproducts(ops_terms, value_dotproducts, challenger)?
     };
     let matrix_evals = matrix_evals_from_split_dotproduct_claims(&proof_ops.dotproduct_claims)?;
     let (proof_mem, mem_claims) = {
         let _profile = profile_scope("spark_prove_mem_products");
-        prove_spark_batched_product_owned(mem_terms, Vec::new(), challenger)?
+        prove_spark_batched_product_with_dotproducts(
+            mem_terms,
+            SparkProverDotProductBatch::empty(),
+            challenger,
+        )?
     };
     let products = SparkMemoryProductProof {
         beta,
@@ -1831,8 +1981,20 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    validate_table_metadata(tables)?;
-    observe_spark_memory_context::<EF, C>(tables, challenger)?;
+    verify_spark_batched_memory_product_claims_with_metadata(&tables.metadata(), proof, challenger)
+}
+
+pub fn verify_spark_batched_memory_product_claims_with_metadata<EF, C>(
+    metadata: &SparkTableMetadata,
+    proof: &SparkBatchedMemoryProductsProof<EF>,
+    challenger: &mut C,
+) -> Result<SparkBatchedMemoryProductsLeafClaims<EF>, SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+{
+    metadata.validate()?;
+    observe_spark_memory_metadata::<EF, C>(metadata, challenger)?;
     let beta = challenger.sample_algebra_element::<EF>();
     let gamma = challenger.sample_algebra_element::<EF>();
     if proof.products.beta != beta || proof.products.gamma != gamma {
@@ -1860,14 +2022,14 @@ where
         &proof.proof_ops,
         &ops_roots,
         &proof.proof_ops.dotproduct_claims,
-        tables.value_domain_size,
+        metadata.value_domain_size,
         challenger,
     )?;
     let mem_claims = verify_spark_batched_product(
         &proof.proof_mem,
         &mem_roots,
         &[],
-        tables.row_memory_size.max(tables.col_memory_size),
+        metadata.row_memory_size.max(metadata.col_memory_size),
         challenger,
     )?;
 
@@ -2050,12 +2212,53 @@ where
     EF: ExtensionField<F> + Send + Sync,
     C: FieldChallenger<F>,
 {
-    prove_spark_batched_product_owned(product_terms.to_vec(), dotproducts.to_vec(), challenger)
+    prove_spark_batched_product_owned(
+        product_terms.to_vec(),
+        dotproducts.iter().cloned().map(Into::into).collect(),
+        challenger,
+    )
 }
 
 fn prove_spark_batched_product_owned<EF, C>(
     product_terms: Vec<Vec<EF>>,
-    mut dotproducts: Vec<SparkDotProductCircuit<EF>>,
+    dotproducts: Vec<SparkProverDotProductCircuit<EF>>,
+    challenger: &mut C,
+) -> Result<
+    (
+        SparkBatchedProductProof<EF>,
+        SparkBatchedProductLeafClaims<EF>,
+    ),
+    SpartanWhirError,
+>
+where
+    EF: ExtensionField<F> + Send + Sync,
+    C: FieldChallenger<F>,
+{
+    prove_spark_batched_product_with_dotproducts(product_terms, dotproducts.into(), challenger)
+}
+
+fn prove_spark_batched_product_with_dotproducts<EF, C>(
+    product_terms: Vec<Vec<EF>>,
+    dotproducts: SparkProverDotProductBatch<EF>,
+    challenger: &mut C,
+) -> Result<
+    (
+        SparkBatchedProductProof<EF>,
+        SparkBatchedProductLeafClaims<EF>,
+    ),
+    SpartanWhirError,
+>
+where
+    EF: ExtensionField<F> + Send + Sync,
+    C: FieldChallenger<F>,
+{
+    prove_spark_batched_product_impl(product_terms, dotproducts, true, challenger)
+}
+
+fn prove_spark_batched_product_impl<EF, C>(
+    product_terms: Vec<Vec<EF>>,
+    mut dotproducts: SparkProverDotProductBatch<EF>,
+    bind_product_children_directly: bool,
     challenger: &mut C,
 ) -> Result<
     (
@@ -2101,10 +2304,7 @@ where
     };
     let dotproduct_claims = {
         let _profile = profile_scope("spark_batched_dotproduct_claims");
-        dotproducts
-            .iter()
-            .map(evaluate_dotproduct)
-            .collect::<Result<Vec<_>, _>>()?
+        evaluate_dotproducts(&dotproducts)?
     };
 
     let mut claims_to_verify = product_roots.clone();
@@ -2118,7 +2318,6 @@ where
         dotproduct_right_evals: Vec::new(),
         dotproduct_weight_evals: Vec::new(),
     };
-
     let _profile = profile_scope("spark_batched_product_layers");
     for child_layer_index in (0..trees[0].len() - 1).rev() {
         let include_dotproducts = child_layer_index == 0 && !dotproducts.is_empty();
@@ -2135,53 +2334,144 @@ where
             .iter()
             .map(|tree| tree[child_layer_index].as_slice())
             .collect::<Vec<_>>();
-        let (mut product_lefts, mut product_rights) = split_product_child_layers(&child_layers)?;
-        let (mut dotproduct_lefts, mut dotproduct_rights, mut dotproduct_weights) =
-            if include_dotproducts {
-                let dotproducts = core::mem::take(&mut dotproducts);
-                let mut dotproduct_lefts = Vec::with_capacity(dotproducts.len());
-                let mut dotproduct_rights = Vec::with_capacity(dotproducts.len());
-                let mut dotproduct_weights = Vec::with_capacity(dotproducts.len());
-                for dotproduct in dotproducts {
-                    dotproduct_lefts.push(dotproduct.left);
-                    dotproduct_rights.push(dotproduct.right);
-                    dotproduct_weights.push(dotproduct.weight);
+        // The tree stores each left/right pair adjacently. Compute the first
+        // round in that layout, then materialize only the already-bound tables.
+        let defer_product_split = bind_product_children_directly && !parent_point.is_empty();
+        let (mut product_lefts, mut product_rights) = if defer_product_split {
+            (Vec::new(), Vec::new())
+        } else {
+            let _profile = profile_detail_scope("spark_batched_product_split_layer");
+            split_product_child_layers(&child_layers)?
+        };
+        let (
+            mut dotproduct_lefts,
+            mut dotproduct_rights,
+            mut dotproduct_weights,
+            mut dotproduct_base_weights,
+            dotproduct_pair_indices,
+        ) = if include_dotproducts {
+            let dotproducts =
+                core::mem::replace(&mut dotproducts, SparkProverDotProductBatch::empty());
+            let mut dotproduct_weights = Vec::with_capacity(dotproducts.weights.len());
+            let mut dotproduct_base_weights = Vec::with_capacity(dotproducts.weights.len());
+            for weight in dotproducts.weights {
+                match weight {
+                    SparkProverDotProductWeight::Base(weight) => {
+                        dotproduct_base_weights.push(weight)
+                    }
+                    SparkProverDotProductWeight::Extension(weight) => {
+                        dotproduct_weights.push(weight)
+                    }
                 }
-                (dotproduct_lefts, dotproduct_rights, dotproduct_weights)
-            } else {
-                (Vec::new(), Vec::new(), Vec::new())
-            };
-        let mut eq = EqPolynomial::evals_from_point(&parent_point);
-        if product_lefts[0].len() != eq.len() {
+            }
+            (
+                dotproducts.lefts,
+                dotproducts.rights,
+                dotproduct_weights,
+                dotproduct_base_weights,
+                dotproducts.pair_indices,
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        };
+        let mut eq = {
+            let _profile = profile_detail_scope("spark_batched_product_eq_table");
+            EqPolynomial::evals_from_point_parallel(&parent_point)
+        };
+        let product_pair_count = child_layers[0].len() / 2;
+        if product_pair_count != eq.len() {
             return Err(SpartanWhirError::InvalidRoundCount);
         }
 
         let mut rounds = Vec::with_capacity(parent_point.len());
         let mut alpha = Vec::with_capacity(parent_point.len());
-        for _ in 0..parent_point.len() {
-            let round = compute_batched_product_round(
-                &eq,
-                &product_lefts,
-                &product_rights,
-                &dotproduct_lefts,
-                &dotproduct_rights,
-                &dotproduct_weights,
-                &coeffs,
-            )?;
+        observe_sumcheck_claim::<F, EF, C>(challenger, claim);
+        for round_index in 0..parent_point.len() {
+            let round = {
+                let _profile = profile_detail_scope("spark_batched_product_round_compute");
+                let _round_profile = profile_detail_scope(if child_layer_index == 0 {
+                    if round_index == 0 {
+                        "spark_batched_product_leaf_first_round_compute"
+                    } else {
+                        "spark_batched_product_leaf_later_round_compute"
+                    }
+                } else if round_index == 0 {
+                    "spark_batched_product_internal_first_round_compute"
+                } else {
+                    "spark_batched_product_internal_later_round_compute"
+                });
+                if defer_product_split && round_index == 0 {
+                    compute_batched_product_round_from_child_layers(
+                        &eq,
+                        &child_layers,
+                        &dotproduct_lefts,
+                        &dotproduct_rights,
+                        &dotproduct_weights,
+                        &dotproduct_base_weights,
+                        &dotproduct_pair_indices,
+                        &coeffs,
+                    )?
+                } else {
+                    compute_batched_product_round(
+                        &eq,
+                        &product_lefts,
+                        &product_rights,
+                        &dotproduct_lefts,
+                        &dotproduct_rights,
+                        &dotproduct_weights,
+                        &dotproduct_base_weights,
+                        &dotproduct_pair_indices,
+                        &coeffs,
+                    )?
+                }
+            };
             challenger.observe_algebra_slice(&round.0);
             let challenge = challenger.sample_algebra_element::<EF>();
             claim = round.evaluate_at(challenge, claim);
             rounds.push(round);
             alpha.push(challenge);
 
-            bind_value_table(&mut eq, challenge)?;
-            bind_all_value_tables(&mut product_lefts, challenge)?;
-            bind_all_value_tables(&mut product_rights, challenge)?;
-            bind_all_value_tables(&mut dotproduct_lefts, challenge)?;
-            bind_all_value_tables(&mut dotproduct_rights, challenge)?;
-            bind_all_value_tables(&mut dotproduct_weights, challenge)?;
+            {
+                let _profile = profile_detail_scope("spark_batched_product_round_bind");
+                let _round_profile = profile_detail_scope(if child_layer_index == 0 {
+                    if round_index == 0 {
+                        "spark_batched_product_leaf_first_round_bind"
+                    } else {
+                        "spark_batched_product_leaf_later_round_bind"
+                    }
+                } else if round_index == 0 {
+                    "spark_batched_product_internal_first_round_bind"
+                } else {
+                    "spark_batched_product_internal_later_round_bind"
+                });
+                bind_value_table(&mut eq, challenge)?;
+                if defer_product_split && round_index == 0 {
+                    (product_lefts, product_rights) = {
+                        let _profile =
+                            profile_detail_scope("spark_batched_product_bind_child_layer");
+                        bind_product_child_layers(&child_layers, challenge)?
+                    };
+                } else {
+                    bind_all_value_tables(&mut product_lefts, challenge)?;
+                    bind_all_value_tables(&mut product_rights, challenge)?;
+                }
+                bind_all_value_tables(&mut dotproduct_lefts, challenge)?;
+                bind_all_value_tables(&mut dotproduct_rights, challenge)?;
+                if dotproduct_base_weights.is_empty() {
+                    bind_all_value_tables(&mut dotproduct_weights, challenge)?;
+                } else {
+                    dotproduct_weights =
+                        bind_base_weight_tables(dotproduct_base_weights, challenge)?;
+                    dotproduct_base_weights = Vec::new();
+                }
+            }
         }
-
+        if !dotproduct_base_weights.is_empty() {
+            dotproduct_weights = dotproduct_base_weights
+                .into_iter()
+                .map(|weight| lift_base_values_to_extension(&weight))
+                .collect();
+        }
         let layer = batched_product_layer_from_bound_tables(
             rounds,
             &product_lefts,
@@ -2189,6 +2479,7 @@ where
             &dotproduct_lefts,
             &dotproduct_rights,
             &dotproduct_weights,
+            &dotproduct_pair_indices,
         )?;
         check_batched_product_layer_final_claim(&layer, &eq, &coeffs, claim)?;
         let combine = observe_batched_product_layer_and_sample(&layer, challenger);
@@ -2274,7 +2565,6 @@ where
         dotproduct_right_evals: Vec::new(),
         dotproduct_weight_evals: Vec::new(),
     };
-
     for (layer_index, layer) in proof.layers.iter().enumerate() {
         let include_dotproducts =
             layer_index + 1 == proof.layers.len() && !expected_dotproduct_claims.is_empty();
@@ -2329,11 +2619,18 @@ where
 }
 
 fn validate_dotproducts_for_batched_product<EF>(
-    dotproducts: &[SparkDotProductCircuit<EF>],
+    dotproducts: &SparkProverDotProductBatch<EF>,
     product_domain_size: usize,
 ) -> Result<(), SpartanWhirError> {
     if dotproducts.is_empty() {
-        return Ok(());
+        return if dotproducts.lefts.is_empty()
+            && dotproducts.rights.is_empty()
+            && dotproducts.pair_indices.is_empty()
+        {
+            Ok(())
+        } else {
+            Err(SpartanWhirError::InvalidPolynomialLength)
+        };
     }
     let dotproduct_domain_size = product_domain_size
         .checked_div(2)
@@ -2341,40 +2638,108 @@ fn validate_dotproducts_for_batched_product<EF>(
     if dotproduct_domain_size == 0 {
         return Err(SpartanWhirError::InvalidPolynomialLength);
     }
-    for dotproduct in dotproducts {
-        if dotproduct.left.len() != dotproduct_domain_size
-            || dotproduct.right.len() != dotproduct_domain_size
-            || dotproduct.weight.len() != dotproduct_domain_size
-        {
+    if dotproducts.lefts.len() != dotproducts.rights.len()
+        || dotproducts.weights.len() != dotproducts.pair_indices.len()
+        || dotproducts
+            .pair_indices
+            .iter()
+            .any(|&pair| pair >= dotproducts.lefts.len())
+    {
+        return Err(SpartanWhirError::InvalidPolynomialLength);
+    }
+    for (left, right) in dotproducts.lefts.iter().zip(&dotproducts.rights) {
+        if left.len() != dotproduct_domain_size || right.len() != dotproduct_domain_size {
             return Err(SpartanWhirError::InvalidPolynomialLength);
         }
+    }
+    for weight in &dotproducts.weights {
+        let weight_len = match weight {
+            SparkProverDotProductWeight::Base(weight) => weight.len(),
+            SparkProverDotProductWeight::Extension(weight) => weight.len(),
+        };
+        if weight_len != dotproduct_domain_size {
+            return Err(SpartanWhirError::InvalidPolynomialLength);
+        }
+    }
+    let uses_base_weights = matches!(dotproducts.weights[0], SparkProverDotProductWeight::Base(_));
+    if dotproducts
+        .weights
+        .iter()
+        .any(|weight| matches!(weight, SparkProverDotProductWeight::Base(_)) != uses_base_weights)
+    {
+        return Err(SpartanWhirError::InvalidPolynomialLength);
     }
     Ok(())
 }
 
-fn evaluate_dotproduct<EF>(dotproduct: &SparkDotProductCircuit<EF>) -> Result<EF, SpartanWhirError>
+fn evaluate_dotproducts<EF>(
+    dotproducts: &SparkProverDotProductBatch<EF>,
+) -> Result<Vec<EF>, SpartanWhirError>
 where
-    EF: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
 {
-    if dotproduct.left.len() != dotproduct.right.len()
-        || dotproduct.right.len() != dotproduct.weight.len()
-    {
+    dotproducts
+        .weights
+        .iter()
+        .zip(&dotproducts.pair_indices)
+        .map(|(weight, &pair_index)| {
+            evaluate_dotproduct(
+                &dotproducts.lefts[pair_index],
+                &dotproducts.rights[pair_index],
+                weight,
+            )
+        })
+        .collect()
+}
+
+fn evaluate_dotproduct<EF>(
+    left: &[EF],
+    right: &[EF],
+    weight: &SparkProverDotProductWeight<EF>,
+) -> Result<EF, SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    let weight_len = match weight {
+        SparkProverDotProductWeight::Base(weight) => weight.len(),
+        SparkProverDotProductWeight::Extension(weight) => weight.len(),
+    };
+    if left.len() != right.len() || right.len() != weight_len {
         return Err(SpartanWhirError::InvalidPolynomialLength);
     }
-    if should_parallelize_spark_round(dotproduct.left.len()) {
-        Ok((0..dotproduct.left.len())
-            .into_par_iter()
-            .map(|i| dotproduct.left[i] * dotproduct.right[i] * dotproduct.weight[i])
-            .par_fold_reduce(|| EF::ZERO, |acc, value| acc + value, |a, b| a + b))
-    } else {
-        Ok(dotproduct
-            .left
-            .iter()
-            .zip(&dotproduct.right)
-            .zip(&dotproduct.weight)
-            .fold(EF::ZERO, |acc, ((&left, &right), &weight)| {
-                acc + left * right * weight
-            }))
+    match weight {
+        SparkProverDotProductWeight::Base(weight) => {
+            if should_parallelize_spark_round(left.len()) {
+                Ok((0..left.len())
+                    .into_par_iter()
+                    .map(|i| (left[i] * right[i]) * weight[i])
+                    .par_fold_reduce(|| EF::ZERO, |acc, value| acc + value, |a, b| a + b))
+            } else {
+                Ok(left
+                    .iter()
+                    .zip(right)
+                    .zip(weight)
+                    .fold(EF::ZERO, |acc, ((&left, &right), &weight)| {
+                        acc + (left * right) * weight
+                    }))
+            }
+        }
+        SparkProverDotProductWeight::Extension(weight) => {
+            if should_parallelize_spark_round(left.len()) {
+                Ok((0..left.len())
+                    .into_par_iter()
+                    .map(|i| left[i] * right[i] * weight[i])
+                    .par_fold_reduce(|| EF::ZERO, |acc, value| acc + value, |a, b| a + b))
+            } else {
+                Ok(left
+                    .iter()
+                    .zip(right)
+                    .zip(weight)
+                    .fold(EF::ZERO, |acc, ((&left, &right), &weight)| {
+                        acc + left * right * weight
+                    }))
+            }
+        }
     }
 }
 
@@ -2393,7 +2758,7 @@ fn split_product_child_layers<EF>(
     child_layers: &[&[EF]],
 ) -> Result<(Vec<Vec<EF>>, Vec<Vec<EF>>), SpartanWhirError>
 where
-    EF: Copy,
+    EF: Copy + Send + Sync,
 {
     let mut lefts = Vec::with_capacity(child_layers.len());
     let mut rights = Vec::with_capacity(child_layers.len());
@@ -2401,12 +2766,54 @@ where
         if child_layer.len() < 2 || !child_layer.len().is_power_of_two() {
             return Err(SpartanWhirError::InvalidPolynomialLength);
         }
-        let mut left = Vec::with_capacity(child_layer.len() / 2);
-        let mut right = Vec::with_capacity(child_layer.len() / 2);
-        for pair in child_layer.chunks_exact(2) {
-            left.push(pair[0]);
-            right.push(pair[1]);
+        let pair_count = child_layer.len() / 2;
+        let (left, right) = if should_parallelize_spark_round(pair_count) {
+            (0..pair_count)
+                .into_par_iter()
+                .map(|i| (child_layer[2 * i], child_layer[2 * i + 1]))
+                .unzip()
+        } else {
+            child_layer
+                .chunks_exact(2)
+                .map(|pair| (pair[0], pair[1]))
+                .unzip()
+        };
+        lefts.push(left);
+        rights.push(right);
+    }
+    Ok((lefts, rights))
+}
+
+fn bind_product_child_layers<EF>(
+    child_layers: &[&[EF]],
+    challenge: EF,
+) -> Result<(Vec<Vec<EF>>, Vec<Vec<EF>>), SpartanWhirError>
+where
+    EF: Field + Send + Sync,
+{
+    let mut lefts = Vec::with_capacity(child_layers.len());
+    let mut rights = Vec::with_capacity(child_layers.len());
+    for child_layer in child_layers {
+        if child_layer.len() < 4 || !child_layer.len().is_power_of_two() {
+            return Err(SpartanWhirError::InvalidPolynomialLength);
         }
+        let output_len = child_layer.len() / 4;
+        let bind = |i: usize| {
+            let high_pair = i + output_len;
+            (
+                extrapolate(child_layer[2 * i], child_layer[2 * high_pair], challenge),
+                extrapolate(
+                    child_layer[2 * i + 1],
+                    child_layer[2 * high_pair + 1],
+                    challenge,
+                ),
+            )
+        };
+        let (left, right) = if should_parallelize_spark_round(output_len) {
+            (0..output_len).into_par_iter().map(bind).unzip()
+        } else {
+            (0..output_len).map(bind).unzip()
+        };
         lefts.push(left);
         rights.push(right);
     }
@@ -2450,6 +2857,36 @@ where
     Ok(())
 }
 
+fn bind_base_weight_tables<EF>(
+    tables: Vec<Vec<F>>,
+    challenge: EF,
+) -> Result<Vec<Vec<EF>>, SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    // Organization inspired by ProveKit's mixed_sumcheck_map_reduce/mixed_fold
+    // (World Foundation, MIT; https://github.com/worldfnd/provekit): keep public
+    // matrix coefficients in the base field through the first round.
+    tables
+        .into_iter()
+        .map(|table| {
+            if table.len() < 2 || !table.len().is_multiple_of(2) {
+                return Err(SpartanWhirError::InvalidRoundPolynomial);
+            }
+            let half = table.len() / 2;
+            let bind = |i: usize| {
+                let low = table[i];
+                EF::from(low) + challenge * (table[i + half] - low)
+            };
+            if should_parallelize_spark_round(half) {
+                Ok((0..half).into_par_iter().map(bind).collect())
+            } else {
+                Ok((0..half).map(bind).collect())
+            }
+        })
+        .collect()
+}
+
 fn compute_batched_product_round<EF>(
     eq: &[EF],
     product_lefts: &[Vec<EF>],
@@ -2457,17 +2894,24 @@ fn compute_batched_product_round<EF>(
     dotproduct_lefts: &[Vec<EF>],
     dotproduct_rights: &[Vec<EF>],
     dotproduct_weights: &[Vec<EF>],
+    dotproduct_base_weights: &[Vec<F>],
+    dotproduct_pair_indices: &[usize],
     coeffs: &[EF],
 ) -> Result<CubicRoundPoly<EF>, SpartanWhirError>
 where
-    EF: Field + Send + Sync,
+    EF: ExtensionField<F> + Send + Sync,
 {
     let product_count = product_lefts.len();
-    let dotproduct_count = dotproduct_lefts.len();
+    let dotproduct_count = dotproduct_weights.len() + dotproduct_base_weights.len();
     if product_count == 0
         || product_rights.len() != product_count
-        || dotproduct_rights.len() != dotproduct_count
-        || dotproduct_weights.len() != dotproduct_count
+        || dotproduct_rights.len() != dotproduct_lefts.len()
+        || (dotproduct_count != 0 && dotproduct_lefts.is_empty())
+        || dotproduct_pair_indices.len() != dotproduct_count
+        || dotproduct_pair_indices
+            .iter()
+            .any(|&pair| pair >= dotproduct_lefts.len())
+        || (!dotproduct_weights.is_empty() && !dotproduct_base_weights.is_empty())
         || coeffs.len() != product_count + dotproduct_count
     {
         return Err(SpartanWhirError::InvalidRoundPolynomial);
@@ -2479,7 +2923,12 @@ where
         || dotproduct_lefts
             .iter()
             .chain(dotproduct_rights)
-            .chain(dotproduct_weights)
+            .any(|table| table.len() != eq.len())
+        || dotproduct_weights
+            .iter()
+            .any(|table| table.len() != eq.len())
+        || dotproduct_base_weights
+            .iter()
             .any(|table| table.len() != eq.len())
         || eq.len() < 2
         || !eq.len().is_multiple_of(2)
@@ -2501,6 +2950,8 @@ where
                     dotproduct_lefts,
                     dotproduct_rights,
                     dotproduct_weights,
+                    dotproduct_base_weights,
+                    dotproduct_pair_indices,
                     coeffs,
                 )
             })
@@ -2521,12 +2972,207 @@ where
                     dotproduct_lefts,
                     dotproduct_rights,
                     dotproduct_weights,
+                    dotproduct_base_weights,
+                    dotproduct_pair_indices,
                     coeffs,
                 )
             })
             .fold((EF::ZERO, EF::ZERO, EF::ZERO), add_cubic_accumulators)
     };
     Ok(CubicRoundPoly([h0, h2, h3]))
+}
+
+fn compute_batched_product_round_from_child_layers<EF>(
+    eq: &[EF],
+    product_child_layers: &[&[EF]],
+    dotproduct_lefts: &[Vec<EF>],
+    dotproduct_rights: &[Vec<EF>],
+    dotproduct_weights: &[Vec<EF>],
+    dotproduct_base_weights: &[Vec<F>],
+    dotproduct_pair_indices: &[usize],
+    coeffs: &[EF],
+) -> Result<CubicRoundPoly<EF>, SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    let product_count = product_child_layers.len();
+    let dotproduct_count = dotproduct_weights.len() + dotproduct_base_weights.len();
+    if product_count == 0
+        || dotproduct_rights.len() != dotproduct_lefts.len()
+        || (dotproduct_count != 0 && dotproduct_lefts.is_empty())
+        || dotproduct_pair_indices.len() != dotproduct_count
+        || dotproduct_pair_indices
+            .iter()
+            .any(|&pair| pair >= dotproduct_lefts.len())
+        || (!dotproduct_weights.is_empty() && !dotproduct_base_weights.is_empty())
+        || coeffs.len() != product_count + dotproduct_count
+        || product_child_layers
+            .iter()
+            .any(|layer| layer.len() != 2 * eq.len())
+        || dotproduct_lefts
+            .iter()
+            .chain(dotproduct_rights)
+            .any(|table| table.len() != eq.len())
+        || dotproduct_weights
+            .iter()
+            .any(|table| table.len() != eq.len())
+        || dotproduct_base_weights
+            .iter()
+            .any(|table| table.len() != eq.len())
+        || eq.len() < 2
+        || !eq.len().is_multiple_of(2)
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    let half = eq.len() / 2;
+    let accumulate = |i| {
+        compute_batched_product_round_from_child_layers_partial(
+            i,
+            half,
+            eq,
+            product_child_layers,
+            dotproduct_lefts,
+            dotproduct_rights,
+            dotproduct_weights,
+            dotproduct_base_weights,
+            dotproduct_pair_indices,
+            coeffs,
+        )
+    };
+    let (h0, h2, h3) = if should_parallelize_spark_round(half) {
+        (0..half).into_par_iter().map(accumulate).par_fold_reduce(
+            || (EF::ZERO, EF::ZERO, EF::ZERO),
+            add_cubic_accumulators,
+            add_cubic_accumulators,
+        )
+    } else {
+        (0..half)
+            .map(accumulate)
+            .fold((EF::ZERO, EF::ZERO, EF::ZERO), add_cubic_accumulators)
+    };
+    Ok(CubicRoundPoly([h0, h2, h3]))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_independent_dotproduct_round_partial<EF>(
+    i: usize,
+    half: usize,
+    dotproduct_lefts: &[Vec<EF>],
+    dotproduct_rights: &[Vec<EF>],
+    dotproduct_weights: &[Vec<EF>],
+    dotproduct_base_weights: &[Vec<F>],
+    dotproduct_pair_indices: &[usize],
+    coeffs: &[EF],
+) -> (EF, EF, EF)
+where
+    EF: ExtensionField<F>,
+{
+    let mut h0 = EF::ZERO;
+    let mut h2 = EF::ZERO;
+    let mut h3 = EF::ZERO;
+
+    // A, B, and C reuse the same row/column read pairs. Combine their weights
+    // before multiplying the shared pair at each evaluation point.
+    for pair_index in 0..dotproduct_lefts.len() {
+        let mut combined_weight0 = EF::ZERO;
+        let mut combined_weight2 = EF::ZERO;
+        let mut combined_weight3 = EF::ZERO;
+        let mut has_weight = false;
+        for (dotproduct_index, &selected_pair) in dotproduct_pair_indices.iter().enumerate() {
+            if selected_pair != pair_index {
+                continue;
+            }
+            has_weight = true;
+            let coeff = coeffs[dotproduct_index];
+            if dotproduct_base_weights.is_empty() {
+                let weight0 = dotproduct_weights[dotproduct_index][i];
+                let weight1 = dotproduct_weights[dotproduct_index][i + half];
+                let (weight2, weight3) = extrapolate_at_two_and_three(weight0, weight1);
+                combined_weight0 += coeff * weight0;
+                combined_weight2 += coeff * weight2;
+                combined_weight3 += coeff * weight3;
+            } else {
+                let weight0 = dotproduct_base_weights[dotproduct_index][i];
+                let weight1 = dotproduct_base_weights[dotproduct_index][i + half];
+                let (weight2, weight3) = extrapolate_at_two_and_three(weight0, weight1);
+                combined_weight0 += coeff * weight0;
+                combined_weight2 += coeff * weight2;
+                combined_weight3 += coeff * weight3;
+            }
+        }
+        if !has_weight {
+            continue;
+        }
+
+        let left0 = dotproduct_lefts[pair_index][i];
+        let left1 = dotproduct_lefts[pair_index][i + half];
+        let right0 = dotproduct_rights[pair_index][i];
+        let right1 = dotproduct_rights[pair_index][i + half];
+        let (left2, left3) = extrapolate_at_two_and_three(left0, left1);
+        let (right2, right3) = extrapolate_at_two_and_three(right0, right1);
+        h0 += left0 * right0 * combined_weight0;
+        h2 += left2 * right2 * combined_weight2;
+        h3 += left3 * right3 * combined_weight3;
+    }
+    (h0, h2, h3)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_batched_product_round_from_child_layers_partial<EF>(
+    i: usize,
+    half: usize,
+    eq: &[EF],
+    product_child_layers: &[&[EF]],
+    dotproduct_lefts: &[Vec<EF>],
+    dotproduct_rights: &[Vec<EF>],
+    dotproduct_weights: &[Vec<EF>],
+    dotproduct_base_weights: &[Vec<F>],
+    dotproduct_pair_indices: &[usize],
+    coeffs: &[EF],
+) -> (EF, EF, EF)
+where
+    EF: ExtensionField<F>,
+{
+    let product_count = product_child_layers.len();
+
+    let eq0 = eq[i];
+    let eq1 = eq[i + half];
+    let (eq2, eq3) = extrapolate_at_two_and_three(eq0, eq1);
+    // The equality value is shared by every product circuit. Combine the
+    // circuits first so each evaluation needs one equality multiplication.
+    let mut product_h0 = EF::ZERO;
+    let mut product_h2 = EF::ZERO;
+    let mut product_h3 = EF::ZERO;
+    for product_index in 0..product_count {
+        let coeff = coeffs[product_index];
+        let child_layer = product_child_layers[product_index];
+        let left0 = child_layer[2 * i];
+        let left1 = child_layer[2 * (i + half)];
+        let right0 = child_layer[2 * i + 1];
+        let right1 = child_layer[2 * (i + half) + 1];
+        let (left2, left3) = extrapolate_at_two_and_three(left0, left1);
+        let (right2, right3) = extrapolate_at_two_and_three(right0, right1);
+        product_h0 += coeff * left0 * right0;
+        product_h2 += coeff * left2 * right2;
+        product_h3 += coeff * left3 * right3;
+    }
+    let mut h0 = eq0 * product_h0;
+    let mut h2 = eq2 * product_h2;
+    let mut h3 = eq3 * product_h3;
+    let dotproduct_accumulator = compute_independent_dotproduct_round_partial(
+        i,
+        half,
+        dotproduct_lefts,
+        dotproduct_rights,
+        dotproduct_weights,
+        dotproduct_base_weights,
+        dotproduct_pair_indices,
+        &coeffs[product_count..],
+    );
+    (h0, h2, h3) = add_cubic_accumulators((h0, h2, h3), dotproduct_accumulator);
+
+    (h0, h2, h3)
 }
 
 fn compute_batched_product_round_partial<EF>(
@@ -2538,20 +3184,23 @@ fn compute_batched_product_round_partial<EF>(
     dotproduct_lefts: &[Vec<EF>],
     dotproduct_rights: &[Vec<EF>],
     dotproduct_weights: &[Vec<EF>],
+    dotproduct_base_weights: &[Vec<F>],
+    dotproduct_pair_indices: &[usize],
     coeffs: &[EF],
 ) -> (EF, EF, EF)
 where
-    EF: Field,
+    EF: ExtensionField<F>,
 {
     let product_count = product_lefts.len();
-    let dotproduct_count = dotproduct_lefts.len();
-    let mut h0 = EF::ZERO;
-    let mut h2 = EF::ZERO;
-    let mut h3 = EF::ZERO;
 
     let eq0 = eq[i];
     let eq1 = eq[i + half];
     let (eq2, eq3) = extrapolate_at_two_and_three(eq0, eq1);
+    // The equality value is shared by every product circuit. Combine the
+    // circuits first so each evaluation needs one equality multiplication.
+    let mut product_h0 = EF::ZERO;
+    let mut product_h2 = EF::ZERO;
+    let mut product_h3 = EF::ZERO;
     for product_index in 0..product_count {
         let coeff = coeffs[product_index];
         let left0 = product_lefts[product_index][i];
@@ -2560,25 +3209,24 @@ where
         let right1 = product_rights[product_index][i + half];
         let (left2, left3) = extrapolate_at_two_and_three(left0, left1);
         let (right2, right3) = extrapolate_at_two_and_three(right0, right1);
-        h0 += coeff * eq0 * left0 * right0;
-        h2 += coeff * eq2 * left2 * right2;
-        h3 += coeff * eq3 * left3 * right3;
+        product_h0 += coeff * left0 * right0;
+        product_h2 += coeff * left2 * right2;
+        product_h3 += coeff * left3 * right3;
     }
-    for dotproduct_index in 0..dotproduct_count {
-        let coeff = coeffs[product_count + dotproduct_index];
-        let left0 = dotproduct_lefts[dotproduct_index][i];
-        let left1 = dotproduct_lefts[dotproduct_index][i + half];
-        let right0 = dotproduct_rights[dotproduct_index][i];
-        let right1 = dotproduct_rights[dotproduct_index][i + half];
-        let weight0 = dotproduct_weights[dotproduct_index][i];
-        let weight1 = dotproduct_weights[dotproduct_index][i + half];
-        let (left2, left3) = extrapolate_at_two_and_three(left0, left1);
-        let (right2, right3) = extrapolate_at_two_and_three(right0, right1);
-        let (weight2, weight3) = extrapolate_at_two_and_three(weight0, weight1);
-        h0 += coeff * left0 * right0 * weight0;
-        h2 += coeff * left2 * right2 * weight2;
-        h3 += coeff * left3 * right3 * weight3;
-    }
+    let mut h0 = eq0 * product_h0;
+    let mut h2 = eq2 * product_h2;
+    let mut h3 = eq3 * product_h3;
+    let dotproduct_accumulator = compute_independent_dotproduct_round_partial(
+        i,
+        half,
+        dotproduct_lefts,
+        dotproduct_rights,
+        dotproduct_weights,
+        dotproduct_base_weights,
+        dotproduct_pair_indices,
+        &coeffs[product_count..],
+    );
+    (h0, h2, h3) = add_cubic_accumulators((h0, h2, h3), dotproduct_accumulator);
 
     (h0, h2, h3)
 }
@@ -2590,14 +3238,20 @@ fn batched_product_layer_from_bound_tables<EF>(
     dotproduct_lefts: &[Vec<EF>],
     dotproduct_rights: &[Vec<EF>],
     dotproduct_weights: &[Vec<EF>],
+    dotproduct_pair_indices: &[usize],
 ) -> Result<SparkBatchedProductLayerProof<EF>, SpartanWhirError>
 where
     EF: Copy,
 {
     let product_left_evals = singleton_evals(product_lefts)?;
     let product_right_evals = singleton_evals(product_rights)?;
-    let dotproduct_left_evals = singleton_evals(dotproduct_lefts)?;
-    let dotproduct_right_evals = singleton_evals(dotproduct_rights)?;
+    if dotproduct_pair_indices.len() != dotproduct_weights.len() {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    let dotproduct_left_evals =
+        selected_singleton_evals(dotproduct_lefts, dotproduct_pair_indices)?;
+    let dotproduct_right_evals =
+        selected_singleton_evals(dotproduct_rights, dotproduct_pair_indices)?;
     let dotproduct_weight_evals = singleton_evals(dotproduct_weights)?;
     Ok(SparkBatchedProductLayerProof {
         rounds,
@@ -2607,6 +3261,27 @@ where
         dotproduct_right_evals,
         dotproduct_weight_evals,
     })
+}
+
+fn selected_singleton_evals<EF>(
+    tables: &[Vec<EF>],
+    indices: &[usize],
+) -> Result<Vec<EF>, SpartanWhirError>
+where
+    EF: Copy,
+{
+    indices
+        .iter()
+        .map(|&index| {
+            let table = tables
+                .get(index)
+                .ok_or(SpartanWhirError::InvalidRoundPolynomial)?;
+            if table.len() != 1 {
+                return Err(SpartanWhirError::SumcheckFailed);
+            }
+            Ok(table[0])
+        })
+        .collect()
 }
 
 fn singleton_evals<EF>(tables: &[Vec<EF>]) -> Result<Vec<EF>, SpartanWhirError>
@@ -2675,18 +3350,13 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    if layer.rounds.len() != expected_rounds {
-        return Err(SpartanWhirError::InvalidRoundCount);
-    }
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(expected_rounds);
-    for round in &layer.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
-    Ok((MultilinearPoint(alpha), claim))
+    replay_compact_rounds::<F, EF, C, _>(
+        &layer.rounds,
+        initial_claim,
+        expected_rounds,
+        3,
+        challenger,
+    )
 }
 
 fn observe_batched_product_layer_and_sample<EF, C>(
@@ -3149,11 +3819,28 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
+    observe_spark_memory_metadata::<EF, C>(&tables.metadata(), challenger)
+}
+
+fn observe_spark_memory_metadata<EF, C>(
+    metadata: &SparkTableMetadata,
+    challenger: &mut C,
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+    C: FieldChallenger<F>,
+{
+    let layout_tag = match metadata.layout {
+        SparkLayoutKind::Joint => 0,
+        SparkLayoutKind::SharedUnion => 1,
+        SparkLayoutKind::PerMatrix => 2,
+    };
     let context = [
-        EF::from(usize_to_field(tables.row_memory_size)?),
-        EF::from(usize_to_field(tables.col_memory_size)?),
-        EF::from(usize_to_field(tables.value_domain_size)?),
-        EF::from(usize_to_field(tables.matrix_nnz_padded)?),
+        EF::from(usize_to_field(metadata.row_memory_size)?),
+        EF::from(usize_to_field(metadata.col_memory_size)?),
+        EF::from(usize_to_field(metadata.value_domain_size)?),
+        EF::from(usize_to_field(metadata.matrix_nnz_padded)?),
+        EF::from(usize_to_field(layout_tag)?),
     ];
     challenger.observe_algebra_slice(&context);
     Ok(())
@@ -3233,6 +3920,7 @@ where
     let mut claim = initial_claim;
     let mut rounds = Vec::with_capacity(parent_point.len());
     let mut alpha = Vec::with_capacity(parent_point.len());
+    observe_sumcheck_claim::<F, EF, C>(challenger, claim);
     for _ in 0..parent_point.len() {
         let round = compute_grand_product_layer_round(&eq, &left, &right)?;
         challenger.observe_algebra_slice(&round.0);
@@ -3273,19 +3961,13 @@ where
     EF: ExtensionField<F>,
     C: FieldChallenger<F>,
 {
-    if proof.rounds.len() != parent_point.len() {
-        return Err(SpartanWhirError::InvalidRoundCount);
-    }
-
-    let mut claim = initial_claim;
-    let mut alpha = Vec::with_capacity(parent_point.len());
-    for round in &proof.rounds {
-        challenger.observe_algebra_slice(&round.0);
-        let challenge = challenger.sample_algebra_element::<EF>();
-        claim = round.evaluate_at(challenge, claim);
-        alpha.push(challenge);
-    }
-    Ok((MultilinearPoint(alpha), claim))
+    replay_compact_rounds::<F, EF, C, _>(
+        &proof.rounds,
+        initial_claim,
+        parent_point.len(),
+        3,
+        challenger,
+    )
 }
 
 fn compute_grand_product_layer_round<EF>(
@@ -3504,6 +4186,142 @@ where
     Ok((row_values, col_values))
 }
 
+fn spark_product_terms_for_axes<EF>(
+    tables: &SparkTables,
+    r_x: &MultilinearPoint<EF>,
+    r_y: &MultilinearPoint<EF>,
+    read_tables: &SparkReadTables<EF>,
+    beta: EF,
+    gamma: EF,
+    memory_domain_size: usize,
+) -> Result<(Vec<Vec<EF>>, Vec<Vec<EF>>), SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    // Organization inspired by ProveKit's SPARK prover (World Foundation, MIT;
+    // https://github.com/worldfnd/provekit): construct compressed product leaves
+    // directly instead of materializing an intermediate memory-tuple table.
+    validate_read_tables(tables, read_tables)?;
+    let row = spark_axis_product_terms(
+        tables.row_memory_size,
+        memory_domain_size,
+        &tables.rows,
+        &tables.read_ts_row,
+        &tables.audit_ts_row,
+        &r_x.0,
+        &read_tables.erow,
+        beta,
+        gamma,
+    )?;
+    let col = spark_axis_product_terms(
+        tables.col_memory_size,
+        memory_domain_size,
+        &tables.cols,
+        &tables.read_ts_col,
+        &tables.audit_ts_col,
+        &r_y.0,
+        &read_tables.ecol,
+        beta,
+        gamma,
+    )?;
+
+    Ok((
+        vec![row.read, row.write, col.read, col.write],
+        vec![row.init, row.audit, col.init, col.audit],
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spark_axis_product_terms<EF>(
+    memory_size: usize,
+    padded_memory_size: usize,
+    addrs: &[F],
+    read_ts: &[F],
+    audit_ts: &[F],
+    point: &[EF],
+    read_values: &[EF],
+    beta: EF,
+    gamma: EF,
+) -> Result<SparkAxisProductTerms<EF>, SpartanWhirError>
+where
+    EF: ExtensionField<F> + Send + Sync,
+{
+    if memory_size == 0
+        || !memory_size.is_power_of_two()
+        || padded_memory_size < memory_size
+        || !padded_memory_size.is_power_of_two()
+        || addrs.len() != read_ts.len()
+        || read_values.len() != addrs.len()
+        || audit_ts.len() != memory_size
+        || point.len() != log2_power_of_two(memory_size)
+    {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    let beta_squared = beta.square();
+    let memory_values = EqPolynomial::evals_from_point(point);
+    let mut init = vec![EF::ONE; padded_memory_size];
+    let mut audit = vec![EF::ONE; padded_memory_size];
+    if should_parallelize_spark_round(memory_size) {
+        init[..memory_size]
+            .par_iter_mut()
+            .zip(audit[..memory_size].par_iter_mut())
+            .enumerate()
+            .try_for_each(|(index, (init, audit))| {
+                let addr = EF::from(usize_to_field(index)?);
+                let value = memory_values[index];
+                *init = addr + beta * value - gamma;
+                *audit = *init + beta_squared * EF::from(audit_ts[index]);
+                Ok::<(), SpartanWhirError>(())
+            })?;
+    } else {
+        for index in 0..memory_size {
+            let addr = EF::from(usize_to_field(index)?);
+            let value = memory_values[index];
+            init[index] = addr + beta * value - gamma;
+            audit[index] = init[index] + beta_squared * EF::from(audit_ts[index]);
+        }
+    }
+    drop(memory_values);
+
+    let mut read = vec![EF::ZERO; addrs.len()];
+    let mut write = vec![EF::ZERO; addrs.len()];
+    if should_parallelize_spark_round(addrs.len()) {
+        read.par_iter_mut()
+            .zip(write.par_iter_mut())
+            .zip(addrs.par_iter())
+            .zip(read_ts.par_iter())
+            .zip(read_values.par_iter())
+            .try_for_each(|((((read, write), &addr), &timestamp), &value)| {
+                if addr.as_canonical_u32() as usize >= memory_size {
+                    return Err(SpartanWhirError::InvalidR1csShape);
+                }
+                *read = EF::from(addr) + beta * value + beta_squared * EF::from(timestamp) - gamma;
+                *write = *read + beta_squared;
+                Ok::<(), SpartanWhirError>(())
+            })?;
+    } else {
+        for index in 0..addrs.len() {
+            let addr = addrs[index];
+            if addr.as_canonical_u32() as usize >= memory_size {
+                return Err(SpartanWhirError::InvalidR1csShape);
+            }
+            read[index] = EF::from(addr)
+                + beta * read_values[index]
+                + beta_squared * EF::from(read_ts[index])
+                - gamma;
+            write[index] = read[index] + beta_squared;
+        }
+    }
+
+    Ok(SparkAxisProductTerms {
+        init,
+        read,
+        write,
+        audit,
+    })
+}
+
 fn spark_ops_product_terms<EF>(
     row: &SparkMemoryProductValues<EF>,
     col: &SparkMemoryProductValues<EF>,
@@ -3534,7 +4352,7 @@ fn spark_value_dotproducts<EF>(
     read_tables: &SparkReadTables<EF>,
 ) -> Result<Vec<SparkDotProductCircuit<EF>>, SpartanWhirError>
 where
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + Send + Sync,
 {
     validate_read_tables(tables, read_tables)?;
     let domain_size = tables.value_domain_size;
@@ -3563,6 +4381,42 @@ where
     Ok(dotproducts)
 }
 
+fn spark_base_value_dotproducts<EF>(
+    tables: &SparkTables,
+    read_tables: &SparkReadTables<EF>,
+) -> Result<SparkProverDotProductBatch<EF>, SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+{
+    validate_read_tables(tables, read_tables)?;
+    let domain_size = tables.value_domain_size;
+    if domain_size < 2 || !domain_size.is_power_of_two() {
+        return Err(SpartanWhirError::InvalidPolynomialLength);
+    }
+    let half = domain_size / 2;
+    let weights = [&tables.val_a, &tables.val_b, &tables.val_c]
+        .into_iter()
+        .flat_map(|values| {
+            [
+                SparkProverDotProductWeight::Base(values[..half].to_vec()),
+                SparkProverDotProductWeight::Base(values[half..].to_vec()),
+            ]
+        })
+        .collect();
+    Ok(SparkProverDotProductBatch {
+        lefts: vec![
+            read_tables.erow[..half].to_vec(),
+            read_tables.erow[half..].to_vec(),
+        ],
+        rights: vec![
+            read_tables.ecol[..half].to_vec(),
+            read_tables.ecol[half..].to_vec(),
+        ],
+        weights,
+        pair_indices: vec![0, 1, 0, 1, 0, 1],
+    })
+}
+
 fn push_split_value_dotproducts<EF>(
     dotproducts: &mut Vec<SparkDotProductCircuit<EF>>,
     vals: &[F],
@@ -3588,6 +4442,36 @@ where
         left: erow[half..].to_vec(),
         right: ecol[half..].to_vec(),
         weight: lift_base_values_to_extension(&vals[half..]),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+fn push_split_base_value_dotproducts<EF>(
+    dotproducts: &mut Vec<SparkProverDotProductCircuit<EF>>,
+    vals: &[F],
+    erow: &[EF],
+    ecol: &[EF],
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtensionField<F>,
+{
+    if vals.len() != erow.len() || vals.len() != ecol.len() || vals.len() < 2 {
+        return Err(SpartanWhirError::InvalidPolynomialLength);
+    }
+    let half = vals.len() / 2;
+    if half == 0 || vals.len() != half * 2 {
+        return Err(SpartanWhirError::InvalidPolynomialLength);
+    }
+    dotproducts.push(SparkProverDotProductCircuit {
+        left: erow[..half].to_vec(),
+        right: ecol[..half].to_vec(),
+        weight: SparkProverDotProductWeight::Base(vals[..half].to_vec()),
+    });
+    dotproducts.push(SparkProverDotProductCircuit {
+        left: erow[half..].to_vec(),
+        right: ecol[half..].to_vec(),
+        weight: SparkProverDotProductWeight::Base(vals[half..].to_vec()),
     });
     Ok(())
 }
@@ -4233,8 +5117,8 @@ fn ratio_ppm(num: usize, den: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SparseMatEntry;
-    use p3_field::PrimeCharacteristicRing;
+    use crate::{OcticBinExtension, SparseMatEntry};
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 
     fn entry(row: usize, col: usize, val: u32) -> SparseMatEntry<F> {
         SparseMatEntry {
@@ -4287,6 +5171,325 @@ mod tests {
     }
 
     #[test]
+    fn factored_product_round_matches_unfactored_round() {
+        type EF = OcticBinExtension;
+
+        let value = |seed: usize| {
+            EF::from_basis_coefficients_fn(|coordinate| {
+                F::from_u32((23 * seed + 7 * coordinate + 1) as u32)
+            })
+        };
+        let eq = (0..4).map(|index| value(10 + index)).collect::<Vec<_>>();
+        let lefts = (0..4)
+            .map(|circuit| {
+                (0..4)
+                    .map(|index| value(100 + 4 * circuit + index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let rights = (0..4)
+            .map(|circuit| {
+                (0..4)
+                    .map(|index| value(200 + 4 * circuit + index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let coeffs = (0..4).map(|index| value(300 + index)).collect::<Vec<_>>();
+
+        let optimized =
+            compute_batched_product_round(&eq, &lefts, &rights, &[], &[], &[], &[], &[], &coeffs)
+                .expect("optimized round computes");
+
+        let half = eq.len() / 2;
+        let reference = (0..half)
+            .map(|i| {
+                let (eq2, eq3) = extrapolate_at_two_and_three(eq[i], eq[i + half]);
+                let mut h0 = EF::ZERO;
+                let mut h2 = EF::ZERO;
+                let mut h3 = EF::ZERO;
+                for circuit in 0..lefts.len() {
+                    let (left2, left3) =
+                        extrapolate_at_two_and_three(lefts[circuit][i], lefts[circuit][i + half]);
+                    let (right2, right3) =
+                        extrapolate_at_two_and_three(rights[circuit][i], rights[circuit][i + half]);
+                    h0 += coeffs[circuit] * eq[i] * lefts[circuit][i] * rights[circuit][i];
+                    h2 += coeffs[circuit] * eq2 * left2 * right2;
+                    h3 += coeffs[circuit] * eq3 * left3 * right3;
+                }
+                (h0, h2, h3)
+            })
+            .fold((EF::ZERO, EF::ZERO, EF::ZERO), add_cubic_accumulators);
+        assert_eq!(
+            optimized,
+            CubicRoundPoly([reference.0, reference.1, reference.2])
+        );
+
+        let child_layers = lefts
+            .iter()
+            .zip(&rights)
+            .map(|(left, right)| {
+                left.iter()
+                    .zip(right)
+                    .flat_map(|(&left, &right)| [left, right])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let child_slices = child_layers.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let interleaved = compute_batched_product_round_from_child_layers(
+            &eq,
+            &child_slices,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &coeffs,
+        )
+        .expect("interleaved round computes");
+        assert_eq!(interleaved, optimized);
+    }
+
+    #[test]
+    fn direct_product_terms_match_reference_construction() {
+        type EF = OcticBinExtension;
+
+        let memory_size = 4;
+        let padded_memory_size = 8;
+        let addrs = [0, 1, 2, 3, 2, 0, 3, 1].map(F::from_u32);
+        let read_ts = [0, 0, 0, 0, 1, 1, 1, 1].map(F::from_u32);
+        let audit_ts = [2, 2, 2, 2].map(F::from_u32);
+        let point = [EF::from(F::from_u32(5)), EF::from(F::from_u32(9))];
+        let read_values = (0..addrs.len())
+            .map(|index| EF::from(F::from_u32((3 * index + 7) as u32)))
+            .collect::<Vec<_>>();
+        let beta = EF::from(F::from_u32(13));
+        let gamma = EF::from(F::from_u32(17));
+
+        let reference = spark_memory_product_values(
+            memory_size,
+            &addrs,
+            &read_ts,
+            &audit_ts,
+            &point,
+            &read_values,
+            beta,
+        )
+        .expect("reference terms build");
+        let direct = spark_axis_product_terms(
+            memory_size,
+            padded_memory_size,
+            &addrs,
+            &read_ts,
+            &audit_ts,
+            &point,
+            &read_values,
+            beta,
+            gamma,
+        )
+        .expect("direct terms build");
+
+        assert_eq!(
+            direct.read,
+            product_terms_minus_gamma(&reference.read, gamma)
+        );
+        assert_eq!(
+            direct.write,
+            product_terms_minus_gamma(&reference.write, gamma)
+        );
+        assert_eq!(
+            direct.init,
+            padded_product_terms_minus_gamma(&reference.init, gamma, padded_memory_size)
+                .expect("reference init pads")
+        );
+        assert_eq!(
+            direct.audit,
+            padded_product_terms_minus_gamma(&reference.audit, gamma, padded_memory_size)
+                .expect("reference audit pads")
+        );
+
+        let reference_terms = vec![
+            product_terms_minus_gamma(&reference.read, gamma),
+            product_terms_minus_gamma(&reference.write, gamma),
+            padded_product_terms_minus_gamma(&reference.init, gamma, padded_memory_size)
+                .expect("reference init pads"),
+            padded_product_terms_minus_gamma(&reference.audit, gamma, padded_memory_size)
+                .expect("reference audit pads"),
+        ];
+        let direct_terms = vec![direct.read, direct.write, direct.init, direct.audit];
+        let mut reference_challenger = crate::poseidon_challenger();
+        let reference_proof = prove_spark_batched_product_owned(
+            reference_terms,
+            Vec::new(),
+            &mut reference_challenger,
+        )
+        .expect("reference product proof succeeds");
+        let mut direct_challenger = crate::poseidon_challenger();
+        let direct_proof =
+            prove_spark_batched_product_owned(direct_terms, Vec::new(), &mut direct_challenger)
+                .expect("direct product proof succeeds");
+
+        assert_eq!(direct_proof, reference_proof);
+        assert_eq!(
+            direct_challenger.sample_algebra_element::<EF>(),
+            reference_challenger.sample_algebra_element::<EF>()
+        );
+    }
+
+    #[test]
+    fn base_weight_first_round_preserves_proof_and_transcript() {
+        type EF = OcticBinExtension;
+
+        let value = |seed: usize| {
+            EF::from_basis_coefficients_fn(|coefficient| {
+                F::from_u32((17 * seed + 5 * coefficient + 1) as u32)
+            })
+        };
+        let product_terms = (0..4)
+            .map(|product| {
+                (0..32)
+                    .map(|index| value(32 * product + index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let base_dotproducts = (0..6)
+            .map(|dotproduct| {
+                let weight = (0..16)
+                    .map(|index| F::from_u32((11 * dotproduct + 3 * index + 2) as u32))
+                    .collect::<Vec<_>>();
+                SparkProverDotProductCircuit {
+                    left: (0..16)
+                        .map(|index| value(200 + 32 * dotproduct + index))
+                        .collect(),
+                    right: (0..16)
+                        .map(|index| value(216 + 32 * dotproduct + index))
+                        .collect(),
+                    weight: SparkProverDotProductWeight::Base(weight),
+                }
+            })
+            .collect::<Vec<_>>();
+        let extension_dotproducts = base_dotproducts
+            .iter()
+            .map(|dotproduct| SparkProverDotProductCircuit {
+                left: dotproduct.left.clone(),
+                right: dotproduct.right.clone(),
+                weight: match &dotproduct.weight {
+                    SparkProverDotProductWeight::Base(weight) => {
+                        SparkProverDotProductWeight::Extension(
+                            weight.iter().copied().map(EF::from).collect(),
+                        )
+                    }
+                    SparkProverDotProductWeight::Extension(_) => unreachable!(),
+                },
+            })
+            .collect();
+
+        let mut base_challenger = crate::poseidon_challenger();
+        let base = prove_spark_batched_product_owned(
+            product_terms.clone(),
+            base_dotproducts,
+            &mut base_challenger,
+        )
+        .expect("base-weight product proof succeeds");
+        let mut extension_challenger = crate::poseidon_challenger();
+        let extension = prove_spark_batched_product_owned(
+            product_terms,
+            extension_dotproducts,
+            &mut extension_challenger,
+        )
+        .expect("extension-weight product proof succeeds");
+
+        assert_eq!(base, extension);
+        assert_eq!(
+            base_challenger.sample_algebra_element::<EF>(),
+            extension_challenger.sample_algebra_element::<EF>()
+        );
+    }
+
+    #[test]
+    fn shared_read_dotproducts_preserve_proof_and_transcript() {
+        type EF = OcticBinExtension;
+
+        let extension_value = |seed: usize| {
+            EF::from_basis_coefficients_fn(|coordinate| {
+                F::from_u32((19 * seed + 7 * coordinate + 3) as u32)
+            })
+        };
+        let product_terms = (0..4)
+            .map(|product| {
+                (0..32)
+                    .map(|index| extension_value(32 * product + index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let erow = (0..32)
+            .map(|index| extension_value(200 + index))
+            .collect::<Vec<_>>();
+        let ecol = (0..32)
+            .map(|index| extension_value(300 + index))
+            .collect::<Vec<_>>();
+        let matrix_weights = (0..3)
+            .map(|matrix| {
+                (0..32)
+                    .map(|index| F::from_u32((13 * matrix + 5 * index + 1) as u32))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut independent = Vec::with_capacity(6);
+        for weights in &matrix_weights {
+            push_split_base_value_dotproducts(&mut independent, weights, &erow, &ecol)
+                .expect("independent dotproducts build");
+        }
+        let half = erow.len() / 2;
+        let shared = SparkProverDotProductBatch {
+            lefts: vec![erow[..half].to_vec(), erow[half..].to_vec()],
+            rights: vec![ecol[..half].to_vec(), ecol[half..].to_vec()],
+            weights: matrix_weights
+                .iter()
+                .flat_map(|weights| {
+                    [
+                        SparkProverDotProductWeight::Base(weights[..half].to_vec()),
+                        SparkProverDotProductWeight::Base(weights[half..].to_vec()),
+                    ]
+                })
+                .collect(),
+            pair_indices: vec![0, 1, 0, 1, 0, 1],
+        };
+
+        let mut independent_challenger = crate::poseidon_challenger();
+        let independent_proof = prove_spark_batched_product_owned(
+            product_terms.clone(),
+            independent,
+            &mut independent_challenger,
+        )
+        .expect("independent product proof succeeds");
+        let mut split_challenger = crate::poseidon_challenger();
+        let split_proof = prove_spark_batched_product_impl(
+            product_terms.clone(),
+            shared.clone(),
+            false,
+            &mut split_challenger,
+        )
+        .expect("split product proof succeeds");
+        let mut shared_challenger = crate::poseidon_challenger();
+        let shared_proof = prove_spark_batched_product_with_dotproducts(
+            product_terms,
+            shared,
+            &mut shared_challenger,
+        )
+        .expect("shared product proof succeeds");
+
+        assert_eq!(shared_proof, independent_proof);
+        assert_eq!(shared_proof, split_proof);
+        let shared_next = shared_challenger.sample_algebra_element::<EF>();
+        assert_eq!(
+            shared_next,
+            independent_challenger.sample_algebra_element::<EF>()
+        );
+        assert_eq!(shared_next, split_challenger.sample_algebra_element::<EF>());
+    }
+
+    #[test]
     fn joint_preprocessing_pads_and_tags_slots() {
         let shape = shape_with_entries(
             4,
@@ -4336,6 +5539,33 @@ mod tests {
         assert_eq!(report.per_matrix.setup_commitments, 2);
         assert_eq!(report.per_matrix.per_proof_commitments, 1);
         assert!(report.joint.wasted_value_slot_ratio_ppm > 0);
+    }
+
+    #[test]
+    fn table_metadata_preserves_verifier_dimensions() {
+        let shape = shape_with_entries(
+            4,
+            5,
+            vec![entry(0, 0, 1), entry(1, 1, 2)],
+            vec![entry(0, 0, 3)],
+            vec![entry(2, 2, 4)],
+        );
+        let tables = preprocess_spark_tables(&shape).expect("preprocessing succeeds");
+        let metadata = tables.metadata();
+
+        assert_eq!(metadata.layout, tables.layout);
+        assert_eq!(metadata.row_memory_size, tables.row_memory_size);
+        assert_eq!(metadata.col_memory_size, tables.col_memory_size);
+        assert_eq!(metadata.value_domain_size, tables.value_domain_size);
+        assert_eq!(metadata.matrix_nnz_padded, tables.matrix_nnz_padded);
+        metadata.validate().expect("metadata validates");
+
+        let mut malformed = metadata;
+        malformed.value_domain_size = 1;
+        assert_eq!(
+            malformed.validate(),
+            Err(SpartanWhirError::InvalidR1csShape)
+        );
     }
 
     #[test]

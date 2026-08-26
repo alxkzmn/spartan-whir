@@ -1,4 +1,21 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityBoundComponent {
+    ExtensionField,
+    WhirArguments,
+    PoseidonCommitments,
+}
+
+impl core::fmt::Display for SecurityBoundComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ExtensionField => write!(f, "extension field"),
+            Self::WhirArguments => write!(f, "WHIR arguments"),
+            Self::PoseidonCommitments => write!(f, "Poseidon commitments"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidConfigReason {
     Generic,
     ZeroFoldingFactor,
@@ -23,7 +40,36 @@ pub enum InvalidConfigReason {
         base_two_adicity: usize,
         min_first_folding_factor: usize,
     },
+    ZkWhirMaskLengthTooSmall {
+        ell_zk: usize,
+    },
+    ZkWhirMaskRateTooHigh,
+    ZkWhirRandomnessExceedsSlack {
+        round: usize,
+        randomness: usize,
+        slack: usize,
+    },
+    ZkWhirMaskDomainExceedsTwoAdicity {
+        log_domain_size: usize,
+        two_adicity: usize,
+    },
+    IncompatibleApplicationMaskDomains {
+        inner_domain_size: usize,
+        outer_domain_size: usize,
+    },
+    FullZkSecurityExceedsExtensionField {
+        requested_bits: u32,
+        extension_field_bits: usize,
+        soundness_error_terms: usize,
+    },
+    ComposedSecurityUnavailable {
+        requested_bits: u32,
+        attainable_bits: u32,
+        dominant_component: SecurityBoundComponent,
+    },
+    ComposedSecurityBudgetOverflow,
     MissingDerivedProverData,
+    UnauthenticatedSparkVerifyingKey,
 }
 
 impl core::fmt::Display for InvalidConfigReason {
@@ -67,7 +113,58 @@ impl core::fmt::Display for InvalidConfigReason {
                 f,
                 "folded domain log size {log_folded_domain_size} exceeds base two-adicity {base_two_adicity}; first folding factor must be at least {min_first_folding_factor}"
             ),
+            Self::ZkWhirMaskLengthTooSmall { ell_zk } => write!(
+                f,
+                "ZK WHIR mask length {ell_zk} is below the minimum of 3"
+            ),
+            Self::ZkWhirMaskRateTooHigh => {
+                write!(f, "ZK WHIR mask log inverse rate must be at least 1")
+            }
+            Self::ZkWhirRandomnessExceedsSlack {
+                round,
+                randomness,
+                slack,
+            } => write!(
+                f,
+                "ZK WHIR round {round} randomness rows {randomness} exceed slack {slack}"
+            ),
+            Self::ZkWhirMaskDomainExceedsTwoAdicity {
+                log_domain_size,
+                two_adicity,
+            } => write!(
+                f,
+                "ZK WHIR mask domain 2^{log_domain_size} exceeds extension-field two-adicity 2^{two_adicity}"
+            ),
+            Self::IncompatibleApplicationMaskDomains {
+                inner_domain_size,
+                outer_domain_size,
+            } => write!(
+                f,
+                "inner and outer application masks require different domains ({inner_domain_size} and {outer_domain_size})"
+            ),
+            Self::FullZkSecurityExceedsExtensionField {
+                requested_bits,
+                extension_field_bits,
+                soundness_error_terms,
+            } => write!(
+                f,
+                "full-ZK target of {requested_bits} bits is not supported by the {extension_field_bits}-bit extension field with {soundness_error_terms} algebraic error terms"
+            ),
+            Self::ComposedSecurityUnavailable {
+                requested_bits,
+                attainable_bits,
+                dominant_component,
+            } => write!(
+                f,
+                "composed target of {requested_bits} bits exceeds the attainable {attainable_bits} bits limited by {dominant_component}"
+            ),
+            Self::ComposedSecurityBudgetOverflow => {
+                write!(f, "composed security budget arithmetic overflowed")
+            }
             Self::MissingDerivedProverData => write!(f, "derived prover data is missing"),
+            Self::UnauthenticatedSparkVerifyingKey => {
+                write!(f, "SPARK verifying key commitments are not authenticated")
+            }
         }
     }
 }
@@ -80,13 +177,15 @@ pub enum SpartanWhirError {
     InvalidPublicInputLength,
     PaddingError,
     SecurityBelowMinimum,
+    SecurityAboveMaximum,
     MerkleSecurityBelowMinimum,
+    MerkleSecurityAboveMaximum,
     TranscriptMismatch,
     SumcheckFailed,
+    SparkMatrixEvaluationMismatch,
     PcsVerificationFailed,
     ProofDecodeFailed,
     ProofKindMismatch,
-    UnsupportedMode,
     UnsupportedStatementType,
     InvalidConfig(InvalidConfigReason),
     WhirCommitFailed,
@@ -127,13 +226,22 @@ impl core::fmt::Display for SpartanWhirError {
             Self::InvalidPublicInputLength => write!(f, "invalid public input length"),
             Self::PaddingError => write!(f, "padding error"),
             Self::SecurityBelowMinimum => write!(f, "security level below minimum"),
+            Self::SecurityAboveMaximum => write!(f, "security level above supported maximum"),
             Self::MerkleSecurityBelowMinimum => write!(f, "merkle security below minimum"),
+            Self::MerkleSecurityAboveMaximum => {
+                write!(f, "merkle security above supported maximum")
+            }
             Self::TranscriptMismatch => write!(f, "transcript mismatch"),
             Self::SumcheckFailed => write!(f, "sumcheck verification failed"),
+            Self::SparkMatrixEvaluationMismatch => {
+                write!(
+                    f,
+                    "SPARK matrix evaluation does not match the inner sumcheck"
+                )
+            }
             Self::PcsVerificationFailed => write!(f, "PCS verification failed"),
             Self::ProofDecodeFailed => write!(f, "proof decode failed"),
             Self::ProofKindMismatch => write!(f, "proof kind mismatch"),
-            Self::UnsupportedMode => write!(f, "unsupported mode"),
             Self::UnsupportedStatementType => write!(f, "unsupported statement type"),
             Self::InvalidConfig(reason) => write!(f, "invalid configuration: {reason}"),
             Self::WhirCommitFailed => write!(f, "WHIR commitment failed"),

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{engine::F, InvalidConfigReason, SecurityConfig, SpartanWhirError, WhirParams};
 
+pub const DEFAULT_ZK_ELL: usize = 3;
+pub const DEFAULT_ZK_MASK_LOG_INV_RATE: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WhirPcsConfig {
     pub num_variables: usize,
@@ -17,6 +20,29 @@ impl Default for WhirPcsConfig {
             security: SecurityConfig::default(),
             whir: WhirParams::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZkWhirPcsConfig {
+    pub base: WhirPcsConfig,
+    pub ell_zk: usize,
+    pub mask_log_inv_rate: usize,
+}
+
+impl Default for ZkWhirPcsConfig {
+    fn default() -> Self {
+        Self {
+            base: WhirPcsConfig::default(),
+            ell_zk: DEFAULT_ZK_ELL,
+            mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
+        }
+    }
+}
+
+impl ZkWhirPcsConfig {
+    pub fn validate(&self) -> Result<(), SpartanWhirError> {
+        self.base.validate()
     }
 }
 

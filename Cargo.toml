@@ -8,28 +8,31 @@ name = "spartan_whir"
 path = "src/lib.rs"
 
 [dependencies]
-p3-challenger = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-commit = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-dft = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-keccak = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-koala-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-maybe-rayon = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-multilinear-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-sumcheck = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-symmetric = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-util = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
-p3-whir = { git = "https://github.com/Plonky3/Plonky3.git", rev = "fc7d591e6ec54b9220ed120e1ba0f8978a9c2391" }
+p3-challenger = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-commit = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-dft = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-field = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-baby-bear = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-keccak = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-koala-bear = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-matrix = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-maybe-rayon = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-merkle-tree = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-multilinear-util = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-sumcheck = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-symmetric = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-util = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+p3-whir = { git = "https://github.com/alxkzmn/Plonky3.git", rev = "f64ae15da3807388b1a4e0a89a4fde8fdcdff515" }
+libloading = "0.8"
+bincode = "1.3"
+num-bigint = { version = "0.5.1", default-features = false }
+rand = { version = "0.10", default-features = false, features = ["std_rng", "sys_rng"] }
 serde = { version = "1", default-features = false, features = ["alloc", "derive", "rc"] }
 serde_json = "1.0"
 tracing = { version = "0.1.44", default-features = false }
 
 [features]
 default = []
-circom = []
 # Enables data-parallelism in hot paths via rayon (currently affects the
 # grinding loop in `CanonicalSerializingChallenger32::grind`, plus any
 # `into_par_iter` calls reachable from this crate). Without this feature,
@@ -39,32 +42,47 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bin]]
 name = "circom-adapter-check"
 path = "src/bin/circom-adapter-check.rs"
-required-features = ["circom"]
 
 [[bin]]
 name = "poseidon-schedule-heldout"
 path = "src/bin/poseidon-schedule-heldout.rs"
-required-features = ["circom"]
 
 [[bin]]
 name = "spark-sha256-layouts"
 path = "src/bin/spark-sha256-layouts.rs"
-required-features = ["circom"]
 
 [[example]]
-name = "sha256_512b_circom"
-path = "examples/sha256_512b_circom.rs"
-required-features = ["circom"]
+name = "sha256_512b"
+path = "examples/sha256_512b.rs"
 
 [[example]]
-name = "sha256_circom_bench"
-path = "examples/sha256_circom_bench.rs"
-required-features = ["circom"]
+name = "sha256_bench"
+path = "examples/sha256_bench.rs"
+
+[[example]]
+name = "end_to_end"
+path = "examples/end_to_end.rs"
 
 [dev-dependencies]
-bincode = "1.3"
 criterion = "0.8"
-libloading = "0.8"
 sha2 = "0.10"
 tracing = { version = "0.1.44", features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+trybuild = "1"
+
+[[bench]]
+name = "sumcheck_replay"
+harness = false
+
+[[bench]]
+name = "sha256_full_zk"
+harness = false
+required-features = ["parallel"]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+
+[profile.bench]
+codegen-units = 1
+lto = "fat"

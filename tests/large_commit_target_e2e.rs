@@ -1,15 +1,19 @@
 mod common;
 
+use rand::distr::{Distribution, StandardUniform};
 use spartan_whir::{
     engine::ExtField, generate_satisfiable_fixture_for_pow2, MatrixClosingMode, Plonky3WhirPcs,
     PoseidonEngine, SpartanProtocol, SpartanSnarkConfig,
 };
 
-fn run_target_e2e<EF: ExtField>(
+fn run_target_e2e<EF>(
     k: usize,
     security: &spartan_whir::SecurityConfig,
     whir_params: &spartan_whir::WhirParams,
-) {
+) where
+    EF: ExtField,
+    StandardUniform: Distribution<EF>,
+{
     let fixture =
         generate_satisfiable_fixture_for_pow2(k).expect("synthetic fixture generation succeeds");
 
@@ -19,16 +23,15 @@ fn run_target_e2e<EF: ExtField>(
             matrix_closing: MatrixClosingMode::DirectSparse,
             security: *security,
             whir_params: whir_params.clone(),
-            pcs_config: common::phase3_pcs_config(),
             spark_whir_params: None,
         },
     )
     .expect("setup succeeds");
 
     assert_eq!(pk.shape_canonical.num_vars, 1usize << k);
-    assert_eq!(vk.shape_canonical.num_vars, 1usize << k);
+    assert_eq!(vk.shape_canonical().num_vars, 1usize << k);
     assert_eq!(pk.pcs_config.num_variables, k);
-    assert_eq!(vk.pcs_config.num_variables, k);
+    assert_eq!(vk.pcs_config().num_variables, k);
 
     let mut prover_challenger = spartan_whir::poseidon_challenger();
     let (instance, proof) = SpartanProtocol::<PoseidonEngine<EF>, Plonky3WhirPcs>::prove(

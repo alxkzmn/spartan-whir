@@ -35,7 +35,9 @@ template Sha256(nBits) {
 
     signal paddedIn[nBlocks*512];
 
+    // The SHA-256 bit-operation rows are determined on Boolean inputs.
     for (k=0; k<nBits; k++) {
+        in[k] * (in[k] - 1) === 0;
         paddedIn[k] <== in[k];
     }
     paddedIn[nBits] <== 1;

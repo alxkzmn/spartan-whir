@@ -1,4 +1,4 @@
-#### Circom Test Circuits
+#### Test Circuits
 
 `tiny_arithmetic.circom` and `non_power_of_two.circom` have fixed generated
 fixtures under `../fixtures/circom/`. Regenerate them with:
@@ -17,22 +17,42 @@ CC='g++ -L/path/to/gmp/lib' CFLAGS='-std=c++11 -O3 -I. -I/path/to/gmp/include' \
   tests/circuits/regenerate_fixtures.sh ../circom/target/debug/circom
 ```
 
-`sum_of_squares.circom` is intentionally not committed as a binary fixture: it
-is the 65,536-constraint witness-performance circuit used by
-`scripts/bench_sum_of_squares_witness.sh`.
-
 `sha256_128b.circom`, `sha256_256b.circom`, `sha256_512b.circom`,
 `sha256_1024b.circom`, and `sha256_2048b.circom` are real fixed-size SHA-256
-frontend circuits. They use the `koalabear-sha256/Sha256Bytes(N_BYTES)` wrapper
-around the adapted SHA-256 bit circuit. Run the 512-byte compile, `.wtns`
-import, prove, and verify smoke flow with:
+frontend circuits. `Sha256Bytes(N_BYTES)` takes `8 * N_BYTES` Boolean field
+limbs in most-significant-bit-first byte order. The circuit constrains every
+input limb with `x * (x - 1) = 0`, and the linked witness generator supplies
+those limbs from byte strings.
+Run the 512-byte compile, `.wtns` import, prove, and verify smoke flow with:
 
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
-  cargo run --release -p spartan-whir --features circom --example sha256_512b_circom
+  cargo run --release -p spartan-whir --example sha256_512b
 ```
 
-When the example generates artifacts itself, it removes the previous
+`optimized/sha256_2048b.circom` is a separate 2048-byte circuit using
+single-row XOR and majority encodings, fused modular additions, and the
+determined two-input XOR specialization for the zero tail of each lower sigma.
+Its fixed final padding block uses a compile-time message schedule. The
+corresponding components live in `koalabear-sha256-optimized/`. The default
+`sha256_2048b.circom` remains available for cross-system comparisons. Compile
+the optimized circuit and build its linked witness library in a separate cache
+root so the Criterion benchmark can select it through `SHA256_BENCH_WORKDIR`:
+
+```sh
+tests/circuits/build_sha256_optimized_fixture.sh \
+  ../circom/target/release/circom
+```
+
+Then run Criterion with:
+
+```sh
+RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
+SHA256_BENCH_WORKDIR=target/sha256-optimized-cache \
+cargo bench --features parallel --bench sha256_full_zk
+```
+
+When the example generates artifacts itself, it removes the cached
 `sha256_512b.r1cs`, `sha256_512b.wtns`, `sha256_512b_input.json`, and
 `sha256_512b_cpp/` outputs from its workdir before recompiling. If
 `SHA256_512B_R1CS` and `SHA256_512B_WTNS` are set, those explicit paths are used
@@ -49,21 +69,17 @@ Run the size-range benchmark with:
 ```sh
 CIRCOM_BIN=../circom/target/debug/circom \
   SHA256_BENCH_SIZES=128,256,512,1024,2048 \
-  cargo run --release -p spartan-whir --features circom,parallel --example sha256_circom_bench
+  cargo run --release -p spartan-whir --features parallel --example sha256_bench
 ```
 
 The benchmark reports constraints, constraints per SHA block, wires,
 `witness_and_prove_ms`, verify time, and Spark layout stats.
 `witness_and_prove_ms` starts at the linked native witness generator and ends at
-proof output; this is the only deployment-shaped prover timing for these
-circuits. It derives the Spark folding factor from the packed Spark table size,
-so larger circuits can cross WHIR domain cliffs without manual retuning.
-
-Set `SHA256_BENCH_MODES=spark,spark-independent` to compare the legacy shared
-Spark WHIR schedule against independently selected witness, fixed-value,
-fixed-audit, and read-table schedules. `spark-independent` is the mode to use
-for larger Spark layouts whose read-table commitment crosses the KoalaBear
-two-adicity bound under the legacy shared schedule.
+proof output. This `Instant` timing is diagnostic; use the Criterion benchmark
+for statistical comparisons. Spark uses separate selected schedules for its
+witness, fixed-value, fixed-audit, and read-table commitments. Set
+`SHA256_BENCH_MODES=direct,spark` and
+`SHA256_BENCH_PROOF_MODES=no-zk,full-zk` to run all four protocol modes.
 
 Set `SHA256_BENCH_PROFILE=1` to emit phase timers for the
 `witness_and_prove` path. The Spark read-table profile is split into

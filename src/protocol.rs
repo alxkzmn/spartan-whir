@@ -2,29 +2,56 @@ use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_commit::ExtensionMmcs;
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::{point::Point, poly::Poly};
+use p3_sumcheck::{
+    product_polynomial::ProductPolynomial,
+    strategy::{SumcheckProver, VariableOrder},
+    zk::{mask_residual_covectors_from_shape, ZkSumcheckData, ZkVerifier},
+};
 use p3_symmetric::{CryptographicHasher, Hash};
+use p3_whir::pcs::zk::{
+    CommittedMaskGroup, CommittedMaskGroupProverData, CommittedRelation, HidingWhirProver,
+    HidingWhirVerifier, MaskGroupShape,
+};
+use rand::{
+    distr::{Distribution, StandardUniform},
+    rngs::StdRng,
+    CryptoRng, Rng, RngExt,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{ExtField, KeccakEngine, PoseidonEngine, F};
+use crate::engine::{ExtField, KeccakEngine, PoseidonChallenger, PoseidonEngine, F};
 use crate::error::InvalidConfigReason;
+use crate::plonky3_whir_pcs::{
+    build_poseidon_full_zk_pcs, observe_poseidon_relation_domain_separator, PoseidonCommitment,
+    PoseidonMmcs, PoseidonRelationProof,
+};
+use crate::poseidon::{PoseidonZkProvingKey, PoseidonZkVerifyingKey};
 use crate::profiling::profile_scope;
 use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
+use crate::security::{
+    derive_direct_component_security, derive_spark_component_security, SpartanSoundnessMode,
+};
 use crate::sumcheck::{
     prove_inner_base_first_unchecked, prove_outer_split_eq_base_first_owned_unchecked,
+    prove_outer_zk_base_first_unchecked, verify_outer_zk,
 };
 use crate::{
     compute_spark_read_tables, preprocess_spark_tables, prove_inner, prove_outer,
     prove_spark_batched_memory_products_with_read_tables_and_leaf_claims, verify_inner,
     verify_outer, verify_spark_batched_memory_leaf_claims_with_openings,
-    verify_spark_batched_memory_product_claims, CommittedPolynomialView, DomainSeparator,
-    EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint, NoopObserver,
-    OuterSumcheckProof, PcsStatementBuilder, PointEvalClaim, ProtocolObserver, ProtocolPcs,
-    ProtocolStage, R1csInstance, R1csShape, R1csWitness, SecurityConfig,
-    SparkBatchedMemoryProductsLeafClaims, SparkBatchedMemoryProductsProof,
-    SparkFixedTableOpeningEvals, SparkReadTableOpeningEvals, SparkReadTables, SpartanWhirEngine,
-    SpartanWhirError, WhirParams, WhirPcsConfig,
+    verify_spark_batched_memory_product_claims_with_metadata, CommittedPolynomialView,
+    DomainSeparator, EqPolynomial, InnerSumcheckProof, MatrixClosingMode, MlePcs, MultilinearPoint,
+    NoZkPcs, NoopObserver, OuterSumcheckProof, PcsStatementBuilder, Plonky3WhirPcs, PointEvalClaim,
+    ProtocolObserver, ProtocolPcs, ProtocolStage, R1csInstance, R1csShape, R1csWitness,
+    SecurityConfig, SparkBatchedMemoryProductsLeafClaims, SparkBatchedMemoryProductsProof,
+    SparkFixedTableOpeningEvals, SparkLayoutKind, SparkReadPcs, SparkReadTableOpeningEvals,
+    SparkReadTables, SparkTableMetadata, SparkTables, SpartanWhirEngine, SpartanWhirError,
+    WhirParams, WhirPcsConfig, ZkOuterSumcheckProof, ZkWhirPcsConfig,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -61,19 +88,80 @@ pub struct ProvingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     deserialize = "E::F: Deserialize<'de>, Pcs::Commitment: Deserialize<'de>, Pcs::Config: Deserialize<'de>"
 ))]
 pub struct VerifyingKey<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
-    pub matrix_closing: MatrixClosingMode,
-    pub shape_canonical: R1csShape<E::F>,
-    pub num_cons_unpadded: usize,
-    pub num_vars_unpadded: usize,
-    pub num_io: usize,
-    pub security: SecurityConfig,
-    pub whir_params: WhirParams,
-    pub pcs_config: Pcs::Config,
-    pub spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
-    pub spark_pcs_configs: Option<SparkPcsConfigs>,
-    pub domain_separator: DomainSeparator,
+    matrix_closing: MatrixClosingMode,
+    shape_canonical: R1csShape<E::F>,
+    num_cons_unpadded: usize,
+    num_vars_unpadded: usize,
+    num_io: usize,
+    security: SecurityConfig,
+    whir_params: WhirParams,
+    pcs_config: Pcs::Config,
+    /// SPARK fixed-table Merkle roots produced at setup.
+    spark_fixed_commitments: Option<SparkFixedCommitments<Pcs::Commitment>>,
+    spark_pcs_configs: Option<SparkPcsConfigs>,
+    #[serde(default)]
+    spark_table_metadata: Option<SparkTableMetadata>,
+    domain_separator: DomainSeparator,
     pub observer: Option<NoopObserver>,
+    /// Setup authenticates this binding directly. Serialization omits the
+    /// marker, so a restored SPARK key must re-authenticate before use.
+    #[serde(skip)]
+    spark_fixed_commitments_authenticated: bool,
     marker: PhantomData<(E, Pcs)>,
+}
+
+impl<E, Pcs> VerifyingKey<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+{
+    pub fn matrix_closing(&self) -> MatrixClosingMode {
+        self.matrix_closing
+    }
+
+    pub fn shape_canonical(&self) -> &R1csShape<E::F> {
+        &self.shape_canonical
+    }
+
+    pub fn num_cons_unpadded(&self) -> usize {
+        self.num_cons_unpadded
+    }
+
+    pub fn num_vars_unpadded(&self) -> usize {
+        self.num_vars_unpadded
+    }
+
+    pub fn num_io(&self) -> usize {
+        self.num_io
+    }
+
+    pub fn security(&self) -> SecurityConfig {
+        self.security
+    }
+
+    pub fn whir_params(&self) -> &WhirParams {
+        &self.whir_params
+    }
+
+    pub fn pcs_config(&self) -> &Pcs::Config {
+        &self.pcs_config
+    }
+
+    pub fn spark_fixed_commitments(&self) -> Option<&SparkFixedCommitments<Pcs::Commitment>> {
+        self.spark_fixed_commitments.as_ref()
+    }
+
+    pub fn spark_pcs_configs(&self) -> Option<&SparkPcsConfigs> {
+        self.spark_pcs_configs.as_ref()
+    }
+
+    pub fn spark_table_metadata(&self) -> Option<SparkTableMetadata> {
+        self.spark_table_metadata
+    }
+
+    pub fn domain_separator(&self) -> &DomainSeparator {
+        &self.domain_separator
+    }
 }
 
 impl<E, Pcs> ProvingKey<E, Pcs>
@@ -110,6 +198,56 @@ pub struct SpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub pcs_proof: Pcs::Proof,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
+pub struct ZkSpartanProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    pub application_mask_commitment: PoseidonCommitment,
+    pub outer_sumcheck: ZkOuterSumcheckProof<Ext>,
+    pub outer_claims: (Ext, Ext, Ext),
+    pub outer_mask_evals: Vec<Ext>,
+    pub inner_sumcheck: ZkSumcheckData<F, Ext>,
+    pub inner_sumcheck_mask_commitment: PoseidonCommitment,
+    pub matrix_closing: ZkMatrixClosingProof<Ext>,
+    pub pcs_proof: PoseidonRelationProof<Ext>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
+pub struct ZkSparkClosingProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    pub spark_products: SparkBatchedMemoryProductsProof<Ext>,
+    pub spark_fixed_openings: SparkFixedOpeningProof<PoseidonEngine<Ext>, Plonky3WhirPcs>,
+    pub spark_read_openings: SparkReadOpeningProof<PoseidonEngine<Ext>, Plonky3WhirPcs>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
+pub enum ZkMatrixClosingProof<Ext: ExtField>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    DirectSparse,
+    Spark(ZkSparkClosingProof<Ext>),
+}
+
+impl<Ext> ZkMatrixClosingProof<Ext>
+where
+    Ext: ExtField,
+    StandardUniform: Distribution<Ext>,
+{
+    pub fn mode(&self) -> MatrixClosingMode {
+        match self {
+            Self::DirectSparse => MatrixClosingMode::DirectSparse,
+            Self::Spark(_) => MatrixClosingMode::Spark,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
     serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
@@ -144,6 +282,30 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<E>,
 }
 
+impl<E, Pcs> Clone for SparkFixedOpeningProof<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+    E::EF: Clone,
+    Pcs::Commitment: Clone,
+    Pcs::Proof: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            value_num_variables: self.value_num_variables,
+            value_column_bits: self.value_column_bits,
+            audit_num_variables: self.audit_num_variables,
+            audit_column_bits: self.audit_column_bits,
+            value_commitment: self.value_commitment.clone(),
+            audit_commitment: self.audit_commitment.clone(),
+            evals: self.evals.clone(),
+            value_proof: self.value_proof.clone(),
+            audit_proof: self.audit_proof.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
     serialize = "E::EF: Serialize, Pcs::Commitment: Serialize, Pcs::Proof: Serialize",
@@ -152,17 +314,40 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 pub struct SparkReadOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub num_variables: usize,
     pub column_bits: usize,
-    pub erow_commitment: Pcs::Commitment,
-    pub ecol_commitment: Pcs::Commitment,
+    pub commitment: Pcs::Commitment,
     pub erow_low_evals: Vec<E::EF>,
     pub erow_high_evals: Vec<E::EF>,
     pub ecol_low_evals: Vec<E::EF>,
     pub ecol_high_evals: Vec<E::EF>,
     pub erow_ops_evals: Vec<E::EF>,
     pub ecol_ops_evals: Vec<E::EF>,
-    pub erow_proof: Pcs::Proof,
-    pub ecol_proof: Pcs::Proof,
+    pub proof: Pcs::Proof,
     marker: PhantomData<E>,
+}
+
+impl<E, Pcs> Clone for SparkReadOpeningProof<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+    E::EF: Clone,
+    Pcs::Commitment: Clone,
+    Pcs::Proof: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            num_variables: self.num_variables,
+            column_bits: self.column_bits,
+            commitment: self.commitment.clone(),
+            erow_low_evals: self.erow_low_evals.clone(),
+            erow_high_evals: self.erow_high_evals.clone(),
+            ecol_low_evals: self.ecol_low_evals.clone(),
+            ecol_high_evals: self.ecol_high_evals.clone(),
+            erow_ops_evals: self.erow_ops_evals.clone(),
+            ecol_ops_evals: self.ecol_ops_evals.clone(),
+            proof: self.proof.clone(),
+            marker: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,7 +369,6 @@ pub struct SpartanSnarkConfig {
     pub matrix_closing: MatrixClosingMode,
     pub security: SecurityConfig,
     pub whir_params: WhirParams,
-    pub pcs_config: WhirPcsConfig,
     #[serde(default)]
     pub spark_whir_params: Option<SparkWhirParams>,
 }
@@ -208,15 +392,13 @@ impl<E: SpartanWhirEngine, Pcs: MlePcs<E>> SpartanProofKind<E, Pcs> {
     }
 }
 
-struct SparkReadProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
-    erow: Pcs::ProverData,
-    ecol: Pcs::ProverData,
+struct SparkReadProverData<E: SpartanWhirEngine, Pcs: SparkReadPcs<E>> {
+    batch: Pcs::ReadProverData,
     marker: PhantomData<E>,
 }
 
 struct SparkReadCommitments<C> {
-    erow: C,
-    ecol: C,
+    batch: C,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -224,7 +406,7 @@ struct SparkReadCommitments<C> {
     serialize = "Pcs::ProverData: Serialize",
     deserialize = "Pcs::ProverData: Deserialize<'de>"
 ))]
-struct SparkFixedProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
+pub(crate) struct SparkFixedProverData<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     value: Pcs::ProverData,
     audit: Pcs::ProverData,
     marker: PhantomData<E>,
@@ -254,10 +436,9 @@ pub struct SparkFixedCommitments<C = [u64; 4]> {
 struct ParsedSparkReadOpenings<E, Pcs>
 where
     E: SpartanWhirEngine,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    Pcs: SparkReadPcs<E>,
 {
-    erow: Pcs::ParsedCommitment,
-    ecol: Pcs::ParsedCommitment,
+    batch: Pcs::ParsedReadCommitment,
 }
 
 struct ParsedSparkFixedOpenings<E, Pcs>
@@ -334,11 +515,294 @@ pub struct SpartanProtocol<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
+pub struct PoseidonZkSpartanProtocol<Ext: ExtField> {
+    marker: PhantomData<Ext>,
+}
+
+pub(crate) fn validate_canonical_verifying_shape<F>(
+    shape: &R1csShape<F>,
+    num_cons_unpadded: usize,
+    num_vars_unpadded: usize,
+    num_io: usize,
+) -> Result<(), SpartanWhirError> {
+    if num_cons_unpadded == 0 || shape.num_io != num_io {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    let expected_num_cons = num_cons_unpadded
+        .checked_next_power_of_two()
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let min_num_vars = num_io
+        .checked_add(1)
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let expected_num_vars = core::cmp::max(num_vars_unpadded, min_num_vars)
+        .checked_next_power_of_two()
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+    let expected_num_cols = expected_num_vars
+        .checked_add(num_io)
+        .and_then(|value| value.checked_add(1))
+        .ok_or(SpartanWhirError::InvalidR1csShape)?;
+
+    if shape.num_cons != expected_num_cons
+        || shape.num_vars != expected_num_vars
+        || num_io >= expected_num_vars
+        || shape.a.num_rows != expected_num_cons
+        || shape.b.num_rows != expected_num_cons
+        || shape.c.num_rows != expected_num_cons
+        || shape.a.num_cols != expected_num_cols
+        || shape.b.num_cols != expected_num_cols
+        || shape.c.num_cols != expected_num_cols
+    {
+        return Err(SpartanWhirError::InvalidR1csShape);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_spark_table_metadata<EF>(
+    shape: &R1csShape<F>,
+    metadata: &SparkTableMetadata,
+    configs: &SparkPcsConfigs,
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtField,
+{
+    metadata.validate()?;
+    if metadata.layout == SparkLayoutKind::Joint {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let expected_col_memory_size = shape
+        .num_vars
+        .checked_mul(2)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let max_nnz = shape.a.nnz().max(shape.b.nnz()).max(shape.c.nnz());
+    let expected_matrix_nnz_padded = if max_nnz == 0 {
+        1
+    } else {
+        max_nnz
+            .checked_next_power_of_two()
+            .ok_or_else(SpartanWhirError::invalid_config)?
+    };
+    if metadata.row_memory_size != shape.num_cons
+        || metadata.col_memory_size != expected_col_memory_size
+        || metadata.matrix_nnz_padded != expected_matrix_nnz_padded
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let value_bits = metadata.value_domain_size.ilog2() as usize;
+    let audit_bits = metadata
+        .row_memory_size
+        .max(metadata.col_memory_size)
+        .ilog2() as usize;
+    if configs.fixed_value.num_variables
+        != value_bits
+            .checked_add(fixed_value_column_bits())
+            .ok_or_else(SpartanWhirError::invalid_config)?
+        || configs.fixed_audit.num_variables
+            != audit_bits
+                .checked_add(fixed_audit_column_bits())
+                .ok_or_else(SpartanWhirError::invalid_config)?
+        || configs.read.num_variables
+            != value_bits
+                .checked_add(read_table_column_bits::<EF>())
+                .ok_or_else(SpartanWhirError::invalid_config)?
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    Ok(())
+}
+
+fn validate_verifying_key<E, Pcs>(
+    vk: &VerifyingKey<E, Pcs>,
+) -> Result<Option<SparkTableMetadata>, SpartanWhirError>
+where
+    E: SpartanContextEngine,
+    E::EF: ExtField,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
+{
+    validate_canonical_verifying_shape(
+        &vk.shape_canonical,
+        vk.num_cons_unpadded,
+        vk.num_vars_unpadded,
+        vk.num_io,
+    )?;
+    vk.security.validate()?;
+    vk.pcs_config.validate()?;
+
+    if vk.pcs_config.num_variables != vk.shape_canonical.num_vars.ilog2() as usize
+        || vk.pcs_config.whir != vk.whir_params
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let expected_domain = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+        &vk.shape_canonical,
+        &vk.security,
+        &vk.whir_params,
+        vk.matrix_closing,
+        vk.domain_separator.spark_whir_params.clone(),
+    );
+    if vk.domain_separator != expected_domain {
+        return Err(SpartanWhirError::invalid_config());
+    }
+
+    let spark_metadata = match vk.matrix_closing {
+        MatrixClosingMode::DirectSparse => {
+            let (expected_security, _) = derive_direct_component_security::<E::EF>(
+                &vk.security,
+                &vk.pcs_config,
+                vk.shape_canonical.num_cons.ilog2() as usize,
+                vk.shape_canonical.num_vars.ilog2() as usize + 1,
+                SpartanSoundnessMode::NoZk,
+            )?;
+            if vk.pcs_config.security != expected_security
+                || vk.spark_fixed_commitments.is_some()
+                || vk.spark_pcs_configs.is_some()
+                || vk.spark_table_metadata.is_some()
+            {
+                return Err(SpartanWhirError::invalid_config());
+            }
+            None
+        }
+        MatrixClosingMode::Spark => {
+            if vk.spark_fixed_commitments.is_none() {
+                return Err(SpartanWhirError::invalid_config());
+            }
+            let configs = vk
+                .spark_pcs_configs
+                .as_ref()
+                .ok_or(SpartanWhirError::invalid_config())?;
+            configs.fixed_value.validate()?;
+            configs.fixed_audit.validate()?;
+            configs.read.validate()?;
+            match &vk.domain_separator.spark_whir_params {
+                Some(params)
+                    if configs.fixed_value.whir == params.fixed_value
+                        && configs.fixed_audit.whir == params.fixed_audit
+                        && configs.read.whir == params.read => {}
+                None if configs.fixed_value.whir == vk.whir_params
+                    && configs.fixed_audit.whir == vk.whir_params
+                    && configs.read.whir == vk.whir_params => {}
+                _ => return Err(SpartanWhirError::invalid_config()),
+            }
+            let metadata = vk
+                .spark_table_metadata
+                .ok_or_else(SpartanWhirError::invalid_config)?;
+            validate_spark_table_metadata::<E::EF>(&vk.shape_canonical, &metadata, configs)?;
+            let (expected_security, _) = derive_spark_component_security::<E::EF>(
+                &vk.security,
+                &metadata,
+                &vk.pcs_config,
+                configs,
+                vk.shape_canonical.num_cons.ilog2() as usize,
+                vk.shape_canonical.num_vars.ilog2() as usize + 1,
+                SpartanSoundnessMode::NoZk,
+            )?;
+            if vk.pcs_config.security != expected_security
+                || configs.fixed_value.security != expected_security
+                || configs.fixed_audit.security != expected_security
+                || configs.read.security != expected_security
+            {
+                return Err(SpartanWhirError::invalid_config());
+            }
+            Some(metadata)
+        }
+    };
+
+    Ok(spark_metadata)
+}
+
+/// Recompute the SPARK fixed-table commitments from an R1CS shape and compare
+/// them with the roots carried by a key.
+///
+/// This is the only check that binds the fixed-table Merkle roots to the
+/// matrices they are supposed to commit to. It re-runs SPARK preprocessing
+/// and committing, so it costs about as much as the SPARK part of `setup`.
+pub(crate) fn authenticate_spark_fixed_commitments<E, EF, Pcs>(
+    shape_canonical: &R1csShape<F>,
+    configs: &SparkPcsConfigs,
+    expected: &SparkFixedCommitments<<Pcs as MlePcs<E>>::Commitment>,
+) -> Result<(), SpartanWhirError>
+where
+    EF: ExtField,
+    E: SpartanContextEngine<EF = EF>,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
+    <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
+{
+    let tables = preprocess_spark_tables(shape_canonical)?;
+    let (_, commitments) = setup_spark_fixed_commitments::<E, EF, Pcs>(configs, &tables)?
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if commitments != *expected {
+        return Err(SpartanWhirError::CommitmentMismatch);
+    }
+    Ok(())
+}
+
+impl<E, Pcs> VerifyingKey<E, Pcs>
+where
+    E: SpartanContextEngine,
+    E::EF: ExtField,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
+    Pcs::ProverData: Clone + CommittedPolynomialView<E::EF>,
+    Pcs::Commitment: Clone + PartialEq,
+{
+    /// Check that the key's SPARK fixed-table commitments actually commit to
+    /// the matrices of the embedded R1CS.
+    ///
+    /// A restored SPARK key cannot verify until this succeeds. It re-runs
+    /// SPARK preprocessing and committing, so it costs about as much as the
+    /// SPARK part of `setup`.
+    ///
+    /// Keys using `DirectSparse` matrix closing carry no commitments and
+    /// pass vacuously after the structural checks.
+    pub fn authenticate_spark_fixed_commitments(&mut self) -> Result<(), SpartanWhirError> {
+        self.spark_fixed_commitments_authenticated = false;
+        validate_verifying_key::<E, Pcs>(self)?;
+        match self.matrix_closing {
+            MatrixClosingMode::DirectSparse => {
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+            MatrixClosingMode::Spark => {
+                let configs = self
+                    .spark_pcs_configs
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let expected = self
+                    .spark_fixed_commitments
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                authenticate_spark_fixed_commitments::<E, E::EF, Pcs>(
+                    &self.shape_canonical,
+                    configs,
+                    expected,
+                )?;
+                self.spark_fixed_commitments_authenticated = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn ensure_spark_fixed_commitments_authenticated(&self) -> Result<(), SpartanWhirError> {
+        if self.matrix_closing == MatrixClosingMode::Spark
+            && !self.spark_fixed_commitments_authenticated
+        {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::UnauthenticatedSparkVerifyingKey,
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl<E, Pcs> SpartanProtocol<E, Pcs>
 where
     E: SpartanContextEngine,
     E::EF: ExtField,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    Pcs: ProtocolPcs<E, Config = WhirPcsConfig> + NoZkPcs,
     Pcs::ProverData: Clone + CommittedPolynomialView<E::EF>,
     Pcs::Commitment: Clone + PartialEq,
     E::Challenger: FieldChallenger<F>,
@@ -347,7 +811,6 @@ where
         shape: &R1csShape<F>,
         security: &SecurityConfig,
         whir_params: &WhirParams,
-        pcs_config: &WhirPcsConfig,
     ) -> Result<(ProvingKey<E, Pcs>, VerifyingKey<E, Pcs>), SpartanWhirError> {
         // Defaults to SPARK setup; call `setup_with_config` with
         // `DirectSparse` to skip SPARK preprocessing.
@@ -357,7 +820,6 @@ where
                 matrix_closing: MatrixClosingMode::Spark,
                 security: *security,
                 whir_params: whir_params.clone(),
-                pcs_config: pcs_config.clone(),
                 spark_whir_params: None,
             },
         )
@@ -383,11 +845,57 @@ where
         let shape_canonical = shape.pad_regular()?;
         let num_variables = shape_canonical.num_vars.ilog2() as usize;
 
-        let mut canonical_pcs_config = config.pcs_config.clone();
-        canonical_pcs_config.num_variables = num_variables;
-        canonical_pcs_config.security = config.security;
-        canonical_pcs_config.whir = config.whir_params.clone();
-        canonical_pcs_config.validate()?;
+        let provisional_pcs_config = WhirPcsConfig {
+            num_variables,
+            security: config.security,
+            whir: config.whir_params.clone(),
+        };
+        provisional_pcs_config.validate()?;
+        let num_outer_rounds = shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = num_variables + 1;
+        let spark_tables = match config.matrix_closing {
+            MatrixClosingMode::DirectSparse => None,
+            MatrixClosingMode::Spark => Some(preprocess_spark_tables(&shape_canonical)?),
+        };
+        let component_security = match spark_tables.as_ref() {
+            None => {
+                derive_direct_component_security::<E::EF>(
+                    &config.security,
+                    &provisional_pcs_config,
+                    num_outer_rounds,
+                    num_inner_rounds,
+                    SpartanSoundnessMode::NoZk,
+                )?
+                .0
+            }
+            Some(tables) => {
+                let provisional_spark_configs = spark_pcs_configs_for_tables::<E::EF>(
+                    &provisional_pcs_config,
+                    tables,
+                    config.spark_whir_params.as_ref(),
+                )?;
+                derive_spark_component_security::<E::EF>(
+                    &config.security,
+                    &tables.metadata(),
+                    &provisional_pcs_config,
+                    &provisional_spark_configs,
+                    num_outer_rounds,
+                    num_inner_rounds,
+                    SpartanSoundnessMode::NoZk,
+                )?
+                .0
+            }
+        };
+        let canonical_pcs_config = WhirPcsConfig {
+            security: component_security,
+            ..provisional_pcs_config
+        };
+        Pcs::validate_spartan_config(
+            &canonical_pcs_config,
+            config.matrix_closing,
+            num_outer_rounds,
+            num_inner_rounds,
+        )?;
 
         let transcript_spark_whir_params = match config.matrix_closing {
             MatrixClosingMode::DirectSparse => None,
@@ -400,11 +908,13 @@ where
             config.matrix_closing,
             transcript_spark_whir_params,
         );
-        let (spark_pcs_configs, spark_fixed_setup, spark_tables) = match config.matrix_closing {
-            MatrixClosingMode::DirectSparse => (None, None, None),
+        let (spark_pcs_configs, spark_fixed_setup) = match config.matrix_closing {
+            MatrixClosingMode::DirectSparse => (None, None),
             MatrixClosingMode::Spark => {
                 let _profile = profile_scope("spark_fixed_setup");
-                let spark_tables = preprocess_spark_tables(&shape_canonical)?;
+                let spark_tables = spark_tables
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
                 let spark_pcs_configs = spark_pcs_configs_for_tables::<E::EF>(
                     &canonical_pcs_config,
                     &spark_tables,
@@ -412,15 +922,16 @@ where
                 )?;
                 let setup = setup_spark_fixed_commitments::<E, E::EF, Pcs>(
                     &spark_pcs_configs,
-                    &spark_tables,
+                    spark_tables,
                 )?;
-                (Some(spark_pcs_configs), setup, Some(spark_tables))
+                (Some(spark_pcs_configs), setup)
             }
         };
         let (spark_fixed_prover_data, spark_fixed_commitments) = match spark_fixed_setup {
             Some((prover_data, commitments)) => (Some(prover_data), Some(commitments)),
             None => (None, None),
         };
+        let spark_table_metadata = spark_tables.as_ref().map(SparkTables::metadata);
         let mut pk = ProvingKey {
             matrix_closing: config.matrix_closing,
             shape_canonical: shape_canonical.clone(),
@@ -453,8 +964,10 @@ where
             pcs_config: canonical_pcs_config,
             spark_fixed_commitments,
             spark_pcs_configs,
+            spark_table_metadata,
             domain_separator,
             observer: Some(NoopObserver),
+            spark_fixed_commitments_authenticated: true,
             marker: PhantomData,
         };
 
@@ -474,7 +987,10 @@ where
             SpartanProofKind<E, Pcs>,
         ),
         SpartanWhirError,
-    > {
+    >
+    where
+        Pcs: SparkReadPcs<E>,
+    {
         match mode {
             MatrixClosingMode::DirectSparse => {
                 let (instance, proof) = Self::prove(pk, public_inputs, witness, challenger)?;
@@ -492,7 +1008,10 @@ where
         instance: &R1csInstance<F, <Pcs as MlePcs<E>>::Commitment>,
         proof: &SpartanProofKind<E, Pcs>,
         challenger: &mut E::Challenger,
-    ) -> Result<(), SpartanWhirError> {
+    ) -> Result<(), SpartanWhirError>
+    where
+        Pcs: SparkReadPcs<E>,
+    {
         match proof {
             SpartanProofKind::Direct(proof) => Self::verify(vk, instance, proof, challenger),
             SpartanProofKind::Spark(proof) => Self::verify_spark(vk, instance, proof, challenger),
@@ -670,6 +1189,7 @@ where
         proof: &SpartanProof<E, Pcs>,
         challenger: &mut E::Challenger,
     ) -> Result<(), SpartanWhirError> {
+        let _ = validate_verifying_key::<E, Pcs>(vk)?;
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
         Self::ensure_key_mode(vk.matrix_closing, MatrixClosingMode::DirectSparse)?;
@@ -694,12 +1214,15 @@ where
 
         let num_rounds_x = vk.shape_canonical.num_cons.ilog2() as usize;
         let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
-        let (r_x, final_outer_claim) = verify_outer::<F, E::EF, _>(
-            &proof.outer_sumcheck,
-            E::EF::ZERO,
-            num_rounds_x,
-            challenger,
-        )?;
+        let (r_x, final_outer_claim) = {
+            let _profile = profile_scope("verify_outer_sumcheck");
+            verify_outer::<F, E::EF, _>(
+                &proof.outer_sumcheck,
+                E::EF::ZERO,
+                num_rounds_x,
+                challenger,
+            )?
+        };
 
         let expected_outer = eq_point_eval(&tau, &r_x.0)
             * (proof.outer_claims.0 * proof.outer_claims.1 - proof.outer_claims.2);
@@ -717,24 +1240,38 @@ where
             proof.outer_claims.0 + r * proof.outer_claims.1 + r * r * proof.outer_claims.2;
 
         let num_rounds_y = vk.shape_canonical.num_vars.ilog2() as usize + 1;
-        let (r_y, inner_final_claim) = verify_inner::<F, E::EF, _>(
-            &proof.inner_sumcheck,
-            claim_inner_joint,
-            num_rounds_y,
-            challenger,
-        )?;
+        let (r_y, inner_final_claim) = {
+            let _profile = profile_scope("verify_inner_sumcheck");
+            verify_inner::<F, E::EF, _>(
+                &proof.inner_sumcheck,
+                claim_inner_joint,
+                num_rounds_y,
+                challenger,
+            )?
+        };
 
-        let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let t_y = EqPolynomial::evals_from_point(&r_y.0);
-        let (eval_a, eval_b, eval_c) = vk
-            .shape_canonical
-            .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
+        let t_x = {
+            let _profile = profile_scope("verify_eq_table_x");
+            EqPolynomial::evals_from_point(&r_x.0)
+        };
+        let t_y = {
+            let _profile = profile_scope("verify_eq_table_y");
+            EqPolynomial::evals_from_point(&r_y.0)
+        };
+        let (eval_a, eval_b, eval_c) = {
+            let _profile = profile_scope("verify_matrix_evals");
+            vk.shape_canonical
+                .evaluate_with_tables::<E::EF>(&t_x, &t_y)?
+        };
 
-        let eval_x = evaluate_public_half(
-            vk.shape_canonical.num_vars,
-            &instance.public_inputs,
-            &r_y.0[1..],
-        )?;
+        let eval_x = {
+            let _profile = profile_scope("verify_public_half");
+            evaluate_public_half(
+                vk.shape_canonical.num_vars,
+                &instance.public_inputs,
+                &r_y.0[1..],
+            )?
+        };
         let eval_z = (E::EF::ONE - r_y.0[0]) * proof.witness_eval + r_y.0[0] * eval_x;
         let expected_inner = (eval_a + r * eval_b + r * r * eval_c) * eval_z;
         if inner_final_claim != expected_inner {
@@ -771,7 +1308,10 @@ where
             SparkSpartanProof<E, Pcs>,
         ),
         SpartanWhirError,
-    > {
+    >
+    where
+        Pcs: SparkReadPcs<E>,
+    {
         let mut observer = pk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::ProveStart);
         Self::ensure_key_mode(pk.matrix_closing, MatrixClosingMode::Spark)?;
@@ -783,10 +1323,17 @@ where
             return Err(SpartanWhirError::InvalidWitnessLength);
         }
 
-        observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        {
+            let _profile = profile_scope("spark_observe_context");
+            observe_spartan_context::<E, E::EF>(challenger, &pk.domain_separator, public_inputs)?;
+        }
 
-        let mut witness_padded = witness.w.clone();
-        witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+        let witness_padded = {
+            let _profile = profile_scope("spark_pad_witness");
+            let mut witness_padded = witness.w.clone();
+            witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+            witness_padded
+        };
         let witness_mle = {
             let _profile = profile_scope("witness_to_mle");
             pk.shape_canonical.witness_to_mle(&witness_padded)?
@@ -802,18 +1349,27 @@ where
             witness_commitment,
         };
 
-        let z_witness_half = witness_padded;
-        let z_public_half = build_public_half(pk.shape_canonical.num_vars, public_inputs);
-        let z_full = [z_witness_half.clone(), z_public_half.clone()].concat();
-        let z_short = build_matrix_z(&z_witness_half, public_inputs);
+        let (z_full, z_short) = {
+            let _profile = profile_scope("spark_build_z");
+            let z_witness_half = witness_padded;
+            let z_public_half = build_public_half(pk.shape_canonical.num_vars, public_inputs);
+            let z_full = [z_witness_half.clone(), z_public_half.clone()].concat();
+            let z_short = build_matrix_z(&z_witness_half, public_inputs);
+            (z_full, z_short)
+        };
 
         let (az_f, bz_f, cz_f) = {
             let _profile = profile_scope("r1cs_multiply_vec");
             pk.shape_canonical.multiply_vec(&z_short)?
         };
-        let az: Vec<E::EF> = az_f.iter().map(|&v| E::EF::from(v)).collect();
-        let bz: Vec<E::EF> = bz_f.iter().map(|&v| E::EF::from(v)).collect();
-        let cz: Vec<E::EF> = cz_f.iter().map(|&v| E::EF::from(v)).collect();
+        let (az, bz, cz) = {
+            let _profile = profile_scope("spark_lift_matrix_products");
+            (
+                az_f.iter().map(|&v| E::EF::from(v)).collect::<Vec<_>>(),
+                bz_f.iter().map(|&v| E::EF::from(v)).collect::<Vec<_>>(),
+                cz_f.iter().map(|&v| E::EF::from(v)).collect::<Vec<_>>(),
+            )
+        };
 
         let num_rounds_x = pk.shape_canonical.num_cons.ilog2() as usize;
         let tau = sample_algebra_vec::<E, E::EF>(challenger, num_rounds_x);
@@ -828,15 +1384,27 @@ where
         let r = challenger.sample_algebra_element::<E::EF>();
         let claim_inner_joint = outer_claims.0 + r * outer_claims.1 + r * r * outer_claims.2;
 
-        let t_x = EqPolynomial::evals_from_point(&r_x.0);
-        let (evals_a, evals_b, evals_c) = pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?;
-        let poly_abc: Vec<E::EF> = evals_a
-            .iter()
-            .zip(evals_b.iter())
-            .zip(evals_c.iter())
-            .map(|((&a, &b), &c)| a + r * b + r * r * c)
-            .collect();
-        let z_lifted: Vec<E::EF> = z_full.iter().map(|&v| E::EF::from(v)).collect();
+        let t_x = {
+            let _profile = profile_scope("spark_eq_table_x");
+            EqPolynomial::evals_from_point(&r_x.0)
+        };
+        let (evals_a, evals_b, evals_c) = {
+            let _profile = profile_scope("spark_bind_row_vars");
+            pk.shape_canonical.bind_row_vars::<E::EF>(&t_x)?
+        };
+        let poly_abc = {
+            let _profile = profile_scope("spark_combine_matrix_weights");
+            evals_a
+                .iter()
+                .zip(evals_b.iter())
+                .zip(evals_c.iter())
+                .map(|((&a, &b), &c)| a + r * b + r * r * c)
+                .collect::<Vec<_>>()
+        };
+        let z_lifted = {
+            let _profile = profile_scope("spark_lift_z");
+            z_full.iter().map(|&v| E::EF::from(v)).collect::<Vec<_>>()
+        };
 
         let (inner_sumcheck, r_y, eval_z) = {
             let _profile = profile_scope("inner_sumcheck");
@@ -931,12 +1499,15 @@ where
             recover_witness_eval(r_y.0[0], eval_z, eval_x)?
         };
 
-        let pcs_statement = PcsStatementBuilder::<E>::new()
-            .add_point_eval(PointEvalClaim {
-                point: MultilinearPoint(r_y.0[1..].to_vec()),
-                value: witness_eval,
-            })
-            .finalize()?;
+        let pcs_statement = {
+            let _profile = profile_scope("spark_build_pcs_statement");
+            PcsStatementBuilder::<E>::new()
+                .add_point_eval(PointEvalClaim {
+                    point: MultilinearPoint(r_y.0[1..].to_vec()),
+                    value: witness_eval,
+                })
+                .finalize()?
+        };
 
         observer.on_stage(ProtocolStage::PcsOpen);
         let pcs_proof = {
@@ -965,10 +1536,17 @@ where
         instance: &R1csInstance<F, <Pcs as MlePcs<E>>::Commitment>,
         proof: &SparkSpartanProof<E, Pcs>,
         challenger: &mut E::Challenger,
-    ) -> Result<(), SpartanWhirError> {
+    ) -> Result<(), SpartanWhirError>
+    where
+        Pcs: SparkReadPcs<E>,
+    {
+        let validated_spark_metadata = validate_verifying_key::<E, Pcs>(vk)?;
+        vk.ensure_spark_fixed_commitments_authenticated()?;
         let mut observer = vk.observer.unwrap_or_default();
         observer.on_stage(ProtocolStage::VerifyStart);
         Self::ensure_key_mode(vk.matrix_closing, MatrixClosingMode::Spark)?;
+        let spark_metadata =
+            validated_spark_metadata.ok_or_else(SpartanWhirError::invalid_config)?;
 
         if instance.public_inputs.len() != vk.num_io {
             return Err(SpartanWhirError::InvalidPublicInputLength);
@@ -1020,7 +1598,6 @@ where
             challenger,
         )?;
 
-        let spark_tables = preprocess_spark_tables(&vk.shape_canonical)?;
         let spark_pcs_configs = vk
             .spark_pcs_configs
             .clone()
@@ -1044,16 +1621,16 @@ where
             &proof.spark_read_openings,
             challenger,
         )?;
-        let product_claims = verify_spark_batched_memory_product_claims(
-            &spark_tables,
+        let product_claims = verify_spark_batched_memory_product_claims_with_metadata(
+            &spark_metadata,
             &proof.spark_products,
             challenger,
         )?;
         finalize_spark_fixed_openings::<E, E::EF, Pcs>(
             &spark_pcs_configs.fixed_value,
             &spark_pcs_configs.fixed_audit,
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
+            spark_metadata.row_memory_size,
+            spark_metadata.col_memory_size,
             &proof.spark_fixed_openings,
             parsed_fixed_openings,
             &product_claims,
@@ -1067,8 +1644,8 @@ where
             challenger,
         )?;
         verify_spark_batched_memory_leaf_claims_with_openings(
-            spark_tables.row_memory_size,
-            spark_tables.col_memory_size,
+            spark_metadata.row_memory_size,
+            spark_metadata.col_memory_size,
             &product_claims,
             &proof.spark_fixed_openings.evals,
             &read_opening_evals,
@@ -1107,6 +1684,756 @@ where
     }
 }
 
+impl<Ext> PoseidonZkSpartanProtocol<Ext>
+where
+    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
+    StandardUniform: Distribution<Ext> + Distribution<F>,
+    PoseidonChallenger: CanObserve<PoseidonCommitment>,
+{
+    pub fn prove(
+        pk: &PoseidonZkProvingKey<Ext>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError> {
+        let mut rng = rand::make_rng::<StdRng>();
+        Self::prove_with_rng(pk, public_inputs, witness, challenger, &mut rng)
+    }
+
+    pub fn prove_with_rng<R>(
+        pk: &PoseidonZkProvingKey<Ext>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut PoseidonChallenger,
+        rng: &mut R,
+    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError>
+    where
+        R: Rng + CryptoRng,
+    {
+        if public_inputs.len() != pk.num_io {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if witness.w.len() != pk.num_vars_unpadded {
+            return Err(SpartanWhirError::InvalidWitnessLength);
+        }
+
+        let num_outer_rounds = pk.shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = pk.shape_canonical.num_vars.ilog2() as usize + 1;
+        if num_outer_rounds == 0 {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        observe_poseidon_zk_context(
+            challenger,
+            &pk.domain_separator,
+            &pk.pcs_config,
+            num_outer_rounds,
+            num_inner_rounds,
+            public_inputs,
+        );
+
+        let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
+            build_poseidon_full_zk_pcs::<Ext>(
+                &pk.pcs_config,
+                num_outer_rounds,
+                num_inner_rounds,
+                pk.security.effective_security_bits(),
+            )?;
+        let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
+        let relation_shapes = [application_shape, inner_sumcheck_shape];
+        let whir_prover = HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+
+        let inner_messages = {
+            let _profile = profile_scope("zk_inner_mask_sample");
+            sample_inner_masks::<Ext, _>(num_outer_rounds, rng)
+        };
+        let outer_messages = {
+            let _profile = profile_scope("zk_outer_mask_sample");
+            sample_outer_masks::<Ext, _>(num_outer_rounds, rng)
+        };
+        let application_messages = combine_application_mask_vectors(
+            inner_messages.clone(),
+            outer_messages.clone(),
+            application_shape.shape.message_len,
+        )?;
+        let mut application_group = {
+            let _profile = profile_scope("zk_application_mask_commit");
+            whir_prover
+                .commit_mask_group(application_shape, application_messages, challenger, rng)
+                .map_err(|_| SpartanWhirError::WhirCommitFailed)?
+        };
+        let application_mask_commitment = application_group.commitment.clone();
+
+        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        let mut witness_padded = witness.w.clone();
+        witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
+        let (witness_commitment, witness_prover_data) = {
+            let _profile = profile_scope("zk_witness_commit");
+            whir_prover.commit(Poly::new(witness_padded.clone()), challenger, rng)
+        };
+        let instance = R1csInstance {
+            public_inputs: public_inputs.to_vec(),
+            witness_commitment: witness_commitment.clone(),
+        };
+
+        let z_full = {
+            let _profile = profile_scope("zk_build_z_full");
+            build_z_full(witness_padded, pk.shape_canonical.num_vars, public_inputs)
+        };
+        let z_short = matrix_z_slice(&z_full, pk.shape_canonical.num_vars, public_inputs.len())?;
+        let layout = pk.direct_multiply_layout.as_ref().ok_or({
+            SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+        })?;
+        let (az, bz, cz) = {
+            let _profile = profile_scope("zk_r1cs_multiply_vec");
+            pk.shape_canonical
+                .multiply_vec_parallel_with_layout_unchecked(layout, z_short)?
+        };
+        let outer = {
+            let _profile = profile_scope("zk_outer_sumcheck");
+            prove_outer_zk_base_first_unchecked::<F, Ext, _>(
+                &pk.shape_canonical,
+                az,
+                bz,
+                cz,
+                &inner_messages,
+                &outer_messages,
+                challenger,
+            )?
+        };
+        let (rho, batching) = {
+            let _profile = profile_scope("zk_outer_claim_observe");
+            challenger.observe_algebra_slice(&outer.outer_mask_evals);
+            challenger.observe_algebra_slice(&[
+                outer.masked_claims.0,
+                outer.masked_claims.1,
+                outer.masked_claims.2,
+            ]);
+            (
+                challenger.sample_algebra_element::<Ext>(),
+                challenger.sample_algebra_element::<Ext>(),
+            )
+        };
+        let t_x = {
+            let _profile = profile_scope("zk_outer_eq_table");
+            EqPolynomial::evals_from_point_parallel(&outer.point.0)
+        };
+        let layout = pk.direct_bind_layout.as_ref().ok_or_else(|| {
+            SpartanWhirError::invalid_config_reason(InvalidConfigReason::MissingDerivedProverData)
+        })?;
+        let product = if z_full.len() > <F as Field>::Packing::WIDTH {
+            let packed_weights = {
+                let _profile = profile_scope("zk_bind_row_vars_joint");
+                pk.shape_canonical
+                    .bind_row_vars_joint_packed_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+            };
+            let _profile = profile_scope("zk_inner_product_build");
+            ProductPolynomial::new_base_packed(Poly::new(z_full), Poly::new(packed_weights))
+        } else {
+            let weights = {
+                let _profile = profile_scope("zk_bind_row_vars_joint");
+                pk.shape_canonical
+                    .bind_row_vars_joint_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+            };
+            let _profile = profile_scope("zk_inner_product_build");
+            unpacked_inner_product::<Ext>(z_full, weights)?
+        };
+
+        let (inner_covectors, outer_covectors, joint_target) = {
+            let _profile = profile_scope("zk_application_relation");
+            application_relation(
+                num_outer_rounds,
+                &outer.point.0,
+                outer.masked_claims,
+                &outer.outer_mask_evals,
+                rho,
+                batching,
+            )
+        };
+        application_group.covectors = combine_application_mask_vectors(
+            inner_covectors,
+            outer_covectors,
+            application_shape.shape.message_len,
+        )?;
+        let application_aux = application_group.claim();
+        let source_claim = joint_target - application_aux;
+        let sumcheck_prover = SumcheckProver::new(product, source_claim);
+        let extension_mmcs = ExtensionMmcs::new(pcs.mmcs.clone());
+        let encoding = pcs.config.sumcheck_mask.encoding::<Ext>();
+        let mut inner_sumcheck = ZkSumcheckData::default();
+        let handoff = {
+            let _profile = profile_scope("zk_inner_sumcheck");
+            sumcheck_prover.into_zk_sumcheck(
+                &mut inner_sumcheck,
+                &encoding,
+                &extension_mmcs,
+                num_inner_rounds,
+                0,
+                application_aux,
+                challenger,
+                rng,
+            )
+        };
+        let (
+            inner_sumcheck_mask_commitment,
+            sumcheck_group,
+            r_y,
+            inner_epsilon,
+            weighted_matrix_eval,
+            joint_residual,
+        ) = {
+            let _profile = profile_scope("zk_inner_sumcheck_finalize");
+            let inner_sumcheck_mask_commitment = handoff.mask_oracle.0.clone();
+            let r_y = handoff.randomness.clone();
+            let inner_epsilon = handoff.eps;
+            let source_residual = handoff.residual_prover.claimed_sum();
+            let residual_weights = handoff.residual_prover.weights();
+            let [weighted_matrix_eval] = residual_weights.as_slice() else {
+                return Err(SpartanWhirError::InvalidRoundCount);
+            };
+            let weighted_matrix_eval = *weighted_matrix_eval;
+
+            let carry_scale = inner_epsilon * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+            scale_covectors(&mut application_group.covectors, carry_scale);
+            let sumcheck_covectors = mask_residual_covectors_from_shape(
+                num_inner_rounds,
+                pcs.config.sumcheck_mask.message_len,
+                r_y.as_slice(),
+            );
+            let sumcheck_group = CommittedMaskGroupProverData {
+                shape: inner_sumcheck_shape,
+                commitment: inner_sumcheck_mask_commitment.clone(),
+                messages: handoff.mask_messages,
+                randomness: handoff.mask_randomness,
+                covectors: sumcheck_covectors,
+                prover_data: handoff.mask_oracle.1,
+            };
+
+            let joint_residual =
+                source_residual + application_group.claim() + sumcheck_group.claim();
+            (
+                inner_sumcheck_mask_commitment,
+                sumcheck_group,
+                r_y,
+                inner_epsilon,
+                weighted_matrix_eval,
+                joint_residual,
+            )
+        };
+        let matrix_closing = match pk.matrix_closing {
+            MatrixClosingMode::DirectSparse => ZkMatrixClosingProof::DirectSparse,
+            MatrixClosingMode::Spark => {
+                let spark_tables = pk
+                    .spark_tables
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let spark_pcs_configs = pk
+                    .spark_pcs_configs
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let fixed_prover_data = pk
+                    .spark_fixed_prover_data
+                    .clone()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let expected_fixed_commitments = pk
+                    .spark_fixed_commitments
+                    .clone()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let fixed_prover_data = {
+                    let _profile = profile_scope("zk_spark_prepare_fixed_openings");
+                    prepare_spark_fixed_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.fixed_value,
+                        &spark_pcs_configs.fixed_audit,
+                        fixed_prover_data,
+                        challenger,
+                    )?
+                };
+                let r_y = MultilinearPoint(r_y.as_slice().to_vec());
+                let read_tables = {
+                    let _profile = profile_scope("zk_spark_compute_read_tables");
+                    compute_spark_read_tables(spark_tables, &outer.point, &r_y)?
+                };
+                let (read_prover_data, read_commitments) = {
+                    let _profile = profile_scope("zk_spark_commit_read_tables");
+                    commit_spark_read_tables::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.read,
+                        &read_tables,
+                        challenger,
+                    )?
+                };
+                let (spark_products, product_claims) = {
+                    let _profile = profile_scope("zk_spark_memory_products");
+                    prove_spark_batched_memory_products_with_read_tables_and_leaf_claims(
+                        spark_tables,
+                        &outer.point,
+                        &r_y,
+                        &read_tables,
+                        challenger,
+                    )?
+                };
+                let spark_fixed_openings = {
+                    let _profile = profile_scope("zk_spark_open_fixed_tables");
+                    open_spark_fixed_tables::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.fixed_value,
+                        &spark_pcs_configs.fixed_audit,
+                        fixed_prover_data,
+                        expected_fixed_commitments,
+                        spark_tables,
+                        &product_claims,
+                        challenger,
+                    )?
+                };
+                let spark_read_openings = {
+                    let _profile = profile_scope("zk_spark_open_read_tables");
+                    open_spark_read_tables::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.read,
+                        read_prover_data,
+                        read_commitments,
+                        &product_claims,
+                        challenger,
+                    )?
+                };
+                let spark_matrix_eval = matrix_eval_rlc(product_claims.matrix_evals, rho);
+                if weighted_matrix_eval != inner_epsilon * spark_matrix_eval {
+                    return Err(SpartanWhirError::SparkMatrixEvaluationMismatch);
+                }
+                ZkMatrixClosingProof::Spark(ZkSparkClosingProof {
+                    spark_products,
+                    spark_fixed_openings,
+                    spark_read_openings,
+                })
+            }
+        };
+        let selector = r_y.as_slice()[0];
+        let eval_public = evaluate_public_half(
+            pk.shape_canonical.num_vars,
+            public_inputs,
+            &r_y.as_slice()[1..],
+        )?;
+        let public_term = weighted_matrix_eval * selector * eval_public;
+        let mut relation = CommittedRelation::empty();
+        relation.source.push_eq(
+            Point::new(r_y.as_slice()[1..].to_vec()),
+            weighted_matrix_eval * (Ext::ONE - selector),
+        );
+        relation.target = joint_residual - public_term;
+        let pcs_proof = {
+            let _profile = profile_scope("zk_pcs_relation");
+            whir_prover
+                .prove_relation(
+                    witness_prover_data,
+                    &relation,
+                    vec![application_group, sumcheck_group],
+                    challenger,
+                    rng,
+                )
+                .map_err(|_| SpartanWhirError::WhirOpenFailed)?
+        };
+
+        Ok((
+            instance,
+            ZkSpartanProof {
+                application_mask_commitment,
+                outer_sumcheck: outer.proof,
+                outer_claims: outer.masked_claims,
+                outer_mask_evals: outer.outer_mask_evals,
+                inner_sumcheck,
+                inner_sumcheck_mask_commitment,
+                matrix_closing,
+                pcs_proof,
+            },
+        ))
+    }
+
+    pub fn verify(
+        vk: &PoseidonZkVerifyingKey<Ext>,
+        instance: &R1csInstance<F, PoseidonCommitment>,
+        proof: &ZkSpartanProof<Ext>,
+        challenger: &mut PoseidonChallenger,
+    ) -> Result<(), SpartanWhirError> {
+        let validated_spark_metadata = vk.validate()?;
+        vk.ensure_spark_fixed_commitments_authenticated()?;
+        if proof.matrix_closing.mode() != vk.matrix_closing {
+            return Err(SpartanWhirError::ProofKindMismatch);
+        }
+        if instance.public_inputs.len() != vk.num_io {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        let num_outer_rounds = vk.shape_canonical.num_cons.ilog2() as usize;
+        let num_inner_rounds = vk.shape_canonical.num_vars.ilog2() as usize + 1;
+        let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
+            build_poseidon_full_zk_pcs::<Ext>(
+                &vk.pcs_config,
+                num_outer_rounds,
+                num_inner_rounds,
+                vk.security.effective_security_bits(),
+            )?;
+        let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
+        observe_poseidon_zk_context(
+            challenger,
+            &vk.domain_separator,
+            &vk.pcs_config,
+            num_outer_rounds,
+            num_inner_rounds,
+            &instance.public_inputs,
+        );
+        let relation_shapes = [application_shape, inner_sumcheck_shape];
+        challenger.observe(proof.application_mask_commitment.clone());
+        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        challenger.observe(instance.witness_commitment.clone());
+
+        let r_x = verify_outer_zk::<F, Ext, _>(
+            &proof.outer_sumcheck,
+            proof.outer_claims,
+            &proof.outer_mask_evals,
+            num_outer_rounds,
+            challenger,
+        )?;
+        challenger.observe_algebra_slice(&proof.outer_mask_evals);
+        challenger.observe_algebra_slice(&[
+            proof.outer_claims.0,
+            proof.outer_claims.1,
+            proof.outer_claims.2,
+        ]);
+        let rho = challenger.sample_algebra_element::<Ext>();
+        let batching = challenger.sample_algebra_element::<Ext>();
+        let (inner_covectors, outer_covectors, joint_target) = application_relation(
+            num_outer_rounds,
+            &r_x.0,
+            proof.outer_claims,
+            &proof.outer_mask_evals,
+            rho,
+            batching,
+        );
+        let handoff = ZkVerifier::<F, Ext>::verify_claim::<ExtensionMmcs<F, Ext, PoseidonMmcs>, _>(
+            &proof.inner_sumcheck,
+            &proof.inner_sumcheck_mask_commitment,
+            pcs.config.sumcheck_mask.message_len,
+            num_inner_rounds,
+            0,
+            joint_target,
+            challenger,
+        )
+        .map_err(|_| SpartanWhirError::SumcheckFailed)?;
+        let carry_scale = handoff.eps * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+        let mut application_covectors = combine_application_mask_vectors(
+            inner_covectors,
+            outer_covectors,
+            application_shape.shape.message_len,
+        )?;
+        scale_covectors(&mut application_covectors, carry_scale);
+        let sumcheck_covectors = mask_residual_covectors_from_shape(
+            num_inner_rounds,
+            pcs.config.sumcheck_mask.message_len,
+            handoff.randomness.as_slice(),
+        );
+
+        let matrix_eval = match &proof.matrix_closing {
+            ZkMatrixClosingProof::DirectSparse => {
+                let t_x = EqPolynomial::evals_from_point(&r_x.0);
+                let t_y = EqPolynomial::evals_from_point(handoff.randomness.as_slice());
+                let (eval_a, eval_b, eval_c) =
+                    vk.shape_canonical.evaluate_with_tables::<Ext>(&t_x, &t_y)?;
+                eval_a + rho * eval_b + rho * rho * eval_c
+            }
+            ZkMatrixClosingProof::Spark(closing) => {
+                let spark_metadata = validated_spark_metadata
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let spark_pcs_configs = vk
+                    .spark_pcs_configs
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                let expected_fixed_commitments = vk
+                    .spark_fixed_commitments
+                    .as_ref()
+                    .ok_or_else(SpartanWhirError::invalid_config)?;
+                validate_spark_fixed_commitments::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    &closing.spark_fixed_openings,
+                    expected_fixed_commitments,
+                )?;
+                let parsed_fixed_openings =
+                    parse_spark_fixed_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.fixed_value,
+                        &spark_pcs_configs.fixed_audit,
+                        &closing.spark_fixed_openings,
+                        challenger,
+                    )?;
+                let parsed_read_openings =
+                    parse_spark_read_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.read,
+                        &closing.spark_read_openings,
+                        challenger,
+                    )?;
+                let product_claims = verify_spark_batched_memory_product_claims_with_metadata(
+                    spark_metadata,
+                    &closing.spark_products,
+                    challenger,
+                )?;
+                finalize_spark_fixed_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    &spark_pcs_configs.fixed_value,
+                    &spark_pcs_configs.fixed_audit,
+                    spark_metadata.row_memory_size,
+                    spark_metadata.col_memory_size,
+                    &closing.spark_fixed_openings,
+                    parsed_fixed_openings,
+                    &product_claims,
+                    challenger,
+                )?;
+                let read_opening_evals =
+                    finalize_spark_read_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                        &spark_pcs_configs.read,
+                        &closing.spark_read_openings,
+                        parsed_read_openings,
+                        &product_claims,
+                        challenger,
+                    )?;
+                let r_y = MultilinearPoint(handoff.randomness.as_slice().to_vec());
+                verify_spark_batched_memory_leaf_claims_with_openings(
+                    spark_metadata.row_memory_size,
+                    spark_metadata.col_memory_size,
+                    &product_claims,
+                    &closing.spark_fixed_openings.evals,
+                    &read_opening_evals,
+                    &r_x,
+                    &r_y,
+                )?;
+                matrix_eval_rlc(product_claims.matrix_evals, rho)
+            }
+        };
+        let selector = handoff.randomness.as_slice()[0];
+        let eval_public = evaluate_public_half(
+            vk.shape_canonical.num_vars,
+            &instance.public_inputs,
+            &handoff.randomness.as_slice()[1..],
+        )?;
+        let mut relation = CommittedRelation::empty();
+        relation.source.push_eq(
+            Point::new(handoff.randomness.as_slice()[1..].to_vec()),
+            handoff.eps * matrix_eval * (Ext::ONE - selector),
+        );
+        relation.target =
+            handoff.claimed_residual - handoff.eps * matrix_eval * selector * eval_public;
+        let groups = vec![
+            CommittedMaskGroup {
+                shape: application_shape,
+                commitment: proof.application_mask_commitment.clone(),
+                covectors: application_covectors,
+            },
+            CommittedMaskGroup {
+                shape: inner_sumcheck_shape,
+                commitment: proof.inner_sumcheck_mask_commitment.clone(),
+                covectors: sumcheck_covectors,
+            },
+        ];
+        let _profile = profile_scope("zk_pcs_relation_verify");
+        HidingWhirVerifier::new(&pcs.config, &pcs.mmcs)
+            .verify_relation(
+                &proof.pcs_proof,
+                &instance.witness_commitment,
+                relation,
+                groups,
+                challenger,
+            )
+            .map_err(|_| SpartanWhirError::WhirVerifyFailed)
+    }
+}
+
+fn observe_poseidon_zk_context(
+    challenger: &mut PoseidonChallenger,
+    domain_separator: &DomainSeparator,
+    pcs_config: &ZkWhirPcsConfig,
+    num_outer_rounds: usize,
+    num_inner_rounds: usize,
+    public_inputs: &[F],
+) {
+    let _profile = profile_scope("zk_observe_context");
+    for byte in domain_separator.to_bytes() {
+        challenger.observe(F::from_u8(byte));
+    }
+    for value in [
+        pcs_config.ell_zk,
+        pcs_config.mask_log_inv_rate,
+        num_outer_rounds,
+        num_inner_rounds,
+    ] {
+        for byte in (value as u64).to_le_bytes() {
+            challenger.observe(F::from_u8(byte));
+        }
+    }
+    for &input in public_inputs {
+        challenger.observe(input);
+    }
+}
+
+fn sample_inner_masks<Ext, R>(num_rounds: usize, rng: &mut R) -> Vec<Vec<Ext>>
+where
+    Ext: Field,
+    StandardUniform: Distribution<Ext>,
+    R: Rng + ?Sized,
+{
+    (0..3 * num_rounds)
+        .map(|_| {
+            let linear = rng.random::<Ext>();
+            let quadratic = rng.random::<Ext>();
+            vec![Ext::ZERO, linear, quadratic, -linear - quadratic]
+        })
+        .collect()
+}
+
+fn sample_outer_masks<Ext, R>(num_rounds: usize, rng: &mut R) -> Vec<Vec<Ext>>
+where
+    Ext: Field,
+    StandardUniform: Distribution<Ext>,
+    R: Rng + ?Sized,
+{
+    (0..num_rounds)
+        .map(|_| (0..8).map(|_| rng.random::<Ext>()).collect())
+        .collect()
+}
+
+fn power_covector<Ext: Field>(point: Ext, len: usize) -> Vec<Ext> {
+    let mut power = Ext::ONE;
+    (0..len)
+        .map(|_| {
+            let current = power;
+            power *= point;
+            current
+        })
+        .collect()
+}
+
+/// Batches the masked matrix claim, the inner-mask endpoint constraints, and
+/// the disclosed outer-mask evaluations into one committed linear relation.
+fn application_relation<Ext: Field>(
+    num_outer_rounds: usize,
+    outer_point: &[Ext],
+    masked_claims: (Ext, Ext, Ext),
+    outer_mask_evals: &[Ext],
+    rho: Ext,
+    batching: Ext,
+) -> (Vec<Vec<Ext>>, Vec<Vec<Ext>>, Ext) {
+    debug_assert_eq!(outer_point.len(), num_outer_rounds);
+    debug_assert_eq!(outer_mask_evals.len(), num_outer_rounds);
+
+    let matrix_coefficients = [Ext::ONE, rho, rho.square()];
+    let mut inner_covectors = Vec::with_capacity(3 * num_outer_rounds);
+    for matrix_coefficient in matrix_coefficients {
+        for &point in outer_point {
+            let mut covector = power_covector(point, 4);
+            for value in &mut covector {
+                *value *= matrix_coefficient;
+            }
+            inner_covectors.push(covector);
+        }
+    }
+
+    let mut target = masked_claims.0 + rho * masked_claims.1 + rho.square() * masked_claims.2;
+    let at_zero = power_covector(Ext::ZERO, 4);
+    let at_one = power_covector(Ext::ONE, 4);
+    let mut coefficient = batching;
+    for covector in &mut inner_covectors {
+        for (value, endpoint) in covector.iter_mut().zip(&at_zero) {
+            *value += coefficient * *endpoint;
+        }
+        coefficient *= batching;
+        for (value, endpoint) in covector.iter_mut().zip(&at_one) {
+            *value += coefficient * *endpoint;
+        }
+        coefficient *= batching;
+    }
+
+    let mut outer_covectors = Vec::with_capacity(num_outer_rounds);
+    for (&point, &evaluation) in outer_point.iter().zip(outer_mask_evals) {
+        let mut covector = power_covector(point, 8);
+        for value in &mut covector {
+            *value *= coefficient;
+        }
+        target += coefficient * evaluation;
+        coefficient *= batching;
+        outer_covectors.push(covector);
+    }
+
+    (inner_covectors, outer_covectors, target)
+}
+
+fn scale_covectors<Ext: Field>(covectors: &mut [Vec<Ext>], scale: Ext) {
+    for covector in covectors {
+        for value in covector {
+            *value *= scale;
+        }
+    }
+}
+
+pub(crate) fn combined_application_mask_shape(
+    inner: MaskGroupShape,
+    outer: MaskGroupShape,
+) -> Result<MaskGroupShape, SpartanWhirError> {
+    if inner.shape.message_len > outer.shape.message_len
+        || inner.shape.randomness_len != outer.shape.randomness_len
+    {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    if inner.shape.domain_size != outer.shape.domain_size {
+        return Err(SpartanWhirError::invalid_config_reason(
+            InvalidConfigReason::IncompatibleApplicationMaskDomains {
+                inner_domain_size: inner.shape.domain_size,
+                outer_domain_size: outer.shape.domain_size,
+            },
+        ));
+    }
+    Ok(MaskGroupShape {
+        shape: outer.shape,
+        width: inner
+            .width
+            .checked_add(outer.width)
+            .ok_or_else(SpartanWhirError::invalid_config)?,
+    })
+}
+
+fn combine_application_mask_vectors<Ext: Field>(
+    inner: Vec<Vec<Ext>>,
+    outer: Vec<Vec<Ext>>,
+    message_len: usize,
+) -> Result<Vec<Vec<Ext>>, SpartanWhirError> {
+    if inner.iter().any(|values| values.len() > message_len)
+        || outer.iter().any(|values| values.len() != message_len)
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+    let mut combined = Vec::with_capacity(inner.len() + outer.len());
+    combined.extend(inner.into_iter().map(|mut values| {
+        values.resize(message_len, Ext::ZERO);
+        values
+    }));
+    combined.extend(outer);
+    Ok(combined)
+}
+
+fn unpacked_inner_product<Ext>(
+    evaluations: Vec<F>,
+    weights: Vec<Ext>,
+) -> Result<ProductPolynomial<F, Ext>, SpartanWhirError>
+where
+    Ext: ExtField,
+{
+    if evaluations.len() != weights.len()
+        || evaluations.is_empty()
+        || !evaluations.len().is_power_of_two()
+    {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    if evaluations.len() > <F as Field>::Packing::WIDTH {
+        return Err(SpartanWhirError::InvalidRoundPolynomial);
+    }
+
+    Ok(ProductPolynomial::new_unpacked(
+        VariableOrder::Prefix,
+        Poly::new(evaluations.into_iter().map(Ext::from).collect()),
+        Poly::new(weights),
+    ))
+}
+
 fn observe_spartan_context<E, Ext>(
     challenger: &mut E::Challenger,
     domain_separator: &DomainSeparator,
@@ -1137,7 +2464,7 @@ where
     matrix_evals[0] + r * matrix_evals[1] + r * r * matrix_evals[2]
 }
 
-fn setup_spark_fixed_commitments<E, EF, Pcs>(
+pub(crate) fn setup_spark_fixed_commitments<E, EF, Pcs>(
     configs: &SparkPcsConfigs,
     spark_tables: &crate::SparkTables,
 ) -> Result<
@@ -1164,7 +2491,7 @@ where
     Ok(Some((prover_data, commitments)))
 }
 
-fn spark_pcs_configs_for_tables<EF>(
+pub(crate) fn spark_pcs_configs_for_tables<EF>(
     base: &WhirPcsConfig,
     spark_tables: &crate::SparkTables,
     spark_whir_params: Option<&SparkWhirParams>,
@@ -1228,7 +2555,7 @@ where
     let mut config = value_config.clone();
     config.num_variables = config
         .num_variables
-        .checked_add(read_column_bits::<EF>())
+        .checked_add(read_table_column_bits::<EF>())
         .ok_or(SpartanWhirError::invalid_config())?;
     config.whir = whir_params.clone();
     config.validate()?;
@@ -1379,47 +2706,30 @@ fn commit_spark_read_tables<E, EF, Pcs>(
 where
     EF: ExtField,
     E: SpartanContextEngine<EF = EF>,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
-    <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
+    Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
-    let erow_columns = extension_table_to_base_columns(&read_tables.erow)?;
-    let ecol_columns = extension_table_to_base_columns(&read_tables.ecol)?;
+    let coordinate_columns = {
+        let _profile = profile_scope("spark_read_to_base_columns");
+        extension_read_tables_to_base_columns(&read_tables.erow, &read_tables.ecol)?
+    };
     let domain_size = read_tables.erow.len();
     if domain_size == 0
         || !domain_size.is_power_of_two()
         || read_tables.ecol.len() != domain_size
-        || config.num_variables != domain_size.ilog2() as usize + read_column_bits::<EF>()
+        || config.num_variables != domain_size.ilog2() as usize + read_table_column_bits::<EF>()
     {
         return Err(SpartanWhirError::invalid_config());
     }
-    // Column-major layout: high selector bits choose the coordinate column, and
-    // the remaining coordinates are the original sparse-entry point. The row
-    // and column read vectors are committed separately so each read opening has
-    // one fewer selector bit than the old combined erow|ecol table.
-    let mut packed_erow = vec![F::ZERO; domain_size * read_column_count::<EF>()];
-    for (column_index, column) in erow_columns.iter().enumerate() {
-        packed_erow[column_index * domain_size..(column_index + 1) * domain_size]
-            .copy_from_slice(column);
-    }
-    let mut packed_ecol = vec![F::ZERO; domain_size * read_column_count::<EF>()];
-    for (column_index, column) in ecol_columns.iter().enumerate() {
-        packed_ecol[column_index * domain_size..(column_index + 1) * domain_size]
-            .copy_from_slice(column);
-    }
-    let (erow_commitment, erow) = <Pcs as MlePcs<E>>::commit(config, &packed_erow, challenger)?;
-    let (ecol_commitment, ecol) = <Pcs as MlePcs<E>>::commit(config, &packed_ecol, challenger)?;
+    let (commitment, batch) =
+        Pcs::commit_read_tables(config, coordinate_columns, domain_size, challenger)?;
 
     Ok((
         SparkReadProverData {
-            erow,
-            ecol,
+            batch,
             marker: PhantomData,
         },
-        SparkReadCommitments {
-            erow: erow_commitment,
-            ecol: ecol_commitment,
-        },
+        SparkReadCommitments { batch: commitment },
     ))
 }
 
@@ -1542,23 +2852,31 @@ fn open_spark_read_tables<E, EF, Pcs>(
 where
     EF: ExtField,
     E: SpartanContextEngine<EF = EF>,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
-    <Pcs as MlePcs<E>>::ProverData: Clone + CommittedPolynomialView<EF>,
+    Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
     let value_num_variables = config
         .num_variables
-        .checked_sub(read_column_bits::<EF>())
+        .checked_sub(read_table_column_bits::<EF>())
         .ok_or(SpartanWhirError::invalid_config())?;
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let (erow_claims, ecol_claims, erow_evals, ecol_evals) = read_opening_claims_from_prover_data(
-        config,
-        &prover_data.erow,
-        &prover_data.ecol,
-        product_claims,
-    )?;
+    let points = read_opening_points(product_claims)?;
+    let points = vec![
+        points.erow_low,
+        points.erow_high,
+        points.erow_ops,
+        points.ecol_low,
+        points.ecol_high,
+        points.ecol_ops,
+    ];
+    let (proof, evals) = Pcs::open_read_tables(config, prover_data.batch, &points, challenger)?;
+    let [erow_low, erow_high, erow_ops, ecol_low, ecol_high, ecol_ops] = evals
+        .try_into()
+        .map_err(|_| SpartanWhirError::invalid_config())?;
+    let erow_evals = [erow_low, erow_high, erow_ops];
+    let ecol_evals = [ecol_low, ecol_high, ecol_ops];
     let read_evals = split_read_coordinate_evals::<EF>(&erow_evals, &ecol_evals)?;
     let expected_left = [
         read_evals.erow_low,
@@ -1582,26 +2900,17 @@ where
     {
         return Err(SpartanWhirError::SumcheckFailed);
     }
-    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
-    let erow_proof =
-        <Pcs as MlePcs<E>>::open(config, prover_data.erow, &erow_statement, challenger)?;
-    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
-    let ecol_proof =
-        <Pcs as MlePcs<E>>::open(config, prover_data.ecol, &ecol_statement, challenger)?;
-
     Ok(SparkReadOpeningProof {
         num_variables: config.num_variables,
-        column_bits: read_column_bits::<EF>(),
-        erow_commitment: commitments.erow,
-        ecol_commitment: commitments.ecol,
+        column_bits: read_table_column_bits::<EF>(),
+        commitment: commitments.batch,
         erow_low_evals: erow_evals[0].clone(),
         erow_high_evals: erow_evals[1].clone(),
         ecol_low_evals: ecol_evals[0].clone(),
         ecol_high_evals: ecol_evals[1].clone(),
         erow_ops_evals: erow_evals[2].clone(),
         ecol_ops_evals: ecol_evals[2].clone(),
-        erow_proof,
-        ecol_proof,
+        proof,
         marker: PhantomData,
     })
 }
@@ -1643,21 +2952,15 @@ fn parse_spark_read_openings<E, EF, Pcs>(
 where
     EF: ExtField,
     E: SpartanContextEngine<EF = EF>,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
     validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
     Ok(ParsedSparkReadOpenings {
-        erow: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
+        batch: Pcs::verify_parse_read_commitment(
             config,
-            &proof.erow_commitment,
-            &proof.erow_proof,
-            challenger,
-        )?,
-        ecol: <Pcs as ProtocolPcs<E>>::verify_parse_commitment(
-            config,
-            &proof.ecol_commitment,
-            &proof.ecol_proof,
+            &proof.commitment,
+            &proof.proof,
             challenger,
         )?,
     })
@@ -1717,43 +3020,40 @@ fn finalize_spark_read_openings<E, EF, Pcs>(
 where
     EF: ExtField,
     E: SpartanContextEngine<EF = EF>,
-    Pcs: ProtocolPcs<E, Config = WhirPcsConfig>,
+    Pcs: SparkReadPcs<E>,
     <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
 {
     validate_spark_read_opening_shape::<E, EF, Pcs>(config, proof)?;
     let value_num_variables = config
         .num_variables
-        .checked_sub(read_column_bits::<EF>())
+        .checked_sub(read_table_column_bits::<EF>())
         .ok_or(SpartanWhirError::invalid_config())?;
     if product_claims.ops.product_point.0.len() != value_num_variables {
         return Err(SpartanWhirError::InvalidNumVariables);
     }
-    let erow_evals = [
-        proof.erow_low_evals.as_slice(),
-        proof.erow_high_evals.as_slice(),
-        proof.erow_ops_evals.as_slice(),
+    let points = read_opening_points(product_claims)?;
+    let points = vec![
+        points.erow_low,
+        points.erow_high,
+        points.erow_ops,
+        points.ecol_low,
+        points.ecol_high,
+        points.ecol_ops,
     ];
-    let ecol_evals = [
-        proof.ecol_low_evals.as_slice(),
-        proof.ecol_high_evals.as_slice(),
-        proof.ecol_ops_evals.as_slice(),
+    let evals = vec![
+        proof.erow_low_evals.clone(),
+        proof.erow_high_evals.clone(),
+        proof.erow_ops_evals.clone(),
+        proof.ecol_low_evals.clone(),
+        proof.ecol_high_evals.clone(),
+        proof.ecol_ops_evals.clone(),
     ];
-    let (erow_claims, ecol_claims) =
-        read_opening_claims_from_evals(product_claims, &erow_evals, &ecol_evals)?;
-    let erow_statement = point_eval_statement::<E, EF>(&erow_claims)?;
-    <Pcs as ProtocolPcs<E>>::verify_finalize(
+    Pcs::verify_finalize_read_tables(
         config,
-        &parsed.erow,
-        &erow_statement,
-        &proof.erow_proof,
-        challenger,
-    )?;
-    let ecol_statement = point_eval_statement::<E, EF>(&ecol_claims)?;
-    <Pcs as ProtocolPcs<E>>::verify_finalize(
-        config,
-        &parsed.ecol,
-        &ecol_statement,
-        &proof.ecol_proof,
+        &parsed.batch,
+        &proof.proof,
+        &points,
+        &evals,
         challenger,
     )?;
     split_read_coordinate_evals(
@@ -1785,6 +3085,7 @@ where
     EF: ExtField,
     D: CommittedPolynomialView<EF>,
 {
+    let _profile = profile_scope("spark_fixed_opening_claims");
     if prover_data.num_variables() != config.num_variables {
         return Err(SpartanWhirError::invalid_config());
     }
@@ -1970,6 +3271,7 @@ where
     EF: ExtField,
     D: CommittedPolynomialView<EF>,
 {
+    let _profile = profile_scope("spark_audit_opening_claims");
     if prover_data.num_variables() != config.num_variables {
         return Err(SpartanWhirError::invalid_config());
     }
@@ -2068,97 +3370,6 @@ struct SparkFixedAuditOpeningEvals<EF> {
     col_audit_ts: EF,
 }
 
-type ReadCoordinateEvals<EF> = [Vec<EF>; 3];
-
-fn read_opening_claims_from_prover_data<EF, D>(
-    config: &WhirPcsConfig,
-    erow_prover_data: &D,
-    ecol_prover_data: &D,
-    product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-) -> Result<
-    (
-        Vec<(MultilinearPoint<EF>, EF)>,
-        Vec<(MultilinearPoint<EF>, EF)>,
-        ReadCoordinateEvals<EF>,
-        ReadCoordinateEvals<EF>,
-    ),
-    SpartanWhirError,
->
-where
-    EF: ExtField,
-    D: CommittedPolynomialView<EF>,
-{
-    if erow_prover_data.num_variables() != config.num_variables
-        || ecol_prover_data.num_variables() != config.num_variables
-    {
-        return Err(SpartanWhirError::invalid_config());
-    }
-    let erow_polynomial = erow_prover_data.polynomial();
-    let ecol_polynomial = ecol_prover_data.polynomial();
-    let points = read_opening_points(product_claims)?;
-    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
-    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
-    let mut erow_evals = [
-        Vec::with_capacity(EF::DIMENSION),
-        Vec::with_capacity(EF::DIMENSION),
-        Vec::with_capacity(EF::DIMENSION),
-    ];
-    let mut ecol_evals = [
-        Vec::with_capacity(EF::DIMENSION),
-        Vec::with_capacity(EF::DIMENSION),
-        Vec::with_capacity(EF::DIMENSION),
-    ];
-
-    for column in 0..EF::DIMENSION {
-        push_read_opening_claim(
-            erow_polynomial,
-            column,
-            &points.erow_low,
-            &mut erow_evals[0],
-            &mut erow_claims,
-        )?;
-        push_read_opening_claim(
-            erow_polynomial,
-            column,
-            &points.erow_high,
-            &mut erow_evals[1],
-            &mut erow_claims,
-        )?;
-        push_read_opening_claim(
-            erow_polynomial,
-            column,
-            &points.erow_ops,
-            &mut erow_evals[2],
-            &mut erow_claims,
-        )?;
-    }
-    for column in 0..EF::DIMENSION {
-        push_read_opening_claim(
-            ecol_polynomial,
-            column,
-            &points.ecol_low,
-            &mut ecol_evals[0],
-            &mut ecol_claims,
-        )?;
-        push_read_opening_claim(
-            ecol_polynomial,
-            column,
-            &points.ecol_high,
-            &mut ecol_evals[1],
-            &mut ecol_claims,
-        )?;
-        push_read_opening_claim(
-            ecol_polynomial,
-            column,
-            &points.ecol_ops,
-            &mut ecol_evals[2],
-            &mut ecol_claims,
-        )?;
-    }
-
-    Ok((erow_claims, ecol_claims, erow_evals, ecol_evals))
-}
-
 struct SparkReadOpeningPoints<EF> {
     erow_low: MultilinearPoint<EF>,
     erow_high: MultilinearPoint<EF>,
@@ -2183,94 +3394,6 @@ where
         ecol_high: high,
         ecol_ops: product_claims.ops.product_point.clone(),
     })
-}
-
-fn read_opening_claims_from_evals<EF>(
-    product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
-    erow_evals: &[&[EF]; 3],
-    ecol_evals: &[&[EF]; 3],
-) -> Result<
-    (
-        Vec<(MultilinearPoint<EF>, EF)>,
-        Vec<(MultilinearPoint<EF>, EF)>,
-    ),
-    SpartanWhirError,
->
-where
-    EF: ExtField,
-{
-    if erow_evals.iter().any(|evals| evals.len() != EF::DIMENSION)
-        || ecol_evals.iter().any(|evals| evals.len() != EF::DIMENSION)
-    {
-        return Err(SpartanWhirError::invalid_config());
-    }
-    let points = read_opening_points(product_claims)?;
-    let mut erow_claims = Vec::with_capacity(3 * EF::DIMENSION);
-    for column in 0..EF::DIMENSION {
-        erow_claims.push((
-            read_rectangular_point::<EF>(column, &points.erow_low)?,
-            erow_evals[0][column],
-        ));
-        erow_claims.push((
-            read_rectangular_point::<EF>(column, &points.erow_high)?,
-            erow_evals[1][column],
-        ));
-        erow_claims.push((
-            read_rectangular_point::<EF>(column, &points.erow_ops)?,
-            erow_evals[2][column],
-        ));
-    }
-    let mut ecol_claims = Vec::with_capacity(3 * EF::DIMENSION);
-    for coordinate in 0..EF::DIMENSION {
-        ecol_claims.push((
-            read_rectangular_point::<EF>(coordinate, &points.ecol_low)?,
-            ecol_evals[0][coordinate],
-        ));
-        ecol_claims.push((
-            read_rectangular_point::<EF>(coordinate, &points.ecol_high)?,
-            ecol_evals[1][coordinate],
-        ));
-        ecol_claims.push((
-            read_rectangular_point::<EF>(coordinate, &points.ecol_ops)?,
-            ecol_evals[2][coordinate],
-        ));
-    }
-    Ok((erow_claims, ecol_claims))
-}
-
-fn push_read_opening_claim<EF>(
-    polynomial: &[F],
-    column: usize,
-    base_point: &MultilinearPoint<EF>,
-    evals: &mut Vec<EF>,
-    claims: &mut Vec<(MultilinearPoint<EF>, EF)>,
-) -> Result<(), SpartanWhirError>
-where
-    EF: ExtField,
-{
-    let point = read_rectangular_point::<EF>(column, base_point)?;
-    let value = evaluate_base_rectangular_opening_claim(
-        polynomial,
-        read_column_bits::<EF>(),
-        column,
-        base_point,
-    )?;
-    claims.push((point, value));
-    evals.push(value);
-    Ok(())
-}
-
-fn read_rectangular_point<EF>(
-    column: usize,
-    base_point: &MultilinearPoint<EF>,
-) -> Result<MultilinearPoint<EF>, SpartanWhirError>
-where
-    EF: ExtField,
-{
-    if column >= read_column_count::<EF>() {
-        return Err(SpartanWhirError::invalid_config());
-    }
-    rectangular_point(column, read_column_bits::<EF>(), base_point)
 }
 
 fn dotproduct_full_domain_points<EF>(
@@ -2385,20 +3508,37 @@ where
 
     let first_challenge = point[0];
     let first_half = table.len() / 2;
-    let mut layer = Vec::with_capacity(first_half);
-    for i in 0..first_half {
-        let lo = table[i];
-        let hi = table[i + first_half];
-        layer.push(EF::from(lo) + first_challenge * (hi - lo));
-    }
+    let mut layer: Vec<EF> = if cfg!(feature = "parallel") && first_half >= (1 << 14) {
+        (0..first_half)
+            .into_par_iter()
+            .map(|i| {
+                let lo = table[i];
+                let hi = table[i + first_half];
+                EF::from(lo) + first_challenge * (hi - lo)
+            })
+            .collect()
+    } else {
+        (0..first_half)
+            .map(|i| {
+                let lo = table[i];
+                let hi = table[i + first_half];
+                EF::from(lo) + first_challenge * (hi - lo)
+            })
+            .collect()
+    };
 
     let mut active = layer.len();
     for &r_i in &point[1..] {
         let half = active / 2;
-        for i in 0..half {
-            let lo = layer[i];
-            let hi = layer[i + half];
-            layer[i] = lo + r_i * (hi - lo);
+        let (low, high) = layer[..active].split_at_mut(half);
+        if cfg!(feature = "parallel") && half >= (1 << 14) {
+            low.par_iter_mut()
+                .zip(high.par_iter())
+                .for_each(|(lo, &hi)| *lo += r_i * (hi - *lo));
+        } else {
+            for (lo, &hi) in low.iter_mut().zip(high.iter()) {
+                *lo += r_i * (hi - *lo);
+            }
         }
         active = half;
     }
@@ -2429,18 +3569,27 @@ where
     Ok(MultilinearPoint(point))
 }
 
-pub fn read_column_count<EF>() -> usize
+fn read_coordinate_column_count<EF>() -> usize
 where
     EF: ExtField,
 {
     EF::DIMENSION.next_power_of_two()
 }
 
-pub fn read_column_bits<EF>() -> usize
+fn read_coordinate_column_bits<EF>() -> usize
 where
     EF: ExtField,
 {
-    read_column_count::<EF>().ilog2() as usize
+    read_coordinate_column_count::<EF>().ilog2() as usize
+}
+
+/// Selector bits in the combined `erow` and `ecol` read-table commitment.
+pub fn read_table_column_bits<EF>() -> usize
+where
+    EF: ExtField,
+{
+    // One selector bit chooses erow or ecol; the rest choose an extension coordinate.
+    read_coordinate_column_bits::<EF>() + 1
 }
 
 pub fn fixed_value_column_count() -> usize {
@@ -2526,7 +3675,7 @@ where
     Pcs: MlePcs<E, Config = WhirPcsConfig>,
 {
     if proof.num_variables != config.num_variables
-        || proof.column_bits != read_column_bits::<EF>()
+        || proof.column_bits != read_table_column_bits::<EF>()
         || proof.erow_low_evals.len() != EF::DIMENSION
         || proof.erow_high_evals.len() != EF::DIMENSION
         || proof.ecol_low_evals.len() != EF::DIMENSION
@@ -2559,17 +3708,31 @@ where
     })
 }
 
-fn extension_table_to_base_columns<EF>(table: &[EF]) -> Result<Vec<Vec<F>>, SpartanWhirError>
+fn extension_read_tables_to_base_columns<EF>(
+    erow: &[EF],
+    ecol: &[EF],
+) -> Result<Vec<F>, SpartanWhirError>
 where
     EF: ExtField,
 {
-    if table.is_empty() || !table.len().is_power_of_two() {
+    if erow.is_empty() || !erow.len().is_power_of_two() || ecol.len() != erow.len() {
         return Err(SpartanWhirError::InvalidPolynomialLength);
     }
-    let mut columns = vec![vec![F::ZERO; table.len()]; EF::DIMENSION];
-    for (row, value) in table.iter().enumerate() {
-        for (col, &coeff) in value.as_basis_coefficients_slice().iter().enumerate() {
-            columns[col][row] = coeff;
+
+    let domain_size = erow.len();
+    let coordinate_count = EF::DIMENSION;
+    let len = domain_size
+        .checked_mul(2)
+        .and_then(|len| len.checked_mul(coordinate_count))
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    let mut columns = vec![F::ZERO; len];
+    for (table_index, table) in [erow, ecol].into_iter().enumerate() {
+        for (row, value) in table.iter().enumerate() {
+            for (coordinate, &coefficient) in value.as_basis_coefficients_slice().iter().enumerate()
+            {
+                let column = table_index * coordinate_count + coordinate;
+                columns[column * domain_size + row] = coefficient;
+            }
         }
     }
     Ok(columns)
@@ -2689,11 +3852,159 @@ fn recover_witness_eval<EF: Field>(r0: EF, eval_z: EF, eval_x: EF) -> Result<EF,
 #[cfg(test)]
 mod tests {
     use super::{
-        build_matrix_z, build_public_half, build_z_full, evaluate_public_half, matrix_z_slice,
-        recover_witness_eval,
+        application_relation, build_matrix_z, build_public_half, build_z_full,
+        combine_application_mask_vectors, evaluate_public_half,
+        extension_read_tables_to_base_columns, matrix_z_slice, power_covector,
+        recover_witness_eval, sample_inner_masks,
     };
     use crate::{engine::F, QuarticBinExtension};
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{BasedVectorSpace, HornerIter, PrimeCharacteristicRing};
+    use rand::{rngs::StdRng, SeedableRng};
+
+    type EF = QuarticBinExtension;
+
+    fn dot(lhs: &[EF], rhs: &[EF]) -> EF {
+        lhs.iter().zip(rhs).map(|(&a, &b)| a * b).sum()
+    }
+
+    #[test]
+    fn read_tables_are_packed_by_table_then_coordinate() {
+        let value = |offset: u32| {
+            EF::from_basis_coefficients_fn(|coordinate| F::from_u32(offset + coordinate as u32))
+        };
+        let erow = [value(10), value(20)];
+        let ecol = [value(30), value(40)];
+
+        let packed = extension_read_tables_to_base_columns(&erow, &ecol).unwrap();
+
+        for (table_index, table) in [&erow[..], &ecol[..]].into_iter().enumerate() {
+            for coordinate in 0..<EF as BasedVectorSpace<F>>::DIMENSION {
+                let column = table_index * <EF as BasedVectorSpace<F>>::DIMENSION + coordinate;
+                for (row, value) in table.iter().enumerate() {
+                    assert_eq!(
+                        packed[column * table.len() + row],
+                        value.as_basis_coefficients_slice()[coordinate]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zk_application_relation_matches_separate_equations() {
+        let num_rounds = 2;
+        let point = [EF::from_u32(2), EF::from_u32(3)];
+        let rho = EF::from_u32(5);
+        let batching = EF::from_u32(7);
+        let inner_messages = [
+            vec![EF::ZERO, EF::ONE, EF::from_u32(2), -EF::from_u32(3)],
+            vec![EF::ZERO, EF::from_u32(4), EF::from_u32(5), -EF::from_u32(9)],
+            vec![
+                EF::ZERO,
+                EF::from_u32(6),
+                EF::from_u32(7),
+                -EF::from_u32(13),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(8),
+                EF::from_u32(9),
+                -EF::from_u32(17),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(10),
+                EF::from_u32(11),
+                -EF::from_u32(21),
+            ],
+            vec![
+                EF::ZERO,
+                EF::from_u32(12),
+                EF::from_u32(13),
+                -EF::from_u32(25),
+            ],
+        ];
+        let outer_messages = [
+            (1..=8).map(EF::from_u32).collect::<Vec<_>>(),
+            (11..=18).map(EF::from_u32).collect::<Vec<_>>(),
+        ];
+        let unmasked = (EF::from_u32(19), EF::from_u32(23), EF::from_u32(29));
+        let mut masked = [unmasked.0, unmasked.1, unmasked.2];
+        for matrix in 0..3 {
+            for round in 0..num_rounds {
+                masked[matrix] += inner_messages[matrix * num_rounds + round]
+                    .iter()
+                    .copied()
+                    .horner::<EF, EF>(point[round]);
+            }
+        }
+        let outer_evals = outer_messages
+            .iter()
+            .zip(point)
+            .map(|(message, x)| message.iter().copied().horner::<EF, EF>(x))
+            .collect::<Vec<_>>();
+        let (inner_covectors, outer_covectors, target) = application_relation(
+            num_rounds,
+            &point,
+            (masked[0], masked[1], masked[2]),
+            &outer_evals,
+            rho,
+            batching,
+        );
+        let source = unmasked.0 + rho * unmasked.1 + rho.square() * unmasked.2;
+        let inner_claim = inner_messages
+            .iter()
+            .zip(&inner_covectors)
+            .map(|(message, covector)| dot(message, covector))
+            .sum::<EF>();
+        let outer_claim = outer_messages
+            .iter()
+            .zip(&outer_covectors)
+            .map(|(message, covector)| dot(message, covector))
+            .sum::<EF>();
+
+        assert_eq!(source + inner_claim + outer_claim, target);
+        assert_eq!(power_covector(EF::ONE, 4), vec![EF::ONE; 4]);
+    }
+
+    #[test]
+    fn combined_application_masks_pad_inner_before_outer() {
+        let inner = vec![
+            vec![EF::ONE, EF::from_u32(2), EF::from_u32(3), EF::from_u32(4)],
+            vec![EF::from_u32(5); 4],
+        ];
+        let outer = vec![vec![EF::from_u32(6); 8]];
+        let combined = combine_application_mask_vectors(inner.clone(), outer.clone(), 8).unwrap();
+
+        assert_eq!(combined.len(), 3);
+        assert_eq!(&combined[0][..4], inner[0]);
+        assert_eq!(&combined[1][..4], inner[1]);
+        assert!(combined[0][4..].iter().all(|&value| value == EF::ZERO));
+        assert!(combined[1][4..].iter().all(|&value| value == EF::ZERO));
+        assert_eq!(combined[2], outer[0]);
+    }
+
+    #[test]
+    fn zk_inner_masks_shift_every_disclosed_matrix_claim() {
+        let num_rounds = 3;
+        let point = [EF::from_u32(2), EF::from_u32(3), EF::from_u32(4)];
+        let unmasked = [EF::from_u32(17), EF::from_u32(19), EF::from_u32(23)];
+        for seed in 0..16 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let masks = sample_inner_masks::<EF, _>(num_rounds, &mut rng);
+            for matrix in 0..3 {
+                let shift = (0..num_rounds)
+                    .map(|round| {
+                        masks[matrix * num_rounds + round]
+                            .iter()
+                            .copied()
+                            .horner::<EF, EF>(point[round])
+                    })
+                    .sum::<EF>();
+                assert_ne!(unmasked[matrix] + shift, unmasked[matrix]);
+            }
+        }
+    }
 
     #[test]
     fn recover_witness_eval_rejects_non_invertible_denominator() {
