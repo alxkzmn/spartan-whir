@@ -131,7 +131,7 @@ where
 {
     let mut eq = {
         let _profile = crate::profiling::profile_scope("outer_eq_table_build");
-        crate::EqPolynomial::evals_from_point_parallel(&tau.0)
+        crate::EqPolynomial::evals_from_point_with_base::<F>(&tau.0)
     };
     let mut rounds = Vec::with_capacity(tau.0.len());
     let mut r_x = Vec::with_capacity(tau.0.len());
@@ -2064,7 +2064,7 @@ mod zk_outer_tests {
         let mut a = az.into_iter().map(EF::from).collect::<Vec<_>>();
         let mut b = bz.into_iter().map(EF::from).collect::<Vec<_>>();
         let mut c = cz.into_iter().map(EF::from).collect::<Vec<_>>();
-        let mut eq = crate::EqPolynomial::evals_from_point(&tau);
+        let mut eq = crate::EqPolynomial::evals_from_point_with_base::<F>(&tau);
         let mut prefix = Vec::new();
 
         for round in 0..num_rounds {

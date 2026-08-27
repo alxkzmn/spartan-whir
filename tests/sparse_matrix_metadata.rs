@@ -122,8 +122,8 @@ fn bind_row_vars_and_evaluate_with_tables_are_consistent() {
         spartan_whir::QuarticBinExtension::from(F::from_u32(2)),
         spartan_whir::QuarticBinExtension::from(F::from_u32(5)),
     ];
-    let t_x = spartan_whir::EqPolynomial::evals_from_point(&r_x);
-    let t_y = spartan_whir::EqPolynomial::evals_from_point(&r_y);
+    let t_x = spartan_whir::EqPolynomial::evals_from_point_with_base::<F>(&r_x);
+    let t_y = spartan_whir::EqPolynomial::evals_from_point_with_base::<F>(&r_y);
 
     let (bound_a, bound_b, bound_c) = shape.bind_row_vars(&t_x).expect("bind succeeds");
     let (eval_a, eval_b, eval_c) = shape
@@ -149,7 +149,7 @@ fn bind_row_vars_joint_matches_separate_tables() {
         .expect("padding succeeds");
 
     let r_x = vec![spartan_whir::QuarticBinExtension::from(F::from_u32(3))];
-    let t_x = spartan_whir::EqPolynomial::evals_from_point(&r_x);
+    let t_x = spartan_whir::EqPolynomial::evals_from_point_with_base::<F>(&r_x);
 
     for r in [
         spartan_whir::QuarticBinExtension::ZERO,

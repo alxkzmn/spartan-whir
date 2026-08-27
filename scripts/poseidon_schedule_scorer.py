@@ -8,6 +8,7 @@ backend. This script only scores already-derived candidates.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -19,6 +20,8 @@ DEFAULT_ZK_ELL_SWEEP = [3, 4, 8, 16]
 DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP = [1, 2, 3, 4, 5]
 DEFAULT_VALIDATION_TOLERANCE = 0.20
 DEFAULT_SHORTLIST_MARGIN_RATIO = 0.01
+TIME_TIE_RELATIVE = 0.01
+TIME_TIE_EPSILON = 1.0e-12
 
 COMPONENTS = (
     ("spartan", "constraint_work"),
@@ -36,6 +39,12 @@ def main() -> None:
     parser.add_argument("--candidates", help="Candidate JSON from poseidon-schedule-candidates")
     parser.add_argument("--num-variables", type=int, help="Generate candidates for this size")
     parser.add_argument("--field", default="koalabear", help="Field profile: koalabear or babybear")
+    parser.add_argument(
+        "--extension",
+        choices=("all", "quartic", "quintic", "octic"),
+        default="all",
+        help="Extension candidates to generate or retain; default: all",
+    )
     parser.add_argument("--calibration", required=True, help="Component calibration JSON")
     parser.add_argument("--out-report", required=True, help="Ranked report JSON path")
     parser.add_argument(
@@ -43,12 +52,28 @@ def main() -> None:
         help="Selected DirectSparse setup config; omit for component searches",
     )
     parser.add_argument("--max-pow-bits", type=int, default=DEFAULT_MAX_POW_BITS)
+    parser.add_argument(
+        "--round-log-inv-rate-offset-max",
+        type=int,
+        default=0,
+        help=(
+            "Search uniform explicit round-rate offsets from 1 through this value; "
+            "offset zero retains backend-derived rates"
+        ),
+    )
     parser.add_argument("--security-bits", type=int, default=DEFAULT_SECURITY_BITS)
     parser.add_argument("--merkle-security-bits", type=int)
     parser.add_argument("--component-security-bits", type=int)
     parser.add_argument("--component-merkle-security-bits", type=int)
     parser.add_argument("--constraint-work", type=int, help="Circuit constraint count for full-prover scoring")
     parser.add_argument("--case-label", help="Optional case label copied into report rows")
+    parser.add_argument(
+        "--workload-r1cs",
+        help=(
+            "R1CS file used to bind a directly measured workload; requires "
+            "--constraint-work and --case-label"
+        ),
+    )
     parser.add_argument("--cargo", default="cargo", help="Cargo binary used when --num-variables is set")
     parser.add_argument(
         "--features",
@@ -97,10 +122,18 @@ def main() -> None:
         "--measurements",
         help="Heldout JSON from poseidon-schedule-heldout; adds selected_measured while keeping selected model-based",
     )
+    parser.add_argument(
+        "--reference-label",
+        action="append",
+        default=[],
+        help="Accepted candidate label to include in the measurement shortlist; repeatable",
+    )
     args = parser.parse_args()
 
     if bool(args.candidates) == bool(args.num_variables):
         raise SystemExit("pass exactly one of --candidates or --num-variables")
+    if args.round_log_inv_rate_offset_max < 0:
+        raise SystemExit("--round-log-inv-rate-offset-max must be non-negative")
 
     candidates = (
         read_json(Path(args.candidates))
@@ -119,9 +152,22 @@ def main() -> None:
             args.merkle_security_bits,
             args.component_security_bits,
             args.component_merkle_security_bits,
+            args.extension,
+            args.round_log_inv_rate_offset_max,
         )
     )
-    apply_case_metrics(candidates, args.constraint_work, args.case_label)
+    candidates = filter_candidate_extensions(candidates, args.extension)
+    workload_identity = build_workload_identity(
+        args.workload_r1cs,
+        args.constraint_work,
+        args.case_label,
+    )
+    apply_case_metrics(
+        candidates,
+        args.constraint_work,
+        args.case_label,
+        workload_identity,
+    )
     calibration = read_json(Path(args.calibration))
     measurements = read_json(Path(args.measurements)) if args.measurements else None
     report = score_dump(
@@ -132,6 +178,7 @@ def main() -> None:
         args.measurement_shortlist_margin_seconds,
         args.measurement_shortlist_margin_ratio,
         measurements,
+        args.reference_label,
     )
 
     write_json(Path(args.out_report), report)
@@ -139,7 +186,7 @@ def main() -> None:
     if selected is None:
         raise SystemExit("no valid schedule found")
     if args.out_config:
-        setup_config = selected.get("setup_config")
+        setup_config = selected_setup_config(report)
         if setup_config is None:
             raise SystemExit(
                 "component searches do not produce standalone setup configs; "
@@ -166,6 +213,13 @@ def main() -> None:
     print(message)
 
 
+def selected_setup_config(report: dict[str, Any]) -> dict[str, Any] | None:
+    selected = report.get("selected_measured") or report.get("selected")
+    if selected is None:
+        return None
+    return selected.get("setup_config")
+
+
 def score_dump(
     dump: dict[str, Any],
     calibration: dict[str, Any],
@@ -174,19 +228,29 @@ def score_dump(
     measurement_shortlist_margin_seconds: float | None = None,
     measurement_shortlist_margin_ratio: float | None = None,
     measurements: dict[str, Any] | None = None,
+    reference_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     require_matching_code_provenance(dump, calibration, "candidate dump", "calibration")
     if measurements is not None:
         require_matching_code_provenance(
             dump, measurements, "candidate dump", "heldout measurements"
         )
-    coeffs = normalized_coefficients(calibration)
-    validation = validate_model(calibration, coeffs)
+        require_matching_workload_identity(dump, measurements)
+    require_consistent_workload_identity(dump, "candidate dump", "candidates")
+    if measurements is not None:
+        require_consistent_workload_identity(
+            measurements, "heldout measurements", "rows"
+        )
     proof_mode = dump.get("proof_mode")
     if proof_mode not in ("no-zk", "full-zk"):
         raise SystemExit("candidate dump must declare proof_mode as no-zk or full-zk")
+    coeffs = normalized_coefficients(calibration)
+    validation = validate_model(calibration, coeffs, proof_mode)
+    require_row_proof_modes(dump.get("candidates", []), proof_mode, "candidate")
     if measurements is not None and measurements.get("proof_mode") != proof_mode:
         raise SystemExit("heldout measurements must use the scorer report's proof_mode")
+    if measurements is not None:
+        require_row_proof_modes(measurements.get("rows", []), proof_mode, "heldout")
     use_zk_metrics = proof_mode == "full-zk"
     component_search = dump.get("component_security_override_bits") is not None
     scored = []
@@ -213,7 +277,6 @@ def score_dump(
     accepted.sort(
         key=lambda row: (
             float(row["projected_seconds"]),
-            proof_size_key(row),
             pow_tie_break_key(row),
             str(row.get("label") or ""),
         )
@@ -225,6 +288,24 @@ def score_dump(
         measurement_shortlist_margin_seconds,
         measurement_shortlist_margin_ratio,
     )
+    measurement_shortlist, reference_meta = include_reference_rows(
+        measurement_shortlist, accepted, reference_labels or []
+    )
+    shortlist_meta.update(reference_meta)
+    measurement_shortlist, coverage_meta = include_schedule_coverage_rows(
+        measurement_shortlist, accepted
+    )
+    shortlist_meta.update(coverage_meta)
+    shortlist_meta["required_labels"] = list(
+        dict.fromkeys(
+            [
+                *shortlist_meta.get("reference_labels", []),
+                *shortlist_meta.get("coverage_labels", []),
+            ]
+        )
+    )
+    if measurements is not None:
+        require_measurement_rows_match_candidates(measurements, accepted)
     selected_measured, measurement_summary = measured_selection(measurements)
 
     sorted_scores = sorted(
@@ -232,7 +313,6 @@ def score_dump(
         key=lambda row: (
             not row["accepted_for_ranking"],
             float(row["projected_seconds"]),
-            proof_size_key(row),
             pow_tie_break_key(row),
             str(row.get("label") or ""),
         ),
@@ -250,6 +330,10 @@ def score_dump(
         },
         "source_schema_version": dump.get("schema_version"),
         "num_variables": dump.get("num_variables"),
+        "num_outer_rounds": dump.get("num_outer_rounds"),
+        "constraint_work": dump.get("constraint_work"),
+        "case_label": dump.get("case_label"),
+        "workload_identity": dump.get("workload_identity"),
         "target_security_bits": dump.get("target_security_bits"),
         "target_merkle_security_bits": dump.get("target_merkle_security_bits"),
         "component_security_override_bits": dump.get(
@@ -259,6 +343,10 @@ def score_dump(
             "component_merkle_security_override_bits"
         ),
         "max_pow_bits": max_pow_bits,
+        "extension_filter": dump.get("extension_filter", "all"),
+        "round_log_inv_rate_offset_max": dump.get(
+            "round_log_inv_rate_offset_max", 0
+        ),
         "proof_mode": proof_mode,
         "model_validation": validation,
         "coefficients": coeffs,
@@ -344,17 +432,6 @@ def zk_metric_name(metric: str) -> str:
     }.get(metric, metric)
 
 
-def proof_size_key(row: dict[str, Any]) -> int:
-    # `proof_size_score` is kept only for candidate JSONs emitted before
-    # `proof_size_bytes_estimate` became the canonical tie-breaker.
-    return int(
-        row.get("heldout_proof_size_median_bytes")
-        or row.get("proof_size_bytes_estimate")
-        or row.get("proof_size_score")
-        or 0
-    )
-
-
 def pow_tie_break_key(row: dict[str, Any]) -> tuple[int, int]:
     return (
         int(row.get("max_derived_pow_bits") or 0),
@@ -426,7 +503,6 @@ def dedup_measurement_shortlist(rows: list[dict[str, Any]]) -> list[dict[str, An
         selected.values(),
         key=lambda row: (
             float(row["projected_seconds"]),
-            proof_size_key(row),
             pow_tie_break_key(row),
             int(row.get("zk_ell") or 0),
             str(row.get("label") or ""),
@@ -434,12 +510,90 @@ def dedup_measurement_shortlist(rows: list[dict[str, Any]]) -> list[dict[str, An
     )
 
 
-def shortlist_preferred(row: dict[str, Any]) -> tuple[int, tuple[int, int], int, float, str]:
+def include_reference_rows(
+    shortlist: list[dict[str, Any]],
+    accepted: list[dict[str, Any]],
+    reference_labels: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    requested = list(dict.fromkeys(reference_labels))
+    reference_rows = []
+    for label in requested:
+        matches = [row for row in accepted if row.get("label") == label]
+        if not matches:
+            raise SystemExit(
+                f"reference label not found among accepted candidates: {label}"
+            )
+        reference_rows.extend(matches)
+    combined = dedup_measurement_shortlist([*shortlist, *reference_rows])
+    existing_keys = {measurement_shortlist_key(row) for row in shortlist}
+    added = sum(
+        measurement_shortlist_key(row) not in existing_keys
+        for row in combined
+    )
+    return combined, {
+        "reference_labels": requested,
+        "reference_rows_added": added,
+        "dedup_count": len(combined),
+    }
+
+
+def include_schedule_coverage_rows(
+    shortlist: list[dict[str, Any]], accepted: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    by_group: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for row in accepted:
+        group = (
+            str(row.get("extension") or "unknown"),
+            folding_schedule_family(row),
+            int(row.get("round_log_inv_rate_offset") or 0),
+        )
+        current = by_group.get(group)
+        if current is None or shortlist_preferred(row) < shortlist_preferred(current):
+            by_group[group] = row
+    coverage_rows = sorted(by_group.values(), key=shortlist_preferred)
+    combined = dedup_measurement_shortlist([*shortlist, *coverage_rows])
+    existing_keys = {measurement_shortlist_key(row) for row in shortlist}
+    added = sum(
+        measurement_shortlist_key(row) not in existing_keys for row in combined
+    )
+    coverage_labels = list(
+        dict.fromkeys(str(row.get("label") or "") for row in coverage_rows)
+    )
+    return combined, {
+        "coverage_grouping": [
+            "extension",
+            "folding_schedule_family",
+            "round_log_inv_rate_offset",
+        ],
+        "coverage_group_count": len(by_group),
+        "coverage_labels": coverage_labels,
+        "coverage_rows_added": added,
+        "dedup_count": len(combined),
+    }
+
+
+def folding_schedule_family(row: dict[str, Any]) -> str:
+    params = row.get("whir_params")
+    if not isinstance(params, dict):
+        setup = row.get("setup_config") or {}
+        params = setup.get("whir_params") if isinstance(setup, dict) else None
+    if not isinstance(params, dict):
+        return "unknown"
+    schedule = params.get("folding_schedule")
+    if schedule is None or (isinstance(schedule, dict) and "Constant" in schedule):
+        return "constant"
+    if isinstance(schedule, dict) and "ConstantFromSecondRound" in schedule:
+        return "constant_from_second_round"
+    if isinstance(schedule, dict) and "PerRound" in schedule:
+        return "per_round"
+    return "unknown"
+
+
+def shortlist_preferred(row: dict[str, Any]) -> tuple[float, tuple[int, int], int, str]:
     return (
-        proof_size_key(row),
+        float(row.get("projected_seconds") or 0.0),
         pow_tie_break_key(row),
         int(row.get("zk_ell") or 0),
-        float(row.get("projected_seconds") or 0.0),
         str(row.get("label") or ""),
     )
 
@@ -475,17 +629,18 @@ def measured_selection(
         rows,
         key=lambda row: (
             float(row["measured_seconds"]),
-            proof_size_key(row),
             pow_tie_break_key(row),
             str(row.get("label") or ""),
         ),
     )
+    fastest = ranked[0]
     ties = measured_ties_with_fastest(ranked)
-    tied_rows = [row for row in ranked if not demonstrably_slower_than_fastest(row)]
+    tied_rows = [
+        row for row in ranked if not demonstrably_slower_than_fastest(row, fastest)
+    ]
     selected_source = min(
         tied_rows,
         key=lambda row: (
-            proof_size_key(row),
             pow_tie_break_key(row),
             str(row.get("label") or ""),
         ),
@@ -495,8 +650,8 @@ def measured_selection(
     return selected, {
         "source_measurements": measurements.get("source_report"),
         "measured_rows": len(rows),
-        "selection": "one_percent_paired_then_proof_size",
-        "demonstrable_speed_threshold_relative": 0.01,
+        "selection": "one_percent_or_overlapping_median_ci_then_pow_then_label",
+        "demonstrable_speed_threshold_relative": TIME_TIE_RELATIVE,
         "tied_with_best_count": len(ties),
         "tied_with_best": ties,
     }
@@ -505,9 +660,10 @@ def measured_selection(
 def measured_ties_with_fastest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
+    fastest = rows[0]
     tied = []
     for rank, row in enumerate(rows, 1):
-        if demonstrably_slower_than_fastest(row):
+        if demonstrably_slower_than_fastest(row, fastest):
             continue
         tied.append(
             {
@@ -526,17 +682,32 @@ def measured_ties_with_fastest(rows: list[dict[str, Any]]) -> list[dict[str, Any
                 "heldout_proof_size_median_bytes": row.get(
                     "heldout_proof_size_median_bytes"
                 ),
+                "max_derived_pow_bits": row.get("max_derived_pow_bits"),
+                "pow_work_units": row.get("pow_work_units"),
             }
         )
     return tied
 
 
-def demonstrably_slower_than_fastest(row: dict[str, Any]) -> bool:
-    relative = float(row.get("heldout_relative_median_difference") or 0.0)
-    raw_ci = row.get("heldout_paired_relative_median_ci")
-    if not isinstance(raw_ci, list) or len(raw_ci) != 2:
+def demonstrably_slower_than_fastest(
+    row: dict[str, Any], fastest: dict[str, Any]
+) -> bool:
+    fastest_seconds = float(fastest.get("measured_seconds") or 0.0)
+    row_seconds = float(row.get("measured_seconds") or 0.0)
+    relative = (
+        (row_seconds - fastest_seconds) / fastest_seconds
+        if fastest_seconds > 0.0
+        else float("inf")
+    )
+    if float(relative) <= TIME_TIE_RELATIVE + TIME_TIE_EPSILON:
         return False
-    return relative > 0.01 and float(raw_ci[0]) > 0.0
+    row_ci = median_ci(row)
+    fastest_ci = median_ci(fastest)
+    return not (
+        row_ci is not None
+        and fastest_ci is not None
+        and intervals_overlap(row_ci, fastest_ci)
+    )
 
 
 def median_ci(row: dict[str, Any]) -> tuple[float, float] | None:
@@ -550,10 +721,22 @@ def intervals_overlap(left: tuple[float, float], right: tuple[float, float]) -> 
     return max(left[0], right[0]) <= min(left[1], right[1])
 
 
-def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[str, Any]:
+def validate_model(
+    calibration: dict[str, Any], coeffs: dict[str, Any], proof_mode: str
+) -> dict[str, Any]:
     validation = calibration.get("validation") or {}
     tolerance = float(validation.get("max_relative_error", DEFAULT_VALIDATION_TOLERANCE))
-    heldout = validation.get("heldout") or []
+    source_heldout = validation.get("heldout") or []
+    if not isinstance(source_heldout, list):
+        raise SystemExit("calibration validation heldout rows must be an array")
+    heldout = []
+    for index, row in enumerate(source_heldout):
+        if not isinstance(row, dict) or row.get("proof_mode") not in ("no-zk", "full-zk"):
+            raise SystemExit(
+                f"calibration validation row {index} must declare proof_mode as no-zk or full-zk"
+            )
+        if row["proof_mode"] == proof_mode:
+            heldout.append(row)
     rows = []
     trusted = bool(heldout)
     for row in heldout:
@@ -574,6 +757,9 @@ def validate_model(calibration: dict[str, Any], coeffs: dict[str, Any]) -> dict[
     ordering = ordering_diagnostic(rows)
     return {
         "trusted": trusted,
+        "proof_mode": proof_mode,
+        "source_heldout_rows": len(source_heldout),
+        "mode_heldout_rows": len(heldout),
         "max_relative_error": tolerance,
         "heldout": rows,
         "ordering_diagnostic": ordering,
@@ -668,6 +854,8 @@ def generate_candidates(
     merkle_security_bits: int | None = None,
     component_security_bits: int | None = None,
     component_merkle_security_bits: int | None = None,
+    extension: str = "all",
+    round_log_inv_rate_offset_max: int = 0,
 ) -> dict[str, Any]:
     num_outer_rounds = (
         max(0, constraint_work - 1).bit_length()
@@ -689,6 +877,8 @@ def generate_candidates(
             merkle_security_bits,
             component_security_bits,
             component_merkle_security_bits,
+            extension,
+            round_log_inv_rate_offset_max,
         )
     ell_values = zk_ell_values or DEFAULT_ZK_ELL_SWEEP
     mask_rate_values = zk_mask_log_inv_rate_values or DEFAULT_ZK_MASK_LOG_INV_RATE_SWEEP
@@ -710,6 +900,8 @@ def generate_candidates(
                     merkle_security_bits,
                     component_security_bits,
                     component_merkle_security_bits,
+                    extension,
+                    round_log_inv_rate_offset_max,
                 )
             )
     merged = dict(dumps[0])
@@ -744,6 +936,8 @@ def generate_candidate_dump(
     merkle_security_bits: int | None,
     component_security_bits: int | None,
     component_merkle_security_bits: int | None,
+    extension: str = "all",
+    round_log_inv_rate_offset_max: int = 0,
 ) -> dict[str, Any]:
     repo = Path(__file__).resolve().parents[1]
     cmd = [
@@ -762,8 +956,12 @@ def generate_candidate_dump(
         str(num_variables),
         "--field",
         field,
+        "--extension",
+        extension,
         "--max-pow-bits",
         str(max_pow_bits),
+        "--round-log-inv-rate-offset-max",
+        str(round_log_inv_rate_offset_max),
         "--security-bits",
         str(security_bits),
         "--merkle-security-bits",
@@ -794,6 +992,19 @@ def generate_candidate_dump(
     return json.loads(output)
 
 
+def filter_candidate_extensions(
+    dump: dict[str, Any], extension: str
+) -> dict[str, Any]:
+    if extension == "all":
+        return dump
+    filtered = dict(dump)
+    filtered["extension_filter"] = extension
+    filtered["candidates"] = [
+        row for row in dump.get("candidates", []) if row.get("extension") == extension
+    ]
+    return filtered
+
+
 def parse_int_list(raw: str | None) -> list[int] | None:
     if raw is None:
         return None
@@ -804,17 +1015,46 @@ def parse_int_list(raw: str | None) -> list[int] | None:
 
 
 def apply_case_metrics(
-    dump: dict[str, Any], constraint_work: int | None, case_label: str | None
+    dump: dict[str, Any],
+    constraint_work: int | None,
+    case_label: str | None,
+    workload_identity: dict[str, Any] | None = None,
 ) -> None:
     if constraint_work is not None:
         dump["constraint_work"] = constraint_work
     if case_label is not None:
         dump["case_label"] = case_label
+    if workload_identity is not None:
+        dump["workload_identity"] = workload_identity
     for candidate in dump.get("candidates", []):
         if constraint_work is not None:
             candidate["constraint_work"] = constraint_work
         if case_label is not None:
             candidate["case_label"] = case_label
+        if workload_identity is not None:
+            candidate["workload_identity"] = workload_identity
+
+
+def build_workload_identity(
+    r1cs_path: str | None,
+    constraint_work: int | None,
+    case_label: str | None,
+) -> dict[str, Any] | None:
+    if r1cs_path is None:
+        return None
+    if not isinstance(constraint_work, int) or constraint_work <= 0:
+        raise SystemExit("--workload-r1cs requires a positive --constraint-work")
+    if not isinstance(case_label, str) or not case_label:
+        raise SystemExit("--workload-r1cs requires --case-label")
+    digest = hashlib.sha256()
+    with Path(r1cs_path).open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "label": case_label,
+        "r1cs_sha256": digest.hexdigest(),
+        "constraint_work": constraint_work,
+    }
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -831,7 +1071,9 @@ def require_matching_code_provenance(
     left_provenance = left.get("provenance")
     right_provenance = right.get("provenance")
     if left_provenance is None and right_provenance is None:
-        return
+        raise SystemExit(
+            f"cannot combine {left_name} and {right_name}: both artifacts are missing provenance"
+        )
     if left_provenance is None or right_provenance is None:
         raise SystemExit(
             f"cannot combine {left_name} and {right_name}: one artifact is missing provenance"
@@ -840,6 +1082,113 @@ def require_matching_code_provenance(
         raise SystemExit(
             f"cannot combine {left_name} and {right_name}: provenance differs"
         )
+
+
+def require_matching_workload_identity(
+    left: dict[str, Any], right: dict[str, Any]
+) -> None:
+    left_identity = left.get("workload_identity")
+    right_identity = right.get("workload_identity")
+    if left_identity is None and right_identity is None:
+        raise SystemExit(
+            "candidate dump and heldout measurements are missing workload_identity"
+        )
+    if left_identity is None or right_identity is None:
+        raise SystemExit("candidate dump and heldout measurements must both carry workload_identity")
+    if left_identity != right_identity:
+        raise SystemExit("candidate dump and heldout measurement workload_identity differ")
+
+
+def require_consistent_workload_identity(
+    artifact: dict[str, Any], artifact_name: str, rows_field: str
+) -> None:
+    identity = artifact.get("workload_identity")
+    rows = artifact.get(rows_field, [])
+    if not isinstance(rows, list):
+        raise SystemExit(f"{artifact_name} {rows_field} must be an array")
+    row_identities = [
+        row.get("workload_identity") if isinstance(row, dict) else None for row in rows
+    ]
+    if identity is None:
+        if any(row_identity is not None for row_identity in row_identities):
+            raise SystemExit(
+                f"{artifact_name} rows carry workload_identity but the artifact does not"
+            )
+        return
+    if not isinstance(identity, dict) or set(identity) != {
+        "label",
+        "r1cs_sha256",
+        "constraint_work",
+    }:
+        raise SystemExit(f"{artifact_name} has an invalid workload_identity")
+    label = identity.get("label")
+    if not isinstance(label, str) or not label:
+        raise SystemExit(f"{artifact_name} workload_identity has an invalid label")
+    constraint_work = identity.get("constraint_work")
+    if (
+        not isinstance(constraint_work, int)
+        or isinstance(constraint_work, bool)
+        or constraint_work <= 0
+    ):
+        raise SystemExit(
+            f"{artifact_name} workload_identity has an invalid constraint_work"
+        )
+    if "case_label" in artifact and label != artifact.get("case_label"):
+        raise SystemExit(f"{artifact_name} workload label differs from case_label")
+    if (
+        "constraint_work" in artifact
+        and constraint_work != artifact.get("constraint_work")
+    ):
+        raise SystemExit(
+            f"{artifact_name} workload constraint count differs from constraint_work"
+        )
+    digest = identity.get("r1cs_sha256")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise SystemExit(f"{artifact_name} workload_identity has an invalid r1cs_sha256")
+    for index, row_identity in enumerate(row_identities):
+        if row_identity != identity:
+            raise SystemExit(
+                f"{artifact_name} row {index} workload_identity differs from the artifact"
+            )
+
+
+def require_row_proof_modes(rows: Any, proof_mode: str, source: str) -> None:
+    if not isinstance(rows, list):
+        raise SystemExit(f"{source} rows must be an array")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("proof_mode") != proof_mode:
+            raise SystemExit(
+                f"{source} row {index} must use proof_mode={proof_mode}"
+            )
+
+
+def require_measurement_rows_match_candidates(
+    measurements: dict[str, Any], accepted: list[dict[str, Any]]
+) -> None:
+    accepted_identities = {schedule_row_identity(row) for row in accepted}
+    for index, row in enumerate(measurements.get("rows", [])):
+        if schedule_row_identity(row) not in accepted_identities:
+            raise SystemExit(
+                f"heldout row {index} does not match an accepted candidate setup"
+            )
+
+
+def schedule_row_identity(row: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "label": row.get("label"),
+            "extension": row.get("extension"),
+            "proof_mode": row.get("proof_mode"),
+            "setup_config": row.get("setup_config"),
+            "workload_identity": row.get("workload_identity"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def write_json(path: Path, value: Any) -> None:

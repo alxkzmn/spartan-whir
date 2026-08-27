@@ -48,6 +48,7 @@ def main() -> None:
     for row in rows:
         if "measured_seconds" not in row:
             raise SystemExit(f"heldout row {row.get('label')} is missing measured_seconds")
+    require_matching_proof_modes(calibration, heldout, rows)
 
     validation = calibration.setdefault("validation", {})
     validation["note"] = "Heldout rows are real direct-sparse Poseidon proof timings."
@@ -225,13 +226,42 @@ def require_matching_code_provenance(
     calibration_provenance = calibration.get("provenance")
     heldout_provenance = heldout.get("provenance")
     if calibration_provenance is None and heldout_provenance is None:
-        return
+        raise SystemExit(
+            "cannot combine calibration and heldout: both artifacts are missing provenance"
+        )
     if calibration_provenance is None or heldout_provenance is None:
         raise SystemExit(
             "cannot combine calibration and heldout: one artifact is missing provenance"
         )
     if calibration_provenance != heldout_provenance:
         raise SystemExit("cannot combine calibration and heldout: provenance differs")
+
+
+def require_matching_proof_modes(
+    calibration: dict[str, Any],
+    heldout: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> None:
+    heldout_mode = heldout.get("proof_mode")
+    if heldout_mode not in ("no-zk", "full-zk"):
+        raise SystemExit(
+            "heldout artifact must declare proof_mode as no-zk or full-zk"
+        )
+    calibration_mode = calibration.get("proof_mode")
+    if calibration_mode is not None:
+        if calibration_mode not in ("no-zk", "full-zk"):
+            raise SystemExit(
+                "calibration artifact proof_mode must be no-zk or full-zk"
+            )
+        if calibration_mode != heldout_mode:
+            raise SystemExit(
+                "cannot combine calibration and heldout: proof_mode differs"
+            )
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("proof_mode") != heldout_mode:
+            raise SystemExit(
+                f"heldout row {index} must use proof_mode={heldout_mode}"
+            )
 
 
 def row_uses_zk_metrics(row: dict[str, Any]) -> bool:

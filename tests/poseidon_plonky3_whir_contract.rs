@@ -99,7 +99,7 @@ fn poseidon_zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
     PoseidonZkSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
-        whir_params: common::phase3_whir_params(),
+        whir_params: common::phase3_zk_whir_params(),
         spark_whir_params: None,
         ell_zk: spartan_whir::DEFAULT_ZK_ELL,
         mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,

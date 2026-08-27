@@ -22,7 +22,7 @@ fn zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
     PoseidonZkSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
-        whir_params: common::phase3_whir_params(),
+        whir_params: common::phase3_zk_whir_params(),
         spark_whir_params: None,
         ell_zk: spartan_whir::DEFAULT_ZK_ELL,
         mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
@@ -444,6 +444,14 @@ fn poseidon_spark_proving_key_is_serializable() {
         bincode::deserialize(&vk_bytes).expect("spark verifying key deserializes");
     assert_eq!(pk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
     assert_eq!(vk_roundtrip.matrix_closing(), MatrixClosingMode::Spark);
+    let missing_cache_error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
+        Ok(_) => panic!("deserialized Spark proving key proves without derived cache rebuild"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        missing_cache_error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+    );
     pk_roundtrip
         .prepare_for_proving()
         .expect("deserialized Spark key prepares for proving");

@@ -136,6 +136,26 @@ fn domain_separator_canonicalizes_legacy_constant_schedule() {
 }
 
 #[test]
+fn domain_separator_binds_explicit_round_log_inv_rates() {
+    let shape = common::sample_shape();
+    let security = SecurityConfig::default();
+    let rate_three = WhirParams {
+        round_log_inv_rates: vec![3],
+        ..WhirParams::default()
+    };
+    let rate_four = WhirParams {
+        round_log_inv_rates: vec![4],
+        ..rate_three.clone()
+    };
+
+    let rate_three = DomainSeparator::new(&shape, &security, &rate_three);
+    let rate_four = DomainSeparator::new(&shape, &security, &rate_four);
+
+    assert_ne!(rate_three.to_bytes(), rate_four.to_bytes());
+    assert_ne!(absorb_separator(&rate_three), absorb_separator(&rate_four));
+}
+
+#[test]
 fn domain_separator_ignores_spark_params_in_direct_mode() {
     let shape = common::sample_shape();
     let security = SecurityConfig::default();

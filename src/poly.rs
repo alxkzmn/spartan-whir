@@ -1,7 +1,9 @@
 use alloc::{vec, vec::Vec};
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrixView;
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::eq_batch::eval_eq_batch;
 use serde::{Deserialize, Serialize};
 
 use crate::SpartanWhirError;
@@ -38,6 +40,21 @@ impl<EF: Field> EqPolynomial<EF> {
             }
             evals = next;
         }
+        evals
+    }
+
+    /// Uses Plonky3's packed, adaptively parallel equality-table evaluator.
+    ///
+    /// Supplying the base field lets extension-field callers use
+    /// `EF::ExtensionPacking` rather than treating the extension as its own
+    /// scalar base field.
+    pub fn evals_from_point_with_base<Base>(point: &[EF]) -> Vec<EF>
+    where
+        Base: Field,
+        EF: ExtensionField<Base>,
+    {
+        let mut evals = vec![EF::ZERO; 1usize << point.len()];
+        eval_eq_batch::<Base, EF, false>(RowMajorMatrixView::new(point, 1), &mut evals, &[EF::ONE]);
         evals
     }
 }

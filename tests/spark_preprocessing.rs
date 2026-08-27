@@ -394,8 +394,8 @@ fn value_sumcheck_matches_direct_matrix_evaluation() {
     let r = spartan_whir::QuinticExtension::from(fe(9));
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let t_x = EqPolynomial::evals_from_point(&r_x.0);
-    let t_y = EqPolynomial::evals_from_point(&r_y.0);
+    let t_x = EqPolynomial::evals_from_point_with_base::<F>(&r_x.0);
+    let t_y = EqPolynomial::evals_from_point_with_base::<F>(&r_y.0);
     let (eval_a, eval_b, eval_c) = shape
         .evaluate_with_tables(&t_x, &t_y)
         .expect("direct evaluation succeeds");

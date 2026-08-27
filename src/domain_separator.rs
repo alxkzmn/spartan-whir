@@ -6,10 +6,10 @@ use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, Whi
 
 pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v0";
 pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v0";
-/// Version of the verifier-visible SPARK matrix-closing transcript and proof
-/// schema. Version 1 permits audit timestamps to share the fixed value
-/// commitment and represents read coordinates as ordered power-of-two groups.
-pub const SPARK_MATRIX_CLOSING_VERSION: u8 = 1;
+/// Version of the verifier-visible SPARK matrix-closing transcript contract.
+/// Version 3 uses tagged transcript branches for the fixed-table and read-table
+/// openings.
+pub const SPARK_MATRIX_CLOSING_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {

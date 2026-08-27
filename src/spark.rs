@@ -4,6 +4,7 @@ use core::cmp::Ordering;
 use p3_challenger::FieldChallenger;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField32};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
 use crate::profiling::{profile_detail_scope, profile_scope};
@@ -2428,7 +2429,7 @@ where
         };
         let mut eq = {
             let _profile = profile_detail_scope("spark_batched_product_eq_table");
-            EqPolynomial::evals_from_point_parallel(&parent_point)
+            EqPolynomial::evals_from_point_with_base::<F>(&parent_point)
         };
         let product_pair_count = child_layers[0].len() / 2;
         if product_pair_count != eq.len() {
@@ -3839,7 +3840,7 @@ where
         return Err(SpartanWhirError::InvalidRoundCount);
     }
 
-    let eq = EqPolynomial::evals_from_point(point);
+    let eq = EqPolynomial::evals_from_point_with_base::<F>(point);
     if should_parallelize_spark_round(packed_addrs.len()) {
         packed_addrs
             .par_iter()
@@ -3961,7 +3962,7 @@ where
         return Err(SpartanWhirError::InvalidRoundCount);
     }
 
-    let mut eq = EqPolynomial::evals_from_point(parent_point);
+    let mut eq = EqPolynomial::evals_from_point_with_base::<F>(parent_point);
     let mut left = Vec::with_capacity(parent_len);
     let mut right = Vec::with_capacity(parent_len);
     for pair in child_layer.chunks_exact(2) {
@@ -4103,8 +4104,7 @@ where
     if eq_point.len() != point.len() {
         return Err(SpartanWhirError::InvalidRoundCount);
     }
-    let eq = EqPolynomial::evals_from_point(eq_point);
-    evaluate_mle_table(&eq, point)
+    Ok(Point::<EF>::eval_eq(eq_point, point))
 }
 
 fn prove_axis_grand_products_with_leaf_claims<EF, C>(
@@ -4365,7 +4365,7 @@ where
         return Err(SpartanWhirError::InvalidR1csShape);
     }
     let beta_squared = beta.square();
-    let memory_values = EqPolynomial::evals_from_point(point);
+    let memory_values = EqPolynomial::evals_from_point_with_base::<F>(point);
     let mut init = vec![EF::ONE; padded_memory_size];
     let mut audit = vec![EF::ONE; padded_memory_size];
     if should_parallelize_spark_round(memory_size) {
@@ -4736,7 +4736,7 @@ where
         return Err(SpartanWhirError::InvalidR1csShape);
     }
 
-    let memory_values = EqPolynomial::evals_from_point(point);
+    let memory_values = EqPolynomial::evals_from_point_with_base::<F>(point);
     let init_audit = if should_parallelize_spark_round(memory_size) {
         (0..memory_size)
             .into_par_iter()
@@ -4988,7 +4988,7 @@ where
         return Err(SpartanWhirError::InvalidR1csShape);
     }
 
-    let memory_values = EqPolynomial::evals_from_point(point);
+    let memory_values = EqPolynomial::evals_from_point_with_base::<F>(point);
     let mut init_root = EF::ONE;
     let mut audit_root = EF::ONE;
     for index in 0..memory_size {
@@ -5246,6 +5246,39 @@ mod tests {
             col,
             val: F::from_u32(val),
         }
+    }
+
+    #[test]
+    fn equality_evaluation_matches_the_materialized_table() {
+        type EF = OcticBinExtension;
+
+        let value = |seed: usize| {
+            EF::from_basis_coefficients_fn(|coordinate| {
+                F::from_u32((19 * seed + 11 * coordinate + 1) as u32)
+            })
+        };
+
+        for dimensions in 0..=8 {
+            let eq_point = (0..dimensions).map(value).collect::<Vec<_>>();
+            let point = (0..dimensions)
+                .map(|index| value(32 + index))
+                .collect::<Vec<_>>();
+            let scalar_table = EqPolynomial::evals_from_point(&eq_point);
+
+            assert_eq!(
+                EqPolynomial::evals_from_point_with_base::<F>(&eq_point),
+                scalar_table
+            );
+            assert_eq!(
+                eq_eval_at_point(&eq_point, &point),
+                evaluate_mle_table(&scalar_table, &point)
+            );
+        }
+
+        assert_eq!(
+            eq_eval_at_point::<EF>(&[EF::ONE], &[]),
+            Err(SpartanWhirError::InvalidRoundCount)
+        );
     }
 
     fn shape_with_entries(

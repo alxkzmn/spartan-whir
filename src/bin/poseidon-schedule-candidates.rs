@@ -9,11 +9,12 @@ use p3_whir::parameters::{
     WhirConfig as P3WhirConfig,
 };
 use serde::Serialize;
+use spartan_whir::plonky3_whir_pcs::hiding_terminal_budget;
 use spartan_whir::{
     engine::{PoseidonChallenger, F},
-    MatrixClosingMode, OcticBinExtension, PoseidonZkSetupConfig, QuarticBinExtension,
-    SecurityConfig, SoundnessAssumption, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
-    FINAL_SUMCHECK_MAX_VARIABLES, MAX_SECURITY_BITS,
+    format_whir_params_label, MatrixClosingMode, OcticBinExtension, PoseidonZkSetupConfig,
+    QuarticBinExtension, SecurityConfig, SoundnessAssumption, SpartanSnarkConfig,
+    WhirFoldingSchedule, WhirParams, FINAL_SUMCHECK_MAX_VARIABLES, MAX_SECURITY_BITS,
 };
 
 mod poseidon_schedule_support;
@@ -40,6 +41,33 @@ type BabyBearPoseidonChallenger = DuplexChallenger<BabyBear, Poseidon2BabyBear<1
 enum FieldProfile {
     KoalaBear,
     BabyBear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtensionFilter {
+    All,
+    Quartic,
+    Quintic,
+    Octic,
+}
+
+impl ExtensionFilter {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Quartic => "quartic",
+            Self::Quintic => "quintic",
+            Self::Octic => "octic",
+        }
+    }
+
+    fn includes(self, extension: &str) -> bool {
+        matches!(self, Self::All)
+            || matches!(
+                (self, extension),
+                (Self::Quartic, "quartic") | (Self::Quintic, "quintic") | (Self::Octic, "octic")
+            )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +101,7 @@ impl FieldProfile {
 #[derive(Debug, Clone)]
 struct Args {
     field: FieldProfile,
+    extension_filter: ExtensionFilter,
     num_variables: usize,
     num_outer_rounds: usize,
     security_bits: usize,
@@ -81,6 +110,7 @@ struct Args {
     component_merkle_security_bits: Option<usize>,
     k_max: usize,
     starting_log_inv_rate_max: usize,
+    round_log_inv_rate_offset_max: usize,
     max_pow_bits: usize,
     final_sumcheck_max_variables: usize,
     beam_width: usize,
@@ -96,6 +126,7 @@ struct CandidateDump {
     provenance: BenchmarkProvenance,
     matrix_closing: MatrixClosingMode,
     base_field: &'static str,
+    extension_filter: &'static str,
     num_variables: usize,
     num_outer_rounds: usize,
     target_security_bits: usize,
@@ -104,6 +135,7 @@ struct CandidateDump {
     component_merkle_security_override_bits: Option<usize>,
     soundness: SoundnessAssumption,
     max_pow_bits: usize,
+    round_log_inv_rate_offset_max: usize,
     proof_mode: &'static str,
     zk_ell: Option<usize>,
     zk_mask_log_inv_rate: Option<usize>,
@@ -120,6 +152,7 @@ struct CandidateRow {
     extension_degree: usize,
     extension_two_adicity: usize,
     field_bits: usize,
+    round_log_inv_rate_offset: usize,
     valid: bool,
     rejection_reason: Option<String>,
     security_bits_achieved: Option<f64>,
@@ -185,52 +218,58 @@ fn main() {
             for starting_log_inv_rate in 1..=args.starting_log_inv_rate_max {
                 let first = schedule.first_round();
                 for rsv in 1..=first {
-                    let round_log_inv_rates = match derived_round_log_inv_rates(
+                    let derived_round_log_inv_rates = derived_round_log_inv_rates(
                         args.num_variables,
                         &schedule,
                         starting_log_inv_rate,
                         rsv,
-                    ) {
-                        Ok(rates) => rates,
-                        Err(reason) => {
-                            if args.include_invalid {
-                                let whir_params = WhirParams {
-                                    pow_bits: pow_bits as u32,
-                                    folding_factor: first,
-                                    starting_log_inv_rate,
-                                    rs_domain_initial_reduction_factor: rsv,
-                                    folding_schedule: Some(schedule.clone()),
-                                    round_log_inv_rates: Vec::new(),
-                                };
-                                push_invalid_rate_candidates(
-                                    &args,
-                                    &mut candidates,
-                                    whir_params,
-                                    format!("unable to derive round log inverse rates: {reason}"),
-                                );
-                            }
-                            continue;
-                        }
-                    };
-                    let whir_params = WhirParams {
+                    );
+                    let backend_derived = WhirParams {
                         pow_bits: pow_bits as u32,
                         folding_factor: first,
                         starting_log_inv_rate,
                         rs_domain_initial_reduction_factor: rsv,
                         folding_schedule: Some(schedule.clone()),
-                        round_log_inv_rates,
+                        round_log_inv_rates: Vec::new(),
                     };
-                    push_candidates(&args, &mut candidates, whir_params);
+                    push_candidates(&args, &mut candidates, backend_derived, 0);
+
+                    let Ok(derived_round_log_inv_rates) = derived_round_log_inv_rates else {
+                        continue;
+                    };
+                    for round_log_inv_rate_offset in 1..=args.round_log_inv_rate_offset_max {
+                        let Some(round_log_inv_rates) = offset_round_log_inv_rates(
+                            &derived_round_log_inv_rates,
+                            round_log_inv_rate_offset,
+                        ) else {
+                            continue;
+                        };
+                        let whir_params = WhirParams {
+                            pow_bits: pow_bits as u32,
+                            folding_factor: first,
+                            starting_log_inv_rate,
+                            rs_domain_initial_reduction_factor: rsv,
+                            folding_schedule: Some(schedule.clone()),
+                            round_log_inv_rates,
+                        };
+                        push_candidates(
+                            &args,
+                            &mut candidates,
+                            whir_params,
+                            round_log_inv_rate_offset,
+                        );
+                    }
                 }
             }
         }
     }
 
     let dump = CandidateDump {
-        schema_version: 4,
+        schema_version: 5,
         provenance,
         matrix_closing: MatrixClosingMode::DirectSparse,
         base_field: args.field.label(),
+        extension_filter: args.extension_filter.label(),
         num_variables: args.num_variables,
         num_outer_rounds: args.num_outer_rounds,
         target_security_bits: args.security_bits,
@@ -239,6 +278,7 @@ fn main() {
         component_merkle_security_override_bits: args.component_merkle_security_bits,
         soundness: SoundnessAssumption::JohnsonBound,
         max_pow_bits: args.max_pow_bits,
+        round_log_inv_rate_offset_max: args.round_log_inv_rate_offset_max,
         proof_mode: args.proof_mode.label(),
         zk_ell: args.proof_mode.is_full_zk().then_some(args.zk_ell),
         zk_mask_log_inv_rate: args
@@ -251,148 +291,84 @@ fn main() {
     println!();
 }
 
-fn push_invalid_rate_candidates(
+fn push_candidates(
     args: &Args,
     out: &mut Vec<CandidateRow>,
     whir_params: WhirParams,
-    reason: String,
+    round_log_inv_rate_offset: usize,
 ) {
     match args.field {
         FieldProfile::KoalaBear => {
-            push_invalid_rate_candidate::<F, QuarticBinExtension>(
-                args,
-                out,
-                whir_params.clone(),
-                args.field.label(),
-                "quartic",
-                4,
-                reason.clone(),
-            );
-            push_invalid_rate_candidate::<F, KoalaBearQuinticExtension>(
-                args,
-                out,
-                whir_params.clone(),
-                args.field.label(),
-                "quintic",
-                5,
-                reason.clone(),
-            );
-            push_invalid_rate_candidate::<F, OcticBinExtension>(
-                args,
-                out,
-                whir_params,
-                args.field.label(),
-                "octic",
-                8,
-                reason,
-            );
+            if args.extension_filter.includes("quartic") {
+                derive_for_extension::<F, QuarticBinExtension, PoseidonChallenger>(
+                    args,
+                    out,
+                    whir_params.clone(),
+                    "quartic",
+                    4,
+                    round_log_inv_rate_offset,
+                );
+            }
+            if args.extension_filter.includes("quintic") {
+                derive_for_extension::<F, KoalaBearQuinticExtension, PoseidonChallenger>(
+                    args,
+                    out,
+                    whir_params.clone(),
+                    "quintic",
+                    5,
+                    round_log_inv_rate_offset,
+                );
+            }
+            if args.extension_filter.includes("octic") {
+                derive_for_extension::<F, OcticBinExtension, PoseidonChallenger>(
+                    args,
+                    out,
+                    whir_params,
+                    "octic",
+                    8,
+                    round_log_inv_rate_offset,
+                );
+            }
         }
         FieldProfile::BabyBear => {
-            push_invalid_rate_candidate::<BabyBear, BabyBearQuarticExtension>(
-                args,
-                out,
-                whir_params.clone(),
-                args.field.label(),
-                "quartic",
-                4,
-                reason.clone(),
-            );
-            push_invalid_rate_candidate::<BabyBear, BabyBearQuinticExtension>(
-                args,
-                out,
-                whir_params.clone(),
-                args.field.label(),
-                "quintic",
-                5,
-                reason.clone(),
-            );
-            push_invalid_rate_candidate::<BabyBear, BabyBearOcticExtension>(
-                args,
-                out,
-                whir_params,
-                args.field.label(),
-                "octic",
-                8,
-                reason,
-            );
-        }
-    }
-}
-
-fn push_invalid_rate_candidate<Base, Ext>(
-    args: &Args,
-    out: &mut Vec<CandidateRow>,
-    whir_params: WhirParams,
-    base_field: &'static str,
-    extension: &'static str,
-    extension_degree: usize,
-    reason: String,
-) where
-    Base: TwoAdicField,
-    Ext: Field + TwoAdicField,
-{
-    let label = schedule_label(extension, &whir_params);
-    out.push(invalid_row(
-        args,
-        label,
-        base_field,
-        Base::TWO_ADICITY,
-        extension,
-        extension_degree,
-        Ext::TWO_ADICITY,
-        Ext::bits(),
-        whir_params,
-        reason,
-    ));
-}
-
-fn push_candidates(args: &Args, out: &mut Vec<CandidateRow>, whir_params: WhirParams) {
-    match args.field {
-        FieldProfile::KoalaBear => {
-            derive_for_extension::<F, QuarticBinExtension, PoseidonChallenger>(
-                args,
-                out,
-                whir_params.clone(),
-                "quartic",
-                4,
-            );
-            derive_for_extension::<F, KoalaBearQuinticExtension, PoseidonChallenger>(
-                args,
-                out,
-                whir_params.clone(),
-                "quintic",
-                5,
-            );
-            derive_for_extension::<F, OcticBinExtension, PoseidonChallenger>(
-                args,
-                out,
-                whir_params,
-                "octic",
-                8,
-            );
-        }
-        FieldProfile::BabyBear => {
-            derive_for_extension::<BabyBear, BabyBearQuarticExtension, BabyBearPoseidonChallenger>(
-                args,
-                out,
-                whir_params.clone(),
-                "quartic",
-                4,
-            );
-            derive_for_extension::<BabyBear, BabyBearQuinticExtension, BabyBearPoseidonChallenger>(
-                args,
-                out,
-                whir_params.clone(),
-                "quintic",
-                5,
-            );
-            derive_for_extension::<BabyBear, BabyBearOcticExtension, BabyBearPoseidonChallenger>(
-                args,
-                out,
-                whir_params,
-                "octic",
-                8,
-            );
+            if args.extension_filter.includes("quartic") {
+                derive_for_extension::<
+                    BabyBear,
+                    BabyBearQuarticExtension,
+                    BabyBearPoseidonChallenger,
+                >(
+                    args,
+                    out,
+                    whir_params.clone(),
+                    "quartic",
+                    4,
+                    round_log_inv_rate_offset,
+                );
+            }
+            if args.extension_filter.includes("quintic") {
+                derive_for_extension::<
+                    BabyBear,
+                    BabyBearQuinticExtension,
+                    BabyBearPoseidonChallenger,
+                >(
+                    args,
+                    out,
+                    whir_params.clone(),
+                    "quintic",
+                    5,
+                    round_log_inv_rate_offset,
+                );
+            }
+            if args.extension_filter.includes("octic") {
+                derive_for_extension::<BabyBear, BabyBearOcticExtension, BabyBearPoseidonChallenger>(
+                    args,
+                    out,
+                    whir_params,
+                    "octic",
+                    8,
+                    round_log_inv_rate_offset,
+                );
+            }
         }
     }
 }
@@ -403,12 +379,13 @@ fn derive_for_extension<Base, Ext, Challenger>(
     whir_params: WhirParams,
     extension: &'static str,
     extension_degree: usize,
+    round_log_inv_rate_offset: usize,
 ) where
     Base: TwoAdicField,
     Ext: ExtensionField<Base> + Field + TwoAdicField,
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
-    let label = schedule_label(extension, &whir_params);
+    let label = format_whir_params_label(extension, &whir_params);
     let component_security_bits = match whir_component_security_bits(args) {
         Ok(bits) => bits,
         Err(reason) => {
@@ -422,6 +399,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
                     extension_degree,
                     Ext::TWO_ADICITY,
                     Ext::bits(),
+                    round_log_inv_rate_offset,
                     whir_params,
                     reason,
                 ));
@@ -436,9 +414,11 @@ fn derive_for_extension<Base, Ext, Challenger>(
     } else {
         component_security_bits
     };
-    let protocol_params = protocol_parameters(&whir_params, protocol_security_bits);
-    let result = catch_unwind_silent(|| {
+    let result = catch_unwind_silent(|| -> Result<_, String> {
+        let protocol_params =
+            protocol_parameters(args.num_variables, &whir_params, protocol_security_bits)?;
         P3WhirConfig::<Ext, Base, Challenger>::new(args.num_variables, protocol_params)
+            .map_err(|reason| reason.to_string())
     });
 
     let config = match result {
@@ -454,6 +434,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
                     extension_degree,
                     Ext::TWO_ADICITY,
                     Ext::bits(),
+                    round_log_inv_rate_offset,
                     whir_params,
                     format!("backend rejected candidate: {reason}"),
                 ));
@@ -471,6 +452,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
                     extension_degree,
                     Ext::TWO_ADICITY,
                     Ext::bits(),
+                    round_log_inv_rate_offset,
                     whir_params,
                     format!("backend panicked while deriving candidate: {reason}"),
                 ));
@@ -480,7 +462,12 @@ fn derive_for_extension<Base, Ext, Challenger>(
     };
 
     let achieved = achieved_security_bits::<Base, Ext, Challenger>(&config);
-    let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config);
+    let (terminal_queries, terminal_pow_bits) = if args.proof_mode.is_full_zk() {
+        hiding_terminal_budget::<Base, Ext, Challenger>(&config)
+    } else {
+        (config.final_queries, config.final_pow_bits)
+    };
+    let max_pow = max_derived_pow_bits::<Base, Ext, Challenger>(&config).max(terminal_pow_bits);
     let merkle_component_security = direct_merkle_component_security_bits(args, config.n_rounds());
     let merkle_rejection = match &merkle_component_security {
         Ok(bits) if *bits <= MAX_SECURITY_BITS as usize => None,
@@ -494,10 +481,16 @@ fn derive_for_extension<Base, Ext, Challenger>(
     } else {
         None
     };
+    let direct_setup_rejection = if args.uses_component_security_overrides() {
+        None
+    } else {
+        direct_composed_security_error::<Ext>(args, config.n_rounds())
+    };
     let valid = achieved >= protocol_security_bits as f64
         && max_pow <= args.max_pow_bits
         && merkle_rejection.is_none()
-        && zk_rejection.is_none();
+        && zk_rejection.is_none()
+        && direct_setup_rejection.is_none();
     if !valid && !args.include_invalid {
         return;
     }
@@ -520,7 +513,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
             folding_pow_bits: round.folding_pow_bits,
         })
         .collect::<Vec<_>>();
-    let pow_work_units = pow_work_units::<Base, Ext, Challenger>(&config);
+    let pow_work_units = pow_work_units::<Base, Ext, Challenger>(&config, terminal_pow_bits);
     let dft_work = dft_work::<Base, Ext, Challenger>(&config);
     let merkle_work = merkle_work::<Base, Ext, Challenger>(&config);
     let merkle_path_work = merkle_path_work::<Base, Ext, Challenger>(&config);
@@ -557,6 +550,7 @@ fn derive_for_extension<Base, Ext, Challenger>(
         extension_degree,
         extension_two_adicity: Ext::TWO_ADICITY,
         field_bits: Ext::bits(),
+        round_log_inv_rate_offset,
         valid,
         rejection_reason: (!valid).then(|| {
             if achieved < protocol_security_bits as f64 {
@@ -567,6 +561,8 @@ fn derive_for_extension<Base, Ext, Challenger>(
             } else if max_pow > args.max_pow_bits {
                 format!("derived PoW {max_pow} exceeds max {}", args.max_pow_bits)
             } else if let Some(reason) = merkle_rejection {
+                reason
+            } else if let Some(reason) = direct_setup_rejection {
                 reason
             } else {
                 zk_rejection.unwrap_or_else(|| "candidate rejected".to_owned())
@@ -607,8 +603,8 @@ fn derive_for_extension<Base, Ext, Challenger>(
             .then_some(args.zk_mask_log_inv_rate),
         commitment_ood_samples: Some(config.commitment_ood_samples),
         starting_folding_pow_bits: Some(config.starting_folding_pow_bits),
-        final_queries: Some(config.final_queries),
-        final_pow_bits: Some(config.final_pow_bits),
+        final_queries: Some(terminal_queries),
+        final_pow_bits: Some(terminal_pow_bits),
         final_sumcheck_rounds: Some(config.final_sumcheck_rounds),
         final_folding_pow_bits: Some(config.final_folding_pow_bits),
         rounds,
@@ -617,15 +613,30 @@ fn derive_for_extension<Base, Ext, Challenger>(
     });
 }
 
-fn protocol_parameters(whir_params: &WhirParams, security_bits: usize) -> ProtocolParameters {
-    ProtocolParameters {
+fn protocol_parameters(
+    num_variables: usize,
+    whir_params: &WhirParams,
+    security_bits: usize,
+) -> Result<ProtocolParameters, String> {
+    let folding_schedule = whir_params.effective_folding_schedule();
+    let round_log_inv_rates = if whir_params.round_log_inv_rates.is_empty() {
+        derived_round_log_inv_rates(
+            num_variables,
+            &folding_schedule,
+            whir_params.starting_log_inv_rate,
+            whir_params.rs_domain_initial_reduction_factor,
+        )?
+    } else {
+        whir_params.round_log_inv_rates.clone()
+    };
+    Ok(ProtocolParameters {
         starting_log_inv_rate: whir_params.starting_log_inv_rate,
-        round_log_inv_rates: whir_params.round_log_inv_rates.clone(),
-        folding_factor: map_schedule(&whir_params.effective_folding_schedule()),
+        round_log_inv_rates,
+        folding_factor: map_schedule(&folding_schedule),
         soundness_type: P3SecurityAssumption::JohnsonBound,
         security_level: security_bits,
         pow_bits: whir_params.pow_bits as usize,
-    }
+    })
 }
 
 struct ZkBaseEstimates {
@@ -665,7 +676,7 @@ where
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
     let n_rounds = config.n_rounds();
-    let oracle_randomness = oracle_randomness(config);
+    let oracle_randomness = zk_oracle_randomness(config);
     let mask_queries = zk_mask_queries(args, config);
     let application_mask = application_mask_estimate::<Ext>(args, mask_queries)
         .expect("application mask geometry was validated before estimation");
@@ -829,7 +840,11 @@ where
         .fold(0, u128::saturating_add);
 
     let final_round = final_round_estimate(config);
-    let final_queries = final_query_count(config);
+    let final_queries = actual_query_count(
+        oracle_randomness[n_rounds],
+        final_round.domain_size,
+        final_round.folding_factor,
+    );
     let source_query_bytes = final_queries.saturating_mul(
         row_width(final_round.folding_factor)
             .saturating_mul(final_payload_degree::<Base, Ext, Challenger>(config))
@@ -907,7 +922,7 @@ where
         .saturating_add(application_mask_bytes)
 }
 
-fn oracle_randomness<Base, Ext, Challenger>(
+fn zk_oracle_randomness<Base, Ext, Challenger>(
     config: &P3WhirConfig<Ext, Base, Challenger>,
 ) -> Vec<usize>
 where
@@ -915,12 +930,13 @@ where
     Ext: ExtensionField<Base> + Field + TwoAdicField,
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
+    let (final_queries, _) = hiding_terminal_budget(config);
     (0..=config.n_rounds())
         .map(|round| {
             if round < config.n_rounds() {
                 config.round_parameters[round].num_queries
             } else {
-                config.final_queries
+                final_queries
             }
         })
         .collect()
@@ -1020,22 +1036,12 @@ where
     Ext: ExtensionField<Base> + Field + TwoAdicField,
     Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
 {
-    let inner_degree = args.zk_ell.saturating_sub(1).max(2);
-    let soundness_error_terms = args
-        .num_outer_rounds
-        .checked_mul(15)
-        .and_then(|outer| {
-            inner_degree
-                .checked_mul(args.num_variables.saturating_add(1))
-                .and_then(|inner| outer.checked_add(inner))
-        })
-        .and_then(|terms| terms.checked_add(4));
-    let Some(soundness_error_terms) = soundness_error_terms else {
-        return Some("full-ZK security term count overflows".to_owned());
+    let soundness_error_terms = match direct_algebraic_error_terms(args) {
+        Ok(terms) => terms,
+        Err(reason) => return Some(reason),
     };
-    let Some(required_bits) = args
-        .security_bits
-        .checked_add(FULL_ZK_RELATION_SECURITY_SLACK_BITS)
+    let requested_bits = args.security_bits.min(args.merkle_security_bits);
+    let Some(required_bits) = requested_bits.checked_add(FULL_ZK_RELATION_SECURITY_SLACK_BITS)
     else {
         return Some("full-ZK relation security level overflows".to_owned());
     };
@@ -1043,7 +1049,7 @@ where
     if Ext::order() < required_order {
         return Some(format!(
             "full-ZK security target {} exceeds extension field capacity after {} local error terms",
-            args.security_bits, soundness_error_terms
+            requested_bits, soundness_error_terms
         ));
     }
     if args.zk_ell < 3 {
@@ -1057,15 +1063,7 @@ where
     }
 
     let n_rounds = config.n_rounds();
-    let oracle_randomness = (0..=n_rounds)
-        .map(|round| {
-            if round < n_rounds {
-                config.round_parameters[round].num_queries
-            } else {
-                config.final_queries
-            }
-        })
-        .collect::<Vec<_>>();
+    let oracle_randomness = zk_oracle_randomness(config);
 
     for (round, &randomness) in oracle_randomness.iter().enumerate() {
         let Some((message_rows, height)) = oracle_shape(config, round) else {
@@ -1256,6 +1254,7 @@ fn invalid_row(
     extension_degree: usize,
     extension_two_adicity: usize,
     field_bits: usize,
+    round_log_inv_rate_offset: usize,
     whir_params: WhirParams,
     reason: impl Into<String>,
 ) -> CandidateRow {
@@ -1268,6 +1267,7 @@ fn invalid_row(
         extension_degree,
         extension_two_adicity,
         field_bits,
+        round_log_inv_rate_offset,
         valid: false,
         rejection_reason: Some(reason.into()),
         security_bits_achieved: None,
@@ -1308,11 +1308,8 @@ fn invalid_row(
 }
 
 fn setup_config(args: &Args, whir_params: WhirParams) -> serde_json::Value {
-    let security = SecurityConfig {
-        security_level_bits: args.security_bits as u32,
-        merkle_security_bits: args.merkle_security_bits as u32,
-        soundness_assumption: SoundnessAssumption::JohnsonBound,
-    };
+    let security = requested_security_config(args)
+        .expect("candidate arguments carry a valid requested security config");
     match args.proof_mode {
         ProofMode::NoZk => serde_json::to_value(SpartanSnarkConfig {
             matrix_closing: MatrixClosingMode::DirectSparse,
@@ -1330,6 +1327,24 @@ fn setup_config(args: &Args, whir_params: WhirParams) -> serde_json::Value {
         }),
     }
     .expect("setup config serializes")
+}
+
+fn requested_security_config(args: &Args) -> Result<SecurityConfig, String> {
+    let security = SecurityConfig {
+        security_level_bits: u32::try_from(args.security_bits)
+            .map_err(|_| "requested security level does not fit in u32".to_owned())?,
+        merkle_security_bits: u32::try_from(args.merkle_security_bits)
+            .map_err(|_| "requested Merkle security level does not fit in u32".to_owned())?,
+        soundness_assumption: SoundnessAssumption::JohnsonBound,
+    };
+    security
+        .validate()
+        .map_err(|error| format!("invalid requested security config: {error}"))?;
+    Ok(security)
+}
+
+fn validate_requested_security_config(args: &Args) -> Result<(), String> {
+    requested_security_config(args).map(|_| ())
 }
 
 impl Args {
@@ -1355,17 +1370,87 @@ fn direct_merkle_component_security_bits(
     if let Some(bits) = args.component_merkle_security_bits {
         return Ok(bits);
     }
-    let events = match args.proof_mode {
+    let events = direct_commitment_binding_events(args, witness_rounds)?;
+    args.security_bits
+        .min(args.merkle_security_bits)
+        .checked_add(quarter_budget_slack(events)?)
+        .ok_or_else(|| "Merkle component security target overflows".to_owned())
+}
+
+fn direct_commitment_binding_events(args: &Args, witness_rounds: usize) -> Result<usize, String> {
+    match args.proof_mode {
         ProofMode::NoZk => witness_rounds.checked_add(1),
         ProofMode::FullZk => witness_rounds
             .checked_mul(3)
             .and_then(|rounds| rounds.checked_add(6)),
     }
-    .ok_or_else(|| "DirectSparse commitment event count overflows".to_owned())?;
-    args.security_bits
-        .min(args.merkle_security_bits)
-        .checked_add(quarter_budget_slack(events)?)
-        .ok_or_else(|| "Merkle component security target overflows".to_owned())
+    .ok_or_else(|| "DirectSparse commitment event count overflows".to_owned())
+}
+
+fn direct_algebraic_error_terms(args: &Args) -> Result<usize, String> {
+    let num_inner_rounds = args
+        .num_variables
+        .checked_add(1)
+        .ok_or_else(|| "DirectSparse inner round count overflows".to_owned())?;
+    match args.proof_mode {
+        ProofMode::NoZk => args
+            .num_outer_rounds
+            .checked_mul(4)
+            .and_then(|outer| {
+                num_inner_rounds
+                    .checked_mul(2)
+                    .and_then(|inner| outer.checked_add(inner))
+            })
+            .and_then(|terms| terms.checked_add(2)),
+        ProofMode::FullZk => {
+            let inner_degree = args.zk_ell.saturating_sub(1).max(2);
+            args.num_outer_rounds
+                .checked_mul(15)
+                .and_then(|outer| {
+                    inner_degree
+                        .checked_mul(num_inner_rounds)
+                        .and_then(|inner| outer.checked_add(inner))
+                })
+                .and_then(|terms| terms.checked_add(4))
+        }
+    }
+    .ok_or_else(|| "DirectSparse algebraic error term count overflows".to_owned())
+}
+
+fn direct_composed_security_error<Ext>(args: &Args, witness_rounds: usize) -> Option<String>
+where
+    Ext: Field,
+{
+    let algebraic_error_terms = match direct_algebraic_error_terms(args) {
+        Ok(terms) => terms,
+        Err(reason) => return Some(reason),
+    };
+    let commitment_binding_events = match direct_commitment_binding_events(args, witness_rounds) {
+        Ok(events) => events,
+        Err(reason) => return Some(reason),
+    };
+    let whir_slack_bits = match quarter_budget_slack(1) {
+        Ok(bits) => bits,
+        Err(reason) => return Some(reason),
+    };
+    let merkle_slack_bits = match quarter_budget_slack(commitment_binding_events) {
+        Ok(bits) => bits,
+        Err(reason) => return Some(reason),
+    };
+    let field_denominator = BigUint::from(algebraic_error_terms) << 1usize;
+    let field_attainable = (Ext::order() / field_denominator)
+        .bits()
+        .saturating_sub(1)
+        .min(u32::MAX as u64) as usize;
+    let whir_attainable = (MAX_SECURITY_BITS as usize).saturating_sub(whir_slack_bits);
+    let merkle_attainable = (MAX_SECURITY_BITS as usize).saturating_sub(merkle_slack_bits);
+    let attainable = field_attainable.min(whir_attainable).min(merkle_attainable);
+    let requested = args.security_bits.min(args.merkle_security_bits);
+    (requested > attainable).then(|| {
+        format!(
+            "DirectSparse requested security {requested} exceeds composed-security limit {attainable}"
+        )
+    })
 }
 
 fn quarter_budget_slack(events: usize) -> Result<usize, String> {
@@ -1415,14 +1500,17 @@ where
     )
 }
 
-fn pow_work_units<Base, Ext, Challenger>(config: &P3WhirConfig<Ext, Base, Challenger>) -> u128
+fn pow_work_units<Base, Ext, Challenger>(
+    config: &P3WhirConfig<Ext, Base, Challenger>,
+    terminal_pow_bits: usize,
+) -> u128
 where
     Base: Field,
     Ext: ExtensionField<Base> + Field,
 {
     let mut bits = vec![
         config.starting_folding_pow_bits,
-        config.final_pow_bits,
+        terminal_pow_bits,
         config.final_folding_pow_bits,
     ];
     for round in &config.round_parameters {
@@ -1757,6 +1845,13 @@ fn derived_round_log_inv_rates(
     Ok(rates)
 }
 
+fn offset_round_log_inv_rates(rates: &[usize], offset: usize) -> Option<Vec<usize>> {
+    if offset == 0 {
+        return Some(Vec::new());
+    }
+    rates.iter().map(|rate| rate.checked_add(offset)).collect()
+}
+
 fn map_schedule(schedule: &WhirFoldingSchedule) -> FoldingFactor {
     match schedule {
         WhirFoldingSchedule::Constant(factor) => FoldingFactor::Constant(*factor),
@@ -1767,42 +1862,14 @@ fn map_schedule(schedule: &WhirFoldingSchedule) -> FoldingFactor {
     }
 }
 
-fn schedule_label(extension: &str, params: &WhirParams) -> String {
-    let schedule = params.effective_folding_schedule();
-    match schedule {
-        WhirFoldingSchedule::Constant(factor) => format!(
-            "{extension}_constant_pow{}_ff{}_lir{}_rsv{}",
-            params.pow_bits,
-            factor,
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-        WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => format!(
-            "{extension}_cfsr_pow{}_ff{}_rest{}_lir{}_rsv{}",
-            params.pow_bits,
-            first,
-            rest,
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-        WhirFoldingSchedule::PerRound(factors) => format!(
-            "{extension}_perround_pow{}_{}_lir{}_rsv{}",
-            params.pow_bits,
-            factors
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join("-"),
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use p3_field::BasedVectorSpace;
+    use spartan_whir::{
+        recommended_quintic_zk_whir_params, setup_poseidon, setup_poseidon_zk, InvalidConfigReason,
+        R1csShape, SecurityBoundComponent, SparseMatrix, SpartanWhirError, MIN_SECURITY_BITS,
+    };
 
     fn test_config() -> P3WhirConfig<OcticBinExtension, F, PoseidonChallenger> {
         let params = WhirParams {
@@ -1825,10 +1892,415 @@ mod tests {
             .expect("test WHIR config is valid")
     }
 
+    fn direct_security_test_args(proof_mode: ProofMode, security_bits: usize) -> Args {
+        Args {
+            field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::Quartic,
+            num_variables: 25,
+            num_outer_rounds: 19,
+            security_bits,
+            merkle_security_bits: security_bits,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
+            max_pow_bits: 64,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: true,
+            proof_mode,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 3,
+        }
+    }
+
+    fn direct_security_test_whir_params() -> WhirParams {
+        WhirParams {
+            pow_bits: 64,
+            folding_factor: 8,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 8,
+            folding_schedule: Some(WhirFoldingSchedule::ConstantFromSecondRound {
+                first: 8,
+                rest: 4,
+            }),
+            round_log_inv_rates: Vec::new(),
+        }
+    }
+
+    fn empty_shape(num_variables: usize, num_outer_rounds: usize) -> R1csShape<F> {
+        let num_vars = 1usize << num_variables;
+        let num_cons = 1usize << num_outer_rounds;
+        let matrix = SparseMatrix {
+            num_rows: num_cons,
+            num_cols: num_vars + 1,
+            entries: Vec::new(),
+        };
+        R1csShape {
+            num_cons,
+            num_vars,
+            num_io: 0,
+            a: matrix.clone(),
+            b: matrix.clone(),
+            c: matrix,
+        }
+    }
+
+    fn assert_candidate_composed_rejection(
+        args: &Args,
+        whir_params: WhirParams,
+        attainable_bits: usize,
+    ) {
+        let mut candidates = Vec::new();
+        push_candidates(args, &mut candidates, whir_params, 0);
+
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert!(!candidate.valid);
+        let expected_reason = format!(
+            "DirectSparse requested security {} exceeds composed-security limit {attainable_bits}",
+            args.security_bits.min(args.merkle_security_bits)
+        );
+        assert_eq!(
+            candidate.rejection_reason.as_deref(),
+            Some(expected_reason.as_str())
+        );
+        assert!(candidate.setup_config.is_none());
+    }
+
+    #[test]
+    fn no_zk_candidate_matches_direct_sparse_setup_security_rejection() {
+        let args = direct_security_test_args(ProofMode::NoZk, 116);
+        let whir_params = direct_security_test_whir_params();
+        assert_candidate_composed_rejection(&args, whir_params.clone(), 115);
+
+        let setup_error = match setup_poseidon::<QuarticBinExtension>(
+            empty_shape(args.num_variables, args.num_outer_rounds),
+            SpartanSnarkConfig {
+                matrix_closing: MatrixClosingMode::DirectSparse,
+                security: requested_security_config(&args).expect("requested security is valid"),
+                whir_params,
+                spark_whir_params: None,
+            },
+        ) {
+            Ok(_) => panic!("DirectSparse setup unexpectedly accepted the quartic config"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            setup_error,
+            SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
+                requested_bits: 116,
+                attainable_bits: 115,
+                dominant_component: SecurityBoundComponent::ExtensionField,
+            })
+        );
+    }
+
+    #[test]
+    fn full_zk_candidate_matches_direct_sparse_setup_security_rejection() {
+        let args = direct_security_test_args(ProofMode::FullZk, 115);
+        let whir_params = direct_security_test_whir_params();
+        assert_candidate_composed_rejection(&args, whir_params.clone(), 114);
+
+        let setup_error = match setup_poseidon_zk::<QuarticBinExtension>(
+            empty_shape(args.num_variables, args.num_outer_rounds),
+            PoseidonZkSetupConfig {
+                matrix_closing: MatrixClosingMode::DirectSparse,
+                security: requested_security_config(&args).expect("requested security is valid"),
+                whir_params,
+                spark_whir_params: None,
+                ell_zk: args.zk_ell,
+                mask_log_inv_rate: args.zk_mask_log_inv_rate,
+            },
+        ) {
+            Ok(_) => panic!("full-ZK DirectSparse setup unexpectedly accepted the quartic config"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            setup_error,
+            SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
+                requested_bits: 115,
+                attainable_bits: 114,
+                dominant_component: SecurityBoundComponent::ExtensionField,
+            })
+        );
+    }
+
+    #[test]
+    fn requested_security_config_enforces_supported_ranges() {
+        let mut args = direct_security_test_args(ProofMode::NoZk, MIN_SECURITY_BITS as usize);
+        args.merkle_security_bits = MAX_SECURITY_BITS as usize;
+        assert!(requested_security_config(&args).is_ok());
+
+        args.security_bits = MIN_SECURITY_BITS as usize - 1;
+        assert!(requested_security_config(&args).is_err());
+        args.security_bits = MAX_SECURITY_BITS as usize + 1;
+        assert!(requested_security_config(&args).is_err());
+
+        args.security_bits = MIN_SECURITY_BITS as usize;
+        args.merkle_security_bits = MIN_SECURITY_BITS as usize - 1;
+        assert!(requested_security_config(&args).is_err());
+        args.merkle_security_bits = MAX_SECURITY_BITS as usize + 1;
+        assert!(requested_security_config(&args).is_err());
+
+        if let Some(too_wide) = (u32::MAX as usize).checked_add(1) {
+            args.security_bits = too_wide;
+            let error = requested_security_config(&args).unwrap_err();
+            assert!(error.contains("does not fit in u32"));
+        }
+    }
+
+    #[test]
+    fn full_zk_estimates_use_the_shared_terminal_budget() {
+        let whir = recommended_quintic_zk_whir_params(20);
+        let config = P3WhirConfig::<KoalaBearQuinticExtension, F, PoseidonChallenger>::new(
+            20,
+            ProtocolParameters {
+                starting_log_inv_rate: whir.starting_log_inv_rate,
+                round_log_inv_rates: whir.round_log_inv_rates.clone(),
+                folding_factor: map_schedule(&whir.effective_folding_schedule()),
+                soundness_type: P3SecurityAssumption::JohnsonBound,
+                security_level: 120,
+                pow_bits: whir.pow_bits as usize,
+            },
+        )
+        .expect("selected full-ZK WHIR config is valid");
+
+        assert_eq!(hiding_terminal_budget(&config), (125, 4));
+        assert_eq!(zk_oracle_randomness(&config).last(), Some(&125));
+    }
+
+    #[test]
+    fn round_rate_offset_zero_is_derived_and_positive_offsets_are_explicit() {
+        let schedule = WhirFoldingSchedule::Constant(4);
+        let derived =
+            derived_round_log_inv_rates(14, &schedule, 1, 2).expect("round rates are derived");
+
+        assert_eq!(derived, vec![3]);
+        assert_eq!(offset_round_log_inv_rates(&derived, 0), Some(Vec::new()));
+        assert_eq!(offset_round_log_inv_rates(&derived, 1), Some(vec![4]));
+
+        let mut params = WhirParams {
+            pow_bits: 0,
+            folding_factor: 4,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 2,
+            folding_schedule: Some(schedule),
+            round_log_inv_rates: Vec::new(),
+        };
+        let derived_label = format_whir_params_label("quintic", &params);
+        let derived_protocol = protocol_parameters(14, &params, DEFAULT_SECURITY_BITS)
+            .expect("derived protocol parameters are valid");
+        assert_eq!(derived_protocol.round_log_inv_rates, vec![3]);
+        assert!(params.round_log_inv_rates.is_empty());
+
+        params.round_log_inv_rates = vec![4];
+        let explicit_label = format_whir_params_label("quintic", &params);
+        let explicit_protocol = protocol_parameters(14, &params, DEFAULT_SECURITY_BITS)
+            .expect("explicit protocol parameters are valid");
+        assert_eq!(explicit_protocol.round_log_inv_rates, vec![4]);
+        assert!(derived_label.ends_with("_round_log_inv_rates_derived"));
+        assert!(explicit_label.ends_with("_round_log_inv_rates_4"));
+        assert_ne!(derived_label, explicit_label);
+    }
+
+    #[test]
+    fn derived_rsv_rates_match_explicit_config_rounds_and_metrics() {
+        let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 4 };
+        let derived_params = WhirParams {
+            pow_bits: 9,
+            folding_factor: 8,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 8,
+            folding_schedule: Some(schedule.clone()),
+            round_log_inv_rates: Vec::new(),
+        };
+        let expected_rates =
+            derived_round_log_inv_rates(25, &schedule, 1, 8).expect("round rates are derived");
+        assert_eq!(expected_rates, vec![1, 4, 7]);
+
+        let mut explicit_params = derived_params.clone();
+        explicit_params.round_log_inv_rates = expected_rates.clone();
+        let derived_config = P3WhirConfig::<KoalaBearQuinticExtension, F, PoseidonChallenger>::new(
+            25,
+            protocol_parameters(25, &derived_params, DEFAULT_SECURITY_BITS)
+                .expect("derived protocol parameters are valid"),
+        )
+        .expect("derived WHIR config is valid");
+        let explicit_config =
+            P3WhirConfig::<KoalaBearQuinticExtension, F, PoseidonChallenger>::new(
+                25,
+                protocol_parameters(25, &explicit_params, DEFAULT_SECURITY_BITS)
+                    .expect("explicit protocol parameters are valid"),
+            )
+            .expect("explicit WHIR config is valid");
+
+        assert!(derived_params.round_log_inv_rates.is_empty());
+        assert_eq!(derived_config.params.round_log_inv_rates, expected_rates);
+        assert_eq!(
+            derived_config.params.round_log_inv_rates,
+            explicit_config.params.round_log_inv_rates
+        );
+        assert_eq!(
+            derived_config.folding_schedule,
+            explicit_config.folding_schedule
+        );
+        assert_eq!(
+            (
+                derived_config.commitment_ood_samples,
+                derived_config.starting_folding_pow_bits,
+                derived_config.final_queries,
+                derived_config.final_pow_bits,
+                derived_config.final_sumcheck_rounds,
+                derived_config.final_folding_pow_bits,
+            ),
+            (
+                explicit_config.commitment_ood_samples,
+                explicit_config.starting_folding_pow_bits,
+                explicit_config.final_queries,
+                explicit_config.final_pow_bits,
+                explicit_config.final_sumcheck_rounds,
+                explicit_config.final_folding_pow_bits,
+            )
+        );
+        assert_eq!(
+            derived_config.round_parameters.len(),
+            explicit_config.round_parameters.len()
+        );
+        for (derived, explicit) in derived_config
+            .round_parameters
+            .iter()
+            .zip(&explicit_config.round_parameters)
+        {
+            assert_eq!(
+                (
+                    derived.pow_bits,
+                    derived.folding_pow_bits,
+                    derived.num_queries,
+                    derived.ood_samples,
+                    derived.num_variables,
+                    derived.folding_factor,
+                    derived.log_inv_rate,
+                    derived.domain_size,
+                    derived.folded_domain_gen,
+                ),
+                (
+                    explicit.pow_bits,
+                    explicit.folding_pow_bits,
+                    explicit.num_queries,
+                    explicit.ood_samples,
+                    explicit.num_variables,
+                    explicit.folding_factor,
+                    explicit.log_inv_rate,
+                    explicit.domain_size,
+                    explicit.folded_domain_gen,
+                )
+            );
+        }
+        assert_eq!(
+            (
+                pow_work_units(&derived_config, derived_config.final_pow_bits),
+                dft_work(&derived_config),
+                merkle_work(&derived_config),
+                merkle_path_work(&derived_config),
+                row_work(&derived_config),
+                sumcheck_work(&derived_config),
+                proof_size_bytes_estimate(&derived_config),
+            ),
+            (
+                pow_work_units(&explicit_config, explicit_config.final_pow_bits),
+                dft_work(&explicit_config),
+                merkle_work(&explicit_config),
+                merkle_path_work(&explicit_config),
+                row_work(&explicit_config),
+                sumcheck_work(&explicit_config),
+                proof_size_bytes_estimate(&explicit_config),
+            )
+        );
+
+        let args = Args {
+            field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::Quintic,
+            num_variables: 25,
+            num_outer_rounds: 25,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: false,
+            proof_mode: ProofMode::NoZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 3,
+        };
+        let mut candidates = Vec::new();
+        push_candidates(&args, &mut candidates, derived_params, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].round_log_inv_rate_offset, 0);
+        assert!(candidates[0]
+            .label
+            .ends_with("_round_log_inv_rates_derived"));
+        assert!(candidates[0].whir_params.round_log_inv_rates.is_empty());
+        let setup: SpartanSnarkConfig = serde_json::from_value(
+            candidates[0]
+                .setup_config
+                .clone()
+                .expect("candidate has a setup config"),
+        )
+        .expect("candidate setup config deserializes");
+        assert!(setup.whir_params.round_log_inv_rates.is_empty());
+    }
+
+    #[test]
+    fn extension_filter_limits_backend_candidate_derivation() {
+        let args = Args {
+            field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::Quintic,
+            num_variables: 18,
+            num_outer_rounds: 17,
+            security_bits: DEFAULT_SECURITY_BITS,
+            merkle_security_bits: DEFAULT_SECURITY_BITS,
+            component_security_bits: None,
+            component_merkle_security_bits: None,
+            k_max: DEFAULT_K_MAX,
+            starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
+            max_pow_bits: DEFAULT_MAX_POW_BITS,
+            final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
+            beam_width: DEFAULT_BEAM_WIDTH,
+            include_invalid: true,
+            proof_mode: ProofMode::NoZk,
+            zk_ell: 3,
+            zk_mask_log_inv_rate: 3,
+        };
+        let params = WhirParams {
+            pow_bits: 0,
+            folding_factor: 4,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 1,
+            folding_schedule: Some(WhirFoldingSchedule::Constant(4)),
+            round_log_inv_rates: vec![4, 7],
+        };
+        let mut candidates = Vec::new();
+
+        push_candidates(&args, &mut candidates, params, 1);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].extension, "quintic");
+        assert_eq!(candidates[0].round_log_inv_rate_offset, 1);
+    }
+
     #[test]
     fn setup_config_is_mode_specific() {
         let mut args = Args {
             field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::All,
             num_variables: 20,
             num_outer_rounds: 20,
             security_bits: DEFAULT_SECURITY_BITS,
@@ -1837,6 +2309,7 @@ mod tests {
             component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
             final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
             beam_width: DEFAULT_BEAM_WIDTH,
@@ -1867,6 +2340,7 @@ mod tests {
     fn direct_component_targets_are_derived_from_end_to_end_security() {
         let mut args = Args {
             field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::All,
             num_variables: 20,
             num_outer_rounds: 20,
             security_bits: 116,
@@ -1875,6 +2349,7 @@ mod tests {
             component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
             final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
             beam_width: DEFAULT_BEAM_WIDTH,
@@ -1967,6 +2442,7 @@ mod tests {
     fn application_mask_rejects_mismatched_domains() {
         let args = Args {
             field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::All,
             num_variables: 20,
             num_outer_rounds: 19,
             security_bits: DEFAULT_SECURITY_BITS,
@@ -1975,6 +2451,7 @@ mod tests {
             component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
             final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
             beam_width: DEFAULT_BEAM_WIDTH,
@@ -1992,6 +2469,7 @@ mod tests {
     fn application_mask_rejects_domains_beyond_two_adicity() {
         let mut args = Args {
             field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::All,
             num_variables: 20,
             num_outer_rounds: 19,
             security_bits: DEFAULT_SECURITY_BITS,
@@ -2000,6 +2478,7 @@ mod tests {
             component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
             final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
             beam_width: DEFAULT_BEAM_WIDTH,
@@ -2022,6 +2501,7 @@ mod tests {
     fn application_mask_cost_and_size_terms_are_accounted_for() {
         let args = Args {
             field: FieldProfile::KoalaBear,
+            extension_filter: ExtensionFilter::All,
             num_variables: 18,
             num_outer_rounds: 17,
             security_bits: DEFAULT_SECURITY_BITS,
@@ -2030,6 +2510,7 @@ mod tests {
             component_merkle_security_bits: None,
             k_max: DEFAULT_K_MAX,
             starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+            round_log_inv_rate_offset_max: 0,
             max_pow_bits: DEFAULT_MAX_POW_BITS,
             final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
             beam_width: DEFAULT_BEAM_WIDTH,
@@ -2065,6 +2546,7 @@ mod tests {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         field: FieldProfile::KoalaBear,
+        extension_filter: ExtensionFilter::All,
         num_variables: 0,
         num_outer_rounds: 0,
         security_bits: DEFAULT_SECURITY_BITS,
@@ -2073,6 +2555,7 @@ fn parse_args() -> Result<Args, String> {
         component_merkle_security_bits: None,
         k_max: DEFAULT_K_MAX,
         starting_log_inv_rate_max: DEFAULT_LIR_MAX,
+        round_log_inv_rate_offset_max: 0,
         max_pow_bits: DEFAULT_MAX_POW_BITS,
         final_sumcheck_max_variables: FINAL_SUMCHECK_MAX_VARIABLES,
         beam_width: DEFAULT_BEAM_WIDTH,
@@ -2085,6 +2568,7 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--field" => args.field = parse_field_profile(&mut iter, &arg)?,
+            "--extension" => args.extension_filter = parse_extension_filter(&mut iter, &arg)?,
             "--num-variables" => args.num_variables = parse_next(&mut iter, &arg)?,
             "--num-outer-rounds" => args.num_outer_rounds = parse_next(&mut iter, &arg)?,
             "--security-bits" => args.security_bits = parse_next(&mut iter, &arg)?,
@@ -2098,6 +2582,9 @@ fn parse_args() -> Result<Args, String> {
             "--k-max" => args.k_max = parse_next(&mut iter, &arg)?,
             "--starting-log-inv-rate-max" => {
                 args.starting_log_inv_rate_max = parse_next(&mut iter, &arg)?
+            }
+            "--round-log-inv-rate-offset-max" => {
+                args.round_log_inv_rate_offset_max = parse_next(&mut iter, &arg)?
             }
             "--max-pow-bits" => args.max_pow_bits = parse_next(&mut iter, &arg)?,
             "--final-sumcheck-max-variables" => {
@@ -2139,6 +2626,7 @@ fn parse_args() -> Result<Args, String> {
             );
         }
     }
+    validate_requested_security_config(&args)?;
     Ok(args)
 }
 
@@ -2166,6 +2654,25 @@ fn parse_field_profile(
     }
 }
 
+fn parse_extension_filter(
+    iter: &mut impl Iterator<Item = String>,
+    name: &str,
+) -> Result<ExtensionFilter, String> {
+    match iter
+        .next()
+        .ok_or_else(|| format!("{name} requires a value"))?
+        .as_str()
+    {
+        "all" => Ok(ExtensionFilter::All),
+        "quartic" => Ok(ExtensionFilter::Quartic),
+        "quintic" => Ok(ExtensionFilter::Quintic),
+        "octic" => Ok(ExtensionFilter::Octic),
+        other => Err(format!(
+            "{name} must be one of all, quartic, quintic, or octic; got {other}"
+        )),
+    }
+}
+
 fn parse_proof_mode(
     iter: &mut impl Iterator<Item = String>,
     name: &str,
@@ -2185,6 +2692,6 @@ fn parse_proof_mode(
 
 fn usage() {
     eprintln!(
-        "usage: poseidon-schedule-candidates --num-variables N [--num-outer-rounds N] [--field koalabear|babybear] [--security-bits 116] [--merkle-security-bits 116] [--component-security-bits N --component-merkle-security-bits N] [--max-pow-bits 22] [--proof-mode no-zk|full-zk] [--include-invalid]"
+        "usage: poseidon-schedule-candidates --num-variables N [--num-outer-rounds N] [--field koalabear|babybear] [--extension all|quartic|quintic|octic] [--security-bits 116] [--merkle-security-bits 116] [--component-security-bits N --component-merkle-security-bits N] [--max-pow-bits 22] [--round-log-inv-rate-offset-max N] [--proof-mode no-zk|full-zk] [--include-invalid]"
     );
 }

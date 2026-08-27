@@ -1,6 +1,11 @@
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of variables left for the final WHIR sumcheck.
@@ -104,6 +109,28 @@ pub struct WhirParams {
     pub round_log_inv_rates: Vec<usize>,
 }
 
+/// Error returned when a WHIR parameter label cannot be parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhirParamsLabelError {
+    message: String,
+}
+
+impl WhirParamsLabelError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for WhirParamsLabelError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WhirParamsLabelError {}
+
 impl Default for WhirParams {
     fn default() -> Self {
         Self {
@@ -127,6 +154,230 @@ impl WhirParams {
     pub fn first_folding_factor(&self) -> usize {
         self.effective_folding_schedule().first_round()
     }
+}
+
+/// Format all transcript-relevant WHIR parameters as a reusable label.
+///
+/// The round-rate suffix is `derived` when `round_log_inv_rates` is empty and
+/// otherwise contains the explicit rates separated by hyphens. A missing
+/// `folding_schedule` is encoded separately from an explicit constant schedule
+/// so parsing the formatted label reconstructs the same [`WhirParams`].
+pub fn format_whir_params_label(extension: &str, params: &WhirParams) -> String {
+    let schedule = match &params.folding_schedule {
+        None => format!(
+            "{extension}_folding_factor_pow{}_ff{}_lir{}_rsv{}",
+            params.pow_bits,
+            params.folding_factor,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+        Some(WhirFoldingSchedule::Constant(factor)) => format!(
+            "{extension}_constant_pow{}_ff{}_lir{}_rsv{}",
+            params.pow_bits,
+            factor,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+        Some(WhirFoldingSchedule::ConstantFromSecondRound { first, rest }) => format!(
+            "{extension}_cfsr_pow{}_ff{}_rest{}_lir{}_rsv{}",
+            params.pow_bits,
+            first,
+            rest,
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+        Some(WhirFoldingSchedule::PerRound(factors)) => format!(
+            "{extension}_perround_pow{}_{}_lir{}_rsv{}",
+            params.pow_bits,
+            join_usizes(factors),
+            params.starting_log_inv_rate,
+            params.rs_domain_initial_reduction_factor
+        ),
+    };
+    let round_rates = if params.round_log_inv_rates.is_empty() {
+        "derived".to_string()
+    } else {
+        join_usizes(&params.round_log_inv_rates)
+    };
+    format!("{schedule}_round_log_inv_rates_{round_rates}")
+}
+
+/// Parse a WHIR parameter label for `num_variables` and `extension`.
+///
+/// Labels produced by [`format_whir_params_label`] reconstruct the encoded
+/// parameters exactly. Constant and constant-from-second-round labels may omit
+/// the round-rate suffix; those labels materialize their derived round rates.
+pub fn parse_whir_params_label(
+    num_variables: usize,
+    extension: &str,
+    label: &str,
+) -> Result<WhirParams, WhirParamsLabelError> {
+    let (schedule_label, encoded_round_rates) = match label.rsplit_once("_round_log_inv_rates_") {
+        Some((schedule_label, "derived")) => (schedule_label, Some(Vec::new())),
+        Some((schedule_label, rates)) => {
+            let rates = parse_usize_list(rates, "round_log_inv_rates")?;
+            (schedule_label, Some(rates))
+        }
+        None => (label, None),
+    };
+    let parts = schedule_label.split('_').collect::<Vec<_>>();
+    if parts.first().copied() != Some(extension) {
+        return Err(WhirParamsLabelError::new(format!(
+            "expected {extension} WHIR parameter label, got {label}"
+        )));
+    }
+
+    let (pow_bits, folding_factor, starting_log_inv_rate, reduction, folding_schedule) =
+        match parts.as_slice() {
+            [_, "folding", "factor", pow, first, lir, rsv] => (
+                parse_u32_component(pow, "pow")?,
+                parse_usize_component(first, "ff")?,
+                parse_usize_component(lir, "lir")?,
+                parse_usize_component(rsv, "rsv")?,
+                None,
+            ),
+            [_, "constant", pow, first, lir, rsv] => {
+                let first = parse_usize_component(first, "ff")?;
+                (
+                    parse_u32_component(pow, "pow")?,
+                    first,
+                    parse_usize_component(lir, "lir")?,
+                    parse_usize_component(rsv, "rsv")?,
+                    Some(WhirFoldingSchedule::Constant(first)),
+                )
+            }
+            [_, "cfsr", pow, first, rest, lir, rsv] => {
+                let first = parse_usize_component(first, "ff")?;
+                (
+                    parse_u32_component(pow, "pow")?,
+                    first,
+                    parse_usize_component(lir, "lir")?,
+                    parse_usize_component(rsv, "rsv")?,
+                    Some(WhirFoldingSchedule::ConstantFromSecondRound {
+                        first,
+                        rest: parse_usize_component(rest, "rest")?,
+                    }),
+                )
+            }
+            [_, "perround", pow, factors, lir, rsv] => {
+                let factors = parse_usize_list(factors, "per-round folding factors")?;
+                let first = factors[0];
+                (
+                    parse_u32_component(pow, "pow")?,
+                    first,
+                    parse_usize_component(lir, "lir")?,
+                    parse_usize_component(rsv, "rsv")?,
+                    Some(WhirFoldingSchedule::PerRound(factors)),
+                )
+            }
+            _ => {
+                return Err(WhirParamsLabelError::new(format!(
+                    "unsupported WHIR parameter label: {label}"
+                )))
+            }
+        };
+
+    let effective_schedule = folding_schedule
+        .clone()
+        .unwrap_or(WhirFoldingSchedule::Constant(folding_factor));
+    let round_log_inv_rates = match encoded_round_rates {
+        Some(rates) => rates,
+        None => checked_derived_round_log_inv_rates(
+            num_variables,
+            &effective_schedule,
+            starting_log_inv_rate,
+            reduction,
+        )?,
+    };
+
+    Ok(WhirParams {
+        pow_bits,
+        folding_factor,
+        starting_log_inv_rate,
+        rs_domain_initial_reduction_factor: reduction,
+        folding_schedule,
+        round_log_inv_rates,
+    })
+}
+
+fn join_usizes(values: &[usize]) -> String {
+    values
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn parse_usize_list(encoded: &str, component: &str) -> Result<Vec<usize>, WhirParamsLabelError> {
+    if encoded.is_empty() {
+        return Err(WhirParamsLabelError::new(format!(
+            "{component} must not be empty"
+        )));
+    }
+    encoded
+        .split('-')
+        .map(|value| {
+            value.parse::<usize>().map_err(|error| {
+                WhirParamsLabelError::new(format!("invalid {component} value {value}: {error}"))
+            })
+        })
+        .collect()
+}
+
+fn parse_usize_component(component: &str, prefix: &str) -> Result<usize, WhirParamsLabelError> {
+    parse_component(component, prefix)?
+        .parse()
+        .map_err(|error| {
+            WhirParamsLabelError::new(format!("invalid {prefix} component {component}: {error}"))
+        })
+}
+
+fn parse_u32_component(component: &str, prefix: &str) -> Result<u32, WhirParamsLabelError> {
+    parse_component(component, prefix)?
+        .parse()
+        .map_err(|error| {
+            WhirParamsLabelError::new(format!("invalid {prefix} component {component}: {error}"))
+        })
+}
+
+fn parse_component<'a>(component: &'a str, prefix: &str) -> Result<&'a str, WhirParamsLabelError> {
+    component.strip_prefix(prefix).ok_or_else(|| {
+        WhirParamsLabelError::new(format!("expected {prefix} component, got {component}"))
+    })
+}
+
+fn checked_derived_round_log_inv_rates(
+    num_variables: usize,
+    schedule: &WhirFoldingSchedule,
+    starting_log_inv_rate: usize,
+    rs_domain_initial_reduction_factor: usize,
+) -> Result<Vec<usize>, WhirParamsLabelError> {
+    if !schedule.is_valid_for(num_variables) {
+        return Err(WhirParamsLabelError::new(format!(
+            "folding schedule is invalid for {num_variables} variables"
+        )));
+    }
+    let num_rounds = compute_number_of_rounds(num_variables, schedule);
+    let mut rate = starting_log_inv_rate;
+    let mut out = Vec::with_capacity(num_rounds);
+    for round in 0..num_rounds {
+        let folding = schedule.at_round(round).ok_or_else(|| {
+            WhirParamsLabelError::new(format!("folding schedule has no round {round}"))
+        })?;
+        let reduction = if round == 0 {
+            rs_domain_initial_reduction_factor
+        } else {
+            1
+        };
+        rate = rate
+            .checked_add(folding)
+            .and_then(|value| value.checked_sub(reduction))
+            .ok_or_else(|| {
+                WhirParamsLabelError::new(format!("invalid log inverse rate at round {round}"))
+            })?;
+        out.push(rate);
+    }
+    Ok(out)
 }
 
 pub fn recommended_octic_schedule(num_variables: usize) -> WhirFoldingSchedule {
@@ -167,12 +418,22 @@ pub fn recommended_octic_whir_params(num_variables: usize) -> WhirParams {
 /// The 20-variable case is the measured SHA-256 2048-byte schedule. Other
 /// sizes reserve enough grinding headroom for backend-derived parameters.
 pub fn recommended_quintic_whir_params(num_variables: usize) -> WhirParams {
+    if num_variables == 20 {
+        return WhirParams {
+            pow_bits: 2,
+            folding_factor: 8,
+            starting_log_inv_rate: 1,
+            rs_domain_initial_reduction_factor: 8,
+            folding_schedule: Some(WhirFoldingSchedule::ConstantFromSecondRound {
+                first: 8,
+                rest: 7,
+            }),
+            round_log_inv_rates: Vec::new(),
+        };
+    }
+
     let mut params = recommended_octic_whir_params(num_variables);
-    params.pow_bits = if num_variables == 20 {
-        4
-    } else {
-        u32::try_from(num_variables).unwrap_or(u32::MAX).max(22)
-    };
+    params.pow_bits = u32::try_from(num_variables).unwrap_or(u32::MAX).max(22);
     params
 }
 
@@ -180,34 +441,45 @@ pub fn recommended_quintic_whir_params(num_variables: usize) -> WhirParams {
 ///
 /// The 20-variable case is the selected SHA-256 2048-byte schedule.
 pub fn recommended_quintic_spark_whir_params(num_variables: usize) -> WhirParams {
+    if num_variables == 20 {
+        let mut params = recommended_octic_whir_params(num_variables);
+        params.pow_bits = 6;
+        params.folding_schedule = Some(WhirFoldingSchedule::Constant(8));
+        return params;
+    }
     recommended_quintic_whir_params(num_variables)
 }
 
 /// Quintic parameters for full-ZK SPARK witness commitments.
 ///
-/// The 20-variable case satisfies the 122-bit full-ZK witness component
-/// target used by a 116-bit SPARK proof.
+/// The 20-variable case meets the 120-bit WHIR component target and achieves
+/// 122 bits for the full-ZK witness argument used by a 116-bit SPARK proof.
 pub fn recommended_quintic_spark_zk_whir_params(num_variables: usize) -> WhirParams {
     if num_variables != 20 {
-        return recommended_quintic_zk_whir_params(num_variables);
+        let mut params = recommended_quintic_zk_whir_params(num_variables);
+        if num_variables == 19 {
+            params.pow_bits = params.pow_bits.max(5);
+        }
+        return params;
     }
 
-    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+    let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 3 };
     WhirParams {
-        pow_bits: 6,
+        pow_bits: 7,
         folding_factor: 8,
         starting_log_inv_rate: 1,
-        rs_domain_initial_reduction_factor: 6,
-        folding_schedule: Some(schedule.clone()),
-        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 6),
+        rs_domain_initial_reduction_factor: 7,
+        folding_schedule: Some(schedule),
+        round_log_inv_rates: Vec::new(),
     }
 }
 
 /// Plain-WHIR quintic parameters for fixed SPARK table openings.
 ///
 /// The 25-variable fixed-value table and 22-variable audit table are the
-/// selected SHA-256 2048-byte schedules. Other sizes use the 22-bit search
-/// limit and require workload-specific validation.
+/// selected SHA-256 2048-byte schedules. Other sizes reserve at least 22 bits
+/// of grinding and at least one bit per variable, and require workload-specific
+/// validation.
 pub fn recommended_quintic_spark_fixed_whir_params(num_variables: usize) -> WhirParams {
     let (pow_bits, schedule) = match num_variables {
         25 => (
@@ -217,7 +489,7 @@ pub fn recommended_quintic_spark_fixed_whir_params(num_variables: usize) -> Whir
         22 => (6, WhirFoldingSchedule::Constant(8)),
         _ => {
             let mut params = recommended_octic_spark_fixed_whir_params(num_variables);
-            params.pow_bits = 22;
+            params.pow_bits = u32::try_from(num_variables).unwrap_or(u32::MAX).max(22);
             return params;
         }
     };
@@ -226,20 +498,20 @@ pub fn recommended_quintic_spark_fixed_whir_params(num_variables: usize) -> Whir
         folding_factor: 8,
         starting_log_inv_rate: 1,
         rs_domain_initial_reduction_factor: 8,
-        folding_schedule: Some(schedule.clone()),
-        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 8),
+        folding_schedule: Some(schedule),
+        round_log_inv_rates: Vec::new(),
     }
 }
 
 /// Plain-WHIR quintic parameters for SPARK read-table openings.
 ///
 /// The 25-variable SHA-256 2048-byte schedule is shared by the 25- and
-/// 23-variable read groups. Other sizes use the 22-bit search limit and
-/// require workload-specific validation.
+/// 23-variable read groups. Other sizes reserve at least 22 bits of grinding
+/// and at least one bit per variable, and require workload-specific validation.
 pub fn recommended_quintic_spark_read_whir_params(num_variables: usize) -> WhirParams {
     if num_variables != 25 {
         let mut params = recommended_octic_spark_read_whir_params(num_variables);
-        params.pow_bits = 22;
+        params.pow_bits = u32::try_from(num_variables).unwrap_or(u32::MAX).max(22);
         return params;
     }
 
@@ -282,13 +554,17 @@ pub fn recommended_octic_spark_read_whir_params(num_variables: usize) -> WhirPar
 
 /// Octic parameters for full-ZK WHIR witness commitments.
 ///
-/// The 19- and 20-variable cases use measured SHA-256 schedules. Other sizes
-/// use ZK-valid defaults; tune benchmarked workloads with
+/// The 20-variable case is selected for the SHA-256 2048-byte workload. The
+/// 19-variable case is a security-valid default. Other sizes use ZK-valid
+/// defaults; tune benchmarked workloads with
 /// `poseidon-schedule-candidates --proof-mode full-zk`.
 pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
     if num_variables < 18 {
         let schedule = WhirFoldingSchedule::Constant(1);
-        let starting_log_inv_rate = if num_variables == 1 { 6 } else { 5 };
+        // Very small terminal messages need enough coefficient slack for the
+        // occupancy-corrected query budget. From six variables onward the
+        // existing rate-five schedule already has sufficient slack.
+        let starting_log_inv_rate = 11usize.saturating_sub(num_variables).max(5);
         return WhirParams {
             pow_bits: 0,
             folding_factor: 1,
@@ -311,7 +587,7 @@ pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
             folding_factor: 8,
             starting_log_inv_rate: 1,
             rs_domain_initial_reduction_factor: 7,
-            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 7),
+            round_log_inv_rates: vec![4],
             folding_schedule: Some(schedule),
         };
     }
@@ -323,30 +599,46 @@ pub fn recommended_octic_zk_whir_params(num_variables: usize) -> WhirParams {
             folding_factor: 8,
             starting_log_inv_rate: 1,
             rs_domain_initial_reduction_factor: 6,
-            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 6),
+            round_log_inv_rates: vec![4],
             folding_schedule: Some(schedule),
         };
     }
 
     if num_variables <= 21 {
         let schedule = WhirFoldingSchedule::Constant(1);
+        let starting_log_inv_rate = if matches!(num_variables, 18 | 21) {
+            3
+        } else {
+            2
+        };
+        let mut round_log_inv_rates =
+            derived_round_log_inv_rates(num_variables, &schedule, starting_log_inv_rate, 1);
+        if matches!(num_variables, 18 | 21) {
+            round_log_inv_rates.fill(4);
+        }
         return WhirParams {
             pow_bits: 0,
             folding_factor: 1,
-            starting_log_inv_rate: 2,
+            starting_log_inv_rate,
             rs_domain_initial_reduction_factor: 1,
-            round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 2, 1),
+            round_log_inv_rates,
             folding_schedule: Some(schedule),
         };
     }
 
     let schedule = WhirFoldingSchedule::ConstantFromSecondRound { first: 8, rest: 6 };
+    let mut round_log_inv_rates = derived_round_log_inv_rates(num_variables, &schedule, 1, 7);
+    if num_variables == 22 {
+        for rate in &mut round_log_inv_rates {
+            *rate += 1;
+        }
+    }
     WhirParams {
         pow_bits: 0,
         folding_factor: 8,
         starting_log_inv_rate: 1,
         rs_domain_initial_reduction_factor: 7,
-        round_log_inv_rates: derived_round_log_inv_rates(num_variables, &schedule, 1, 7),
+        round_log_inv_rates,
         folding_schedule: Some(schedule),
     }
 }

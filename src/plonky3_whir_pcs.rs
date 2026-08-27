@@ -1,10 +1,14 @@
 use alloc::{sync::Arc, vec, vec::Vec};
+use std::sync::OnceLock;
 
 use num_bigint::BigUint;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::{dot_product, Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    dot_product, ExtensionField as P3ExtensionField, Field, PackedValue, PrimeCharacteristicRing,
+    TwoAdicField,
+};
 use p3_matrix::{
     dense::{DenseMatrix, RowMajorMatrix},
     Dimensions, Matrix,
@@ -57,6 +61,16 @@ use crate::{
 };
 
 const FULL_ZK_SECURITY_SLACK_BITS: u32 = 2;
+
+/// Returns a clone that shares Plonky3's process-wide KoalaBear twiddle cache.
+///
+/// `Radix2DFTSmallBatch::clone` shares its `Arc<RwLock<...>>`; reconstructing a
+/// default value for every static PCS call would otherwise discard the cache
+/// after each commit, open, or verification phase.
+fn shared_poseidon_dft() -> Radix2DFTSmallBatch<F> {
+    static DFT: OnceLock<Radix2DFTSmallBatch<F>> = OnceLock::new();
+    DFT.get_or_init(Radix2DFTSmallBatch::default).clone()
+}
 
 #[derive(Debug, Clone)]
 pub struct PlainParsedCommitment<Ext, Commitment> {
@@ -650,6 +664,24 @@ mod plain_whir_layout {
         pub(super) num_variables: usize,
     }
 
+    pub(super) struct PreparedSpartanEqSumcheck<Ext: ExtField> {
+        polynomial: Poly<F>,
+        claims: Vec<SvoClaim<Ext>>,
+        accumulators: Vec<SvoAccumulators<Ext>>,
+        claimed_sum: Ext,
+        folding: usize,
+        num_variables: usize,
+        randomness: Vec<Ext>,
+        pending_coefficients: Option<[Ext; 2]>,
+    }
+
+    pub(super) struct SpartanEqResidual<Ext: ExtField> {
+        evals: Poly<Ext::ExtensionPacking>,
+        weights: Poly<Ext::ExtensionPacking>,
+        claimed_sum: Ext,
+        folding_randomness: Point<Ext>,
+    }
+
     impl<Ext> SpartanEqLayout<Ext>
     where
         Ext: ExtField,
@@ -673,6 +705,20 @@ mod plain_whir_layout {
         {
             let _profile = profile_scope("initial_sumcheck_svo");
             let alpha: Ext = challenger.sample_algebra_element();
+            let mut prepared = self.prepare_svo_sumcheck(alpha);
+            while prepared.remaining_rounds() != 0 {
+                let [c0, c_inf] = prepared.round_coefficients();
+                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+                prepared.bind_round(r);
+            }
+            prepared.into_residual().into_sumcheck()
+        }
+
+        pub(super) fn prepare_svo_sumcheck(self, alpha: Ext) -> PreparedSpartanEqSumcheck<Ext> {
+            assert!(
+                self.uses_svo(),
+                "prepared Spartan equality sumcheck requires SVO"
+            );
             let claims = self
                 .claims
                 .into_iter()
@@ -689,8 +735,7 @@ mod plain_whir_layout {
                     }
                 })
                 .collect::<Vec<_>>();
-
-            let mut claimed_sum = claims
+            let claimed_sum = claims
                 .iter()
                 .map(|claim| claim.coeff * claim.eval)
                 .sum::<Ext>();
@@ -698,58 +743,19 @@ mod plain_whir_layout {
                 let _profile = profile_scope("svo_accumulators");
                 claims
                     .iter()
-                    .map(|claim| calculate_svo_accumulators(claim))
+                    .map(calculate_svo_accumulators)
                     .collect::<Vec<_>>()
             };
-
-            let mut rs = Vec::with_capacity(self.folding);
-            for round_idx in 0..self.folding {
-                let weights = lagrange_weights_01inf_multi(&rs);
-                let (c0, c_inf) = accumulators.iter().fold(
-                    (Ext::ZERO, Ext::ZERO),
-                    |(c0, c_inf), claim_accumulators| {
-                        let round = &claim_accumulators[round_idx];
-                        (
-                            c0 + dot_product::<Ext, _, _>(
-                                round[0].iter().copied(),
-                                weights.iter().copied(),
-                            ),
-                            c_inf
-                                + dot_product::<Ext, _, _>(
-                                    round[1].iter().copied(),
-                                    weights.iter().copied(),
-                                ),
-                        )
-                    },
-                );
-                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
-                claimed_sum = extrapolate_01inf(c0, claimed_sum - c0, c_inf, r);
-                rs.push(r);
+            PreparedSpartanEqSumcheck {
+                polynomial: self.polynomial,
+                claims,
+                accumulators,
+                claimed_sum,
+                folding: self.folding,
+                num_variables: self.num_variables,
+                randomness: Vec::with_capacity(self.folding),
+                pending_coefficients: None,
             }
-
-            let rs = Point::new(rs);
-            let (compressed_evals, residual_weights) = {
-                let _profile = profile_scope("svo_residual_pack");
-                let compressed_evals = self.polynomial.compress_prefix_to_packed(&rs, Ext::ONE);
-                let residual_variables = self.num_variables - self.folding;
-                let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
-                let mut residual_weights =
-                    Ext::ExtensionPacking::zero_vec(1 << (residual_variables - packing_log));
-                for claim in &claims {
-                    claim
-                        .point
-                        .accumulate_into_packed(&mut residual_weights, &rs, claim.coeff);
-                }
-                (compressed_evals, Poly::new(residual_weights))
-            };
-
-            let product = ProductPolynomial::new_packed(
-                VariableOrder::Prefix,
-                compressed_evals,
-                residual_weights,
-            );
-            let prover = SumcheckProver::new(product, claimed_sum);
-            (prover, rs)
         }
 
         fn into_sumcheck_packed_extension<Ch>(
@@ -817,6 +823,103 @@ mod plain_whir_layout {
     }
 
     type SvoAccumulators<Ext> = Vec<[Vec<Ext>; 2]>;
+
+    impl<Ext> PreparedSpartanEqSumcheck<Ext>
+    where
+        Ext: ExtField,
+    {
+        pub(super) fn remaining_rounds(&self) -> usize {
+            self.folding - self.randomness.len()
+        }
+
+        pub(super) fn round_coefficients(&mut self) -> [Ext; 2] {
+            assert!(self.remaining_rounds() != 0);
+            if let Some(coefficients) = self.pending_coefficients {
+                return coefficients;
+            }
+            let round_idx = self.randomness.len();
+            let weights = lagrange_weights_01inf_multi(&self.randomness);
+            let coefficients = self.accumulators.iter().fold(
+                [Ext::ZERO, Ext::ZERO],
+                |[c0, c_inf], claim_accumulators| {
+                    let round = &claim_accumulators[round_idx];
+                    [
+                        c0 + dot_product::<Ext, _, _>(
+                            round[0].iter().copied(),
+                            weights.iter().copied(),
+                        ),
+                        c_inf
+                            + dot_product::<Ext, _, _>(
+                                round[1].iter().copied(),
+                                weights.iter().copied(),
+                            ),
+                    ]
+                },
+            );
+            self.pending_coefficients = Some(coefficients);
+            coefficients
+        }
+
+        pub(super) fn bind_round(&mut self, challenge: Ext) {
+            let [c0, c_inf] = self
+                .pending_coefficients
+                .take()
+                .expect("round_coefficients must precede bind_round");
+            self.claimed_sum = extrapolate_01inf(c0, self.claimed_sum - c0, c_inf, challenge);
+            self.randomness.push(challenge);
+        }
+
+        pub(super) fn into_residual(self) -> SpartanEqResidual<Ext> {
+            assert_eq!(self.remaining_rounds(), 0);
+            assert!(self.pending_coefficients.is_none());
+            let folding_randomness = Point::new(self.randomness);
+            let evals = self
+                .polynomial
+                .compress_prefix_to_packed(&folding_randomness, Ext::ONE);
+            let residual_variables = self.num_variables - self.folding;
+            let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            let mut residual_weights =
+                Ext::ExtensionPacking::zero_vec(1 << (residual_variables - packing_log));
+            for claim in &self.claims {
+                claim.point.accumulate_into_packed(
+                    &mut residual_weights,
+                    &folding_randomness,
+                    claim.coeff,
+                );
+            }
+            let weights = Poly::new(residual_weights);
+            let product = ProductPolynomial::<F, Ext>::new_packed(
+                VariableOrder::Prefix,
+                evals.clone(),
+                weights.clone(),
+            );
+            debug_assert_eq!(product.dot_product(), self.claimed_sum);
+            SpartanEqResidual {
+                evals,
+                weights,
+                claimed_sum: self.claimed_sum,
+                folding_randomness,
+            }
+        }
+    }
+
+    impl<Ext> SpartanEqResidual<Ext>
+    where
+        Ext: ExtField,
+    {
+        pub(super) fn into_sumcheck(self) -> (SumcheckProver<F, Ext>, Point<Ext>) {
+            let product = ProductPolynomial::<F, Ext>::new_packed(
+                VariableOrder::Prefix,
+                self.evals,
+                self.weights,
+            );
+            debug_assert_eq!(product.dot_product(), self.claimed_sum);
+            (
+                SumcheckProver::new(product, self.claimed_sum),
+                self.folding_randomness,
+            )
+        }
+    }
 
     // Plonky3's accumulator builder is crate-private. This local helper mirrors the
     // prefix case only, which is the layout Spartan uses for caller-supplied claims.
@@ -1227,6 +1330,101 @@ where
     })
 }
 
+/// Derive the terminal query count and proof-of-work difficulty for a hiding
+/// WHIR source code, including its random coefficients in the code dimension.
+///
+/// This is public so the schedule-search binary uses the same derivation as the
+/// prover and verifier configuration. It is not part of the deployment API.
+#[doc(hidden)]
+pub fn hiding_terminal_budget<Base, Ext, Challenger>(
+    config: &Plonky3PlainWhirConfig<Ext, Base, Challenger>,
+) -> (usize, usize)
+where
+    Base: TwoAdicField,
+    Ext: P3ExtensionField<Base> + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let final_config = config.final_round_config();
+    let message_len = 1usize << final_config.num_variables;
+    let domain_size = final_config.domain_size >> final_config.folding_factor;
+    let protocol_security_level = config
+        .params
+        .security_level
+        .saturating_sub(config.params.pow_bits);
+    terminal_source_budget(
+        config.params.soundness_type,
+        config.params.security_level,
+        protocol_security_level,
+        message_len,
+        domain_size,
+        config.final_queries,
+    )
+}
+
+fn terminal_source_budget(
+    soundness: Plonky3SecurityAssumption,
+    security_level: usize,
+    protocol_security_level: usize,
+    message_len: usize,
+    domain_size: usize,
+    mut queries: usize,
+) -> (usize, usize) {
+    loop {
+        let dyadic_dimension = (message_len + queries).next_power_of_two();
+        if dyadic_dimension >= domain_size {
+            // Returning the domain size makes the application-side slack
+            // check reject a terminal source code with no positive rate.
+            return (domain_size, 0);
+        }
+        let log_inv_rate = domain_size.ilog2() as usize - dyadic_dimension.ilog2() as usize;
+        let next_queries = soundness.queries(protocol_security_level, log_inv_rate);
+        if next_queries <= queries {
+            let pow_bits =
+                0_f64.max(security_level as f64 - soundness.queries_error(log_inv_rate, queries));
+            return (queries, pow_bits.ceil() as usize);
+        }
+        queries = next_queries;
+    }
+}
+
+fn apply_hiding_terminal_budget<Base, Ext, Challenger>(
+    config: &mut ZkWhirConfig<Ext, Base, Challenger>,
+) -> Result<(), SpartanWhirError>
+where
+    Base: TwoAdicField,
+    Ext: P3ExtensionField<Base> + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let (queries, pow_bits) = hiding_terminal_budget(&config.inner);
+    let final_round = config.inner.n_rounds();
+    let final_config = config.inner.final_round_config();
+    let message_rows = 1usize << final_config.num_variables;
+    let domain_size = final_config.domain_size >> final_config.folding_factor;
+    let slack = domain_size
+        .checked_sub(message_rows)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if queries > slack {
+        return Err(SpartanWhirError::invalid_config_reason(
+            InvalidConfigReason::ZkWhirRandomnessExceedsSlack {
+                round: final_round,
+                randomness: queries,
+                slack,
+            },
+        ));
+    }
+
+    config.inner.final_queries = queries;
+    config.inner.final_pow_bits = pow_bits;
+    *config
+        .oracle_randomness
+        .get_mut(final_round)
+        .ok_or_else(SpartanWhirError::invalid_config)? = queries;
+    if !config.inner.check_pow_bits() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    Ok(())
+}
+
 pub(crate) fn build_poseidon_hiding_pcs<Ext>(
     config: &ZkWhirPcsConfig,
     relation_security_level: u32,
@@ -1252,7 +1450,7 @@ where
         security_level: relation_security_level as usize,
         pow_bits: base.whir.pow_bits as usize,
     };
-    let whir_config = ZkWhirConfig::<Ext, F, PoseidonChallenger>::new(
+    let mut whir_config = ZkWhirConfig::<Ext, F, PoseidonChallenger>::new(
         base.num_variables,
         protocol_params,
         ZkParameters {
@@ -1261,6 +1459,7 @@ where
         },
     )
     .map_err(map_zk_config_error)?;
+    apply_hiding_terminal_budget(&mut whir_config)?;
     let mmcs = RcMmcs(InnerPoseidonMmcs::new(
         poseidon_merkle_hash(),
         poseidon_merkle_compress(),
@@ -1268,7 +1467,7 @@ where
     ));
     Ok(HidingWhirPcs::new(
         whir_config,
-        Radix2DFTSmallBatch::<F>::default(),
+        shared_poseidon_dft(),
         mmcs,
         rand::make_rng(),
     ))
@@ -1333,7 +1532,7 @@ where
         poseidon_merkle_compress(),
         0,
     ));
-    Ok((whir_config, Radix2DFTSmallBatch::<F>::default(), mmcs))
+    Ok((whir_config, shared_poseidon_dft(), mmcs))
 }
 
 pub(crate) fn observe_poseidon_relation_domain_separator<Ext>(
@@ -1559,6 +1758,104 @@ const fn map_soundness_assumption(soundness: SoundnessAssumption) -> Plonky3Secu
         SoundnessAssumption::UniqueDecoding => Plonky3SecurityAssumption::UniqueDecoding,
         SoundnessAssumption::JohnsonBound => Plonky3SecurityAssumption::JohnsonBound,
         SoundnessAssumption::CapacityBound => Plonky3SecurityAssumption::CapacityBound,
+    }
+}
+
+#[cfg(test)]
+mod hiding_terminal_budget_tests {
+    use super::*;
+    use crate::{
+        recommended_quintic_spark_zk_whir_params, recommended_quintic_zk_whir_params,
+        QuinticExtension, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
+    };
+
+    fn protocol_parameters(whir: &WhirParams, security_level: usize) -> ProtocolParameters {
+        ProtocolParameters {
+            starting_log_inv_rate: whir.starting_log_inv_rate,
+            round_log_inv_rates: poseidon_round_log_inv_rates(
+                20,
+                &whir.effective_folding_schedule(),
+                whir.starting_log_inv_rate,
+                whir.rs_domain_initial_reduction_factor,
+                &whir.round_log_inv_rates,
+            )
+            .expect("selected round rates are valid"),
+            folding_factor: map_poseidon_folding_schedule(&whir.effective_folding_schedule()),
+            soundness_type: Plonky3SecurityAssumption::JohnsonBound,
+            security_level,
+            pow_bits: whir.pow_bits as usize,
+        }
+    }
+
+    fn assert_hiding_terminal_budget(
+        whir: WhirParams,
+        security_level: usize,
+        nominal: (usize, usize),
+        corrected: (usize, usize),
+    ) {
+        let protocol_params = protocol_parameters(&whir, security_level);
+        let plain = Plonky3PlainWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            20,
+            protocol_params.clone(),
+        )
+        .expect("selected plain WHIR config is valid");
+        assert_eq!((plain.final_queries, plain.final_pow_bits), nominal);
+        assert_eq!(hiding_terminal_budget(&plain), corrected);
+
+        let mut hiding = ZkWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            20,
+            protocol_params,
+            ZkParameters {
+                ell_zk: DEFAULT_ZK_ELL,
+                mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
+            },
+        )
+        .expect("selected hiding WHIR config is valid");
+        apply_hiding_terminal_budget(&mut hiding)
+            .expect("terminal budget fits the selected config");
+
+        let final_round = hiding.inner.n_rounds();
+        assert_eq!(
+            (hiding.inner.final_queries, hiding.inner.final_pow_bits),
+            corrected
+        );
+        assert_eq!(hiding.oracle_randomness[final_round], corrected.0);
+        assert!(hiding.inner.check_pow_bits());
+    }
+
+    #[test]
+    fn direct_full_zk_uses_occupied_terminal_source_budget() {
+        assert_hiding_terminal_budget(
+            recommended_quintic_zk_whir_params(20),
+            120,
+            (61, 3),
+            (125, 4),
+        );
+    }
+
+    #[test]
+    fn spark_full_zk_uses_occupied_terminal_source_budget() {
+        assert_hiding_terminal_budget(
+            recommended_quintic_spark_zk_whir_params(20),
+            122,
+            (60, 7),
+            (124, 7),
+        );
+    }
+
+    #[test]
+    fn terminal_source_budget_rejects_a_rate_one_code() {
+        assert_eq!(
+            terminal_source_budget(
+                Plonky3SecurityAssumption::JohnsonBound,
+                120,
+                116,
+                64,
+                128,
+                61,
+            ),
+            (128, 0)
+        );
     }
 }
 
