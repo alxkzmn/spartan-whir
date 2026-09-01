@@ -561,7 +561,23 @@ where
         + FieldChallenger<F>
         + GrindingChallenger<Witness = F>,
 {
-    pub fn verify(&self, proof: &PoseidonProof<Ext>) -> Result<(), SpartanWhirError> {
+    /// Verify a proof against public inputs selected by the verifier.
+    ///
+    /// The caller must obtain `expected_public_inputs` from the application or
+    /// another trusted statement source, not from the party supplying `proof`.
+    pub fn verify(
+        &self,
+        expected_public_inputs: &[F],
+        proof: &PoseidonProof<Ext>,
+    ) -> Result<(), SpartanWhirError> {
+        if expected_public_inputs.len() != self.num_io()
+            || proof.instance.public_inputs.len() != self.num_io()
+        {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if proof.instance.public_inputs != expected_public_inputs {
+            return Err(SpartanWhirError::PublicInputMismatch);
+        }
         let mut challenger = poseidon_challenger();
         SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::verify_with_mode(
             self,
@@ -627,7 +643,23 @@ where
     StandardUniform: Distribution<Ext> + Distribution<F>,
     PoseidonChallenger: CanObserve<PoseidonCommitment>,
 {
-    pub fn verify(&self, proof: &PoseidonZkProof<Ext>) -> Result<(), SpartanWhirError> {
+    /// Verify a proof against public inputs selected by the verifier.
+    ///
+    /// The caller must obtain `expected_public_inputs` from the application or
+    /// another trusted statement source, not from the party supplying `proof`.
+    pub fn verify(
+        &self,
+        expected_public_inputs: &[F],
+        proof: &PoseidonZkProof<Ext>,
+    ) -> Result<(), SpartanWhirError> {
+        if expected_public_inputs.len() != self.num_io
+            || proof.instance.public_inputs.len() != self.num_io
+        {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if proof.instance.public_inputs != expected_public_inputs {
+            return Err(SpartanWhirError::PublicInputMismatch);
+        }
         let mut challenger = poseidon_challenger();
         PoseidonZkSpartanProtocol::<Ext>::verify(
             self,

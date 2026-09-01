@@ -28,7 +28,7 @@ use crate::engine::{ExtField, KeccakEngine, PoseidonChallenger, PoseidonEngine, 
 use crate::error::InvalidConfigReason;
 use crate::plonky3_whir_pcs::{
     build_poseidon_full_zk_pcs, observe_poseidon_relation_domain_separator, PoseidonCommitment,
-    PoseidonMmcs, PoseidonRelationProof,
+    PoseidonHidingPcs, PoseidonMmcs, PoseidonRelationProof,
 };
 use crate::poseidon::{PoseidonZkProvingKey, PoseidonZkVerifyingKey};
 use crate::profiling::profile_scope;
@@ -2085,6 +2085,13 @@ where
                 num_inner_rounds,
                 vk.security.effective_security_bits(),
             )?;
+        validate_poseidon_zk_proof_commitments(
+            vk,
+            validated_spark_metadata.as_ref(),
+            instance,
+            proof,
+            &pcs,
+        )?;
         let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
         observe_poseidon_zk_context(
             challenger,
@@ -2248,6 +2255,75 @@ where
             )
             .map_err(|_| SpartanWhirError::WhirVerifyFailed)
     }
+}
+
+fn validate_poseidon_zk_proof_commitments<Ext: ExtField>(
+    vk: &PoseidonZkVerifyingKey<Ext>,
+    spark_metadata: Option<&SparkTableMetadata>,
+    instance: &R1csInstance<F, PoseidonCommitment>,
+    proof: &ZkSpartanProof<Ext>,
+    pcs: &PoseidonHidingPcs<Ext>,
+) -> Result<(), SpartanWhirError>
+where
+    StandardUniform: Distribution<Ext>,
+{
+    use crate::plonky3_whir_pcs::{
+        validate_poseidon_commitment, validate_poseidon_plain_proof_shape_from_config,
+        validate_poseidon_relation_proof_shape,
+    };
+
+    validate_poseidon_commitment(&instance.witness_commitment)?;
+    validate_poseidon_commitment(&proof.application_mask_commitment)?;
+    validate_poseidon_commitment(&proof.inner_sumcheck_mask_commitment)?;
+    validate_poseidon_relation_proof_shape(&pcs.config, &proof.pcs_proof)?;
+
+    if let ZkMatrixClosingProof::Spark(closing) = &proof.matrix_closing {
+        let configs = vk
+            .spark_pcs_configs
+            .as_ref()
+            .ok_or_else(SpartanWhirError::invalid_config)?;
+        let metadata = spark_metadata.ok_or_else(SpartanWhirError::invalid_config)?;
+        let audit_embedded = spark_fixed_audit_is_embedded(
+            metadata.value_domain_size,
+            metadata.row_memory_size,
+            metadata.col_memory_size,
+        );
+        if closing.spark_read_openings.groups.len() != configs.read.len() {
+            return Err(SpartanWhirError::InvalidProofShape);
+        }
+        validate_spark_fixed_opening_shape::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+            &configs.fixed_value,
+            &configs.fixed_audit,
+            audit_embedded,
+            &closing.spark_fixed_openings,
+        )?;
+        validate_spark_read_opening_shape::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+            &configs.read,
+            &closing.spark_read_openings,
+        )?;
+
+        validate_poseidon_commitment(&closing.spark_fixed_openings.value_commitment)?;
+        validate_poseidon_plain_proof_shape_from_config(
+            &configs.fixed_value,
+            &closing.spark_fixed_openings.value_proof,
+        )?;
+        match (
+            &closing.spark_fixed_openings.audit_commitment,
+            &closing.spark_fixed_openings.audit_proof,
+        ) {
+            (Some(commitment), Some(audit_proof)) => {
+                validate_poseidon_commitment(commitment)?;
+                validate_poseidon_plain_proof_shape_from_config(&configs.fixed_audit, audit_proof)?;
+            }
+            (None, None) => {}
+            _ => return Err(SpartanWhirError::InvalidProofShape),
+        }
+        for (config, group) in configs.read.iter().zip(&closing.spark_read_openings.groups) {
+            validate_poseidon_commitment(&group.commitment)?;
+            validate_poseidon_plain_proof_shape_from_config(config, &group.proof)?;
+        }
+    }
+    Ok(())
 }
 
 fn observe_poseidon_zk_context(
@@ -4241,13 +4317,9 @@ where
     EF: ExtField,
     E: SpartanContextEngine<EF = EF>,
     Pcs: MlePcs<E, Config = WhirPcsConfig>,
-    <Pcs as MlePcs<E>>::Commitment: Clone + PartialEq,
+    <Pcs as MlePcs<E>>::Commitment: PartialEq,
 {
-    let actual = SparkFixedCommitments {
-        value: proof.value_commitment.clone(),
-        audit: proof.audit_commitment.clone(),
-    };
-    if &actual != expected {
+    if proof.value_commitment != expected.value || proof.audit_commitment != expected.audit {
         return Err(SpartanWhirError::CommitmentMismatch);
     }
     Ok(())

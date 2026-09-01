@@ -1359,7 +1359,7 @@ fn whir_component_security_bits(args: &Args) -> Result<usize, String> {
     }
     args.security_bits
         .min(args.merkle_security_bits)
-        .checked_add(quarter_budget_slack(1)?)
+        .checked_add(three_way_budget_slack(1)?)
         .ok_or_else(|| "WHIR component security target overflows".to_owned())
 }
 
@@ -1373,7 +1373,7 @@ fn direct_merkle_component_security_bits(
     let events = direct_commitment_binding_events(args, witness_rounds)?;
     args.security_bits
         .min(args.merkle_security_bits)
-        .checked_add(quarter_budget_slack(events)?)
+        .checked_add(three_way_budget_slack(events)?)
         .ok_or_else(|| "Merkle component security target overflows".to_owned())
 }
 
@@ -1381,8 +1381,8 @@ fn direct_commitment_binding_events(args: &Args, witness_rounds: usize) -> Resul
     match args.proof_mode {
         ProofMode::NoZk => witness_rounds.checked_add(1),
         ProofMode::FullZk => witness_rounds
-            .checked_mul(3)
-            .and_then(|rounds| rounds.checked_add(6)),
+            .checked_mul(5)
+            .and_then(|rounds| rounds.checked_add(8)),
     }
     .ok_or_else(|| "DirectSparse commitment event count overflows".to_owned())
 }
@@ -1429,15 +1429,15 @@ where
         Ok(events) => events,
         Err(reason) => return Some(reason),
     };
-    let whir_slack_bits = match quarter_budget_slack(1) {
+    let whir_slack_bits = match three_way_budget_slack(1) {
         Ok(bits) => bits,
         Err(reason) => return Some(reason),
     };
-    let merkle_slack_bits = match quarter_budget_slack(commitment_binding_events) {
+    let merkle_slack_bits = match three_way_budget_slack(commitment_binding_events) {
         Ok(bits) => bits,
         Err(reason) => return Some(reason),
     };
-    let field_denominator = BigUint::from(algebraic_error_terms) << 1usize;
+    let field_denominator = BigUint::from(algebraic_error_terms) * BigUint::from(3u8);
     let field_attainable = (Ext::order() / field_denominator)
         .bits()
         .saturating_sub(1)
@@ -1453,9 +1453,9 @@ where
     })
 }
 
-fn quarter_budget_slack(events: usize) -> Result<usize, String> {
+fn three_way_budget_slack(events: usize) -> Result<usize, String> {
     let weighted = events
-        .checked_mul(4)
+        .checked_mul(3)
         .ok_or_else(|| "composed security event count overflows".to_owned())?;
     Ok(usize::BITS as usize - weighted.saturating_sub(1).leading_zeros() as usize)
 }
@@ -2001,7 +2001,7 @@ mod tests {
     fn full_zk_candidate_matches_direct_sparse_setup_security_rejection() {
         let args = direct_security_test_args(ProofMode::FullZk, 115);
         let whir_params = direct_security_test_whir_params();
-        assert_candidate_composed_rejection(&args, whir_params.clone(), 114);
+        assert_candidate_composed_rejection(&args, whir_params.clone(), 113);
 
         let setup_error = match setup_poseidon_zk::<QuarticBinExtension>(
             empty_shape(args.num_variables, args.num_outer_rounds),
@@ -2021,9 +2021,22 @@ mod tests {
             setup_error,
             SpartanWhirError::InvalidConfig(InvalidConfigReason::ComposedSecurityUnavailable {
                 requested_bits: 115,
-                attainable_bits: 114,
+                attainable_bits: 113,
                 dominant_component: SecurityBoundComponent::ExtensionField,
             })
+        );
+    }
+
+    #[test]
+    fn full_zk_candidate_counts_every_commitment_binding_event() {
+        let args = direct_security_test_args(ProofMode::FullZk, 116);
+        assert_eq!(
+            direct_commitment_binding_events(&args, 5).expect("commitment count fits"),
+            33
+        );
+        assert_eq!(
+            three_way_budget_slack(33).expect("slack calculation fits"),
+            7
         );
     }
 

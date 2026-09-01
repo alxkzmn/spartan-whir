@@ -33,7 +33,7 @@ use p3_whir::{
         SecurityAssumption as Plonky3SecurityAssumption, WhirConfig as Plonky3PlainWhirConfig,
     },
     pcs::{
-        proof::{PcsProof, WhirProof},
+        proof::{PcsProof, QueryOpenings, SharedProofOpening, WhirProof},
         prover::WhirProver,
         verifier::WhirVerifier,
         zk::{
@@ -109,6 +109,7 @@ pub type PoseidonCommitment = <PoseidonMmcs as Mmcs<F>>::Commitment;
 pub type PoseidonRelationProof<Ext> = ZkWhirRelationProof<F, Ext, PoseidonMmcs>;
 type PoseidonPlainMerkleTree = <PoseidonMmcs as Mmcs<F>>::ProverData<DenseMatrix<F>>;
 type PoseidonPlainWhirProof<Ext> = WhirProof<F, Ext, PoseidonMmcs>;
+type PoseidonMultiProof = <PoseidonMmcs as Mmcs<F>>::MultiProof;
 type PoseidonPlainWhirConfig<Ext> = Plonky3PlainWhirConfig<Ext, F, PoseidonChallenger>;
 pub(crate) type PoseidonHidingPcs<Ext> =
     HidingWhirPcs<Ext, F, Radix2DFTSmallBatch<F>, PoseidonMmcs, PoseidonChallenger, StdRng>;
@@ -131,6 +132,240 @@ type PoseidonSparkReadPcs<Ext> = WhirProver<
 type PoseidonSparkReadProverData<Ext> = WhirProverData<F, Ext, PoseidonMmcs, PrefixProver<F, Ext>>;
 
 use plain_whir_layout::SpartanEqLayout;
+
+pub(crate) fn validate_poseidon_commitment(
+    commitment: &PoseidonCommitment,
+) -> Result<(), SpartanWhirError> {
+    if commitment.num_roots() != 1 {
+        return Err(SpartanWhirError::InvalidCommitmentShape);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_poseidon_plain_proof_commitments<Ext: ExtField>(
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    for round in &proof.rounds {
+        if let Some(commitment) = &round.commitment {
+            validate_poseidon_commitment(commitment)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_poseidon_relation_proof_shape<Ext: ExtField>(
+    config: &ZkWhirConfig<Ext, F, PoseidonChallenger>,
+    proof: &PoseidonRelationProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    let expected_rounds = config.n_rounds();
+    let expected_sumchecks = expected_rounds
+        .checked_add(1)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let expected_mask_groups = expected_rounds
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(3))
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if proof.rounds.len() != expected_rounds
+        || proof.sumchecks.len() != expected_sumchecks
+        || proof.sumcheck_mask_commitments.len() != expected_sumchecks
+        || proof.base_case.fresh_mask_commitments.len() != expected_mask_groups
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    for commitment in &proof.sumcheck_mask_commitments {
+        validate_poseidon_commitment(commitment)?;
+    }
+    for (round_index, (round, params)) in proof
+        .rounds
+        .iter()
+        .zip(&config.round_parameters)
+        .enumerate()
+    {
+        validate_poseidon_commitment(&round.commitment)?;
+        validate_poseidon_commitment(&round.mask_commitment)?;
+        if round.ood_answers.len() != params.ood_samples {
+            return Err(SpartanWhirError::InvalidProofShape);
+        }
+        let folding = config.round_folding_factor(round_index);
+        let width = 1usize
+            .checked_shl(folding as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        let leaf_count = params
+            .domain_size
+            .checked_shr(folding as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_query_opening_shape(
+            &round.openings,
+            round_index == 0,
+            params.num_queries.min(leaf_count),
+            width,
+            leaf_count,
+        )?;
+    }
+    validate_poseidon_commitment(&proof.base_case.fresh_main_commitment)?;
+    for commitment in &proof.base_case.fresh_mask_commitments {
+        validate_poseidon_commitment(commitment)?;
+    }
+    let final_config = config.final_round_config();
+    let final_width = 1usize
+        .checked_shl(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let final_leaf_count = final_config
+        .domain_size
+        .checked_shr(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    validate_query_opening_shape(
+        &proof.base_case.source_openings,
+        expected_rounds == 0,
+        config.final_queries.min(final_leaf_count),
+        final_width,
+        final_leaf_count,
+    )?;
+    Ok(())
+}
+
+fn validate_plain_sumcheck_shape<Ext>(
+    data: &SumcheckData<F, Ext>,
+    expected_rounds: usize,
+    pow_bits: usize,
+) -> Result<(), SpartanWhirError> {
+    let expected_pow_witnesses = if pow_bits == 0 { 0 } else { expected_rounds };
+    if data.polynomial_evaluations.len() != expected_rounds
+        || data.pow_witnesses.len() != expected_pow_witnesses
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    Ok(())
+}
+
+fn validate_shared_opening_shape<T>(
+    opening: &SharedProofOpening<T, PoseidonMultiProof>,
+    expected_rows: usize,
+    expected_width: usize,
+    leaf_count: usize,
+) -> Result<(), SpartanWhirError> {
+    let max_sibling_hashes = expected_rows
+        .checked_mul(log2_ceil_usize(leaf_count))
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if opening.rows.len() != expected_rows
+        || opening.rows.iter().any(|row| row.len() != expected_width)
+        || opening.proof.sibling_hashes.len() > max_sibling_hashes
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    Ok(())
+}
+
+fn validate_query_opening_shape<Ext>(
+    openings: &QueryOpenings<F, Ext, PoseidonMultiProof>,
+    expected_base: bool,
+    expected_rows: usize,
+    expected_width: usize,
+    leaf_count: usize,
+) -> Result<(), SpartanWhirError> {
+    match (openings, expected_base) {
+        (QueryOpenings::Base(opening), true) => {
+            validate_shared_opening_shape(opening, expected_rows, expected_width, leaf_count)
+        }
+        (QueryOpenings::Extension(opening), false) => {
+            validate_shared_opening_shape(opening, expected_rows, expected_width, leaf_count)
+        }
+        _ => Err(SpartanWhirError::InvalidProofShape),
+    }
+}
+
+pub(crate) fn validate_poseidon_plain_proof_shape<Ext: ExtField>(
+    config: &PoseidonPlainWhirConfig<Ext>,
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    if proof.initial_ood_answers.len() != config.commitment_ood_samples
+        || proof.rounds.len() != config.n_rounds()
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    validate_plain_sumcheck_shape(
+        &proof.initial_sumcheck,
+        config.round_folding_factor(0),
+        config.starting_folding_pow_bits,
+    )?;
+
+    for (round_index, (round, params)) in proof
+        .rounds
+        .iter()
+        .zip(&config.round_parameters)
+        .enumerate()
+    {
+        let commitment = round
+            .commitment
+            .as_ref()
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_poseidon_commitment(commitment)?;
+        if round.ood_answers.len() != params.ood_samples {
+            return Err(SpartanWhirError::InvalidProofShape);
+        }
+        validate_plain_sumcheck_shape(
+            &round.sumcheck,
+            config.round_folding_factor(round_index + 1),
+            params.folding_pow_bits,
+        )?;
+        let width = 1usize
+            .checked_shl(params.folding_factor as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        let leaf_count = params
+            .domain_size
+            .checked_shr(params.folding_factor as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_query_opening_shape(
+            &round.openings,
+            round_index == 0,
+            params.num_queries.min(leaf_count),
+            width,
+            leaf_count,
+        )?;
+    }
+
+    let final_config = config.final_round_config();
+    let expected_final_poly_len = 1usize
+        .checked_shl(final_config.num_variables as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if proof
+        .final_poly
+        .as_ref()
+        .is_none_or(|poly| poly.as_slice().len() != expected_final_poly_len)
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    let final_width = 1usize
+        .checked_shl(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let final_leaf_count = final_config
+        .domain_size
+        .checked_shr(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    validate_query_opening_shape(
+        &proof.final_openings,
+        config.n_rounds() == 0,
+        final_config.num_queries.min(final_leaf_count),
+        final_width,
+        final_leaf_count,
+    )?;
+    match (config.final_sumcheck_rounds, &proof.final_sumcheck) {
+        (0, None) => Ok(()),
+        (rounds, Some(data)) if rounds > 0 => {
+            validate_plain_sumcheck_shape(data, rounds, config.final_folding_pow_bits)
+        }
+        _ => Err(SpartanWhirError::InvalidProofShape),
+    }
+}
+
+pub(crate) fn validate_poseidon_plain_proof_shape_from_config<Ext: ExtField>(
+    config: &WhirPcsConfig,
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    config.validate()?;
+    let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+    validate_poseidon_plain_proof_shape(&pcs.config, proof)
+}
 
 #[derive(Clone)]
 pub struct RcMmcs<Inner>(Inner);
@@ -401,6 +636,8 @@ where
         let _profile = profile_scope("verify_parse_commitment_plain");
         config.validate()?;
         let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(commitment)?;
+        validate_poseidon_plain_proof_commitments(proof)?;
         observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
         challenger.observe(commitment.clone());
         parse_plain_initial_commitment::<Ext>(
@@ -556,11 +793,13 @@ where
     fn verify_parse_read_commitment(
         config: &WhirPcsConfig,
         commitment: &Self::Commitment,
-        _proof: &Self::Proof,
+        proof: &Self::Proof,
         challenger: &mut PoseidonChallenger,
     ) -> Result<Self::ParsedReadCommitment, SpartanWhirError> {
         let _profile = profile_scope("spark_parse_read_batch");
         let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(commitment)?;
+        validate_poseidon_plain_proof_commitments(proof)?;
         observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
         challenger.observe(commitment.clone());
         Ok(commitment.clone())
@@ -591,6 +830,9 @@ where
             .iter()
             .map(|point| Point::new(point.0.clone()))
             .collect::<Vec<_>>();
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(parsed)?;
+        validate_poseidon_plain_proof_shape(&pcs.config, proof)?;
         let proof = PcsProof {
             whir: proof.clone(),
             evals: evals
@@ -599,7 +841,6 @@ where
                 .map(|batch| OpeningBatch::new(batch, Vec::new()))
                 .collect(),
         };
-        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
         <PoseidonSparkReadPcs<Ext> as PrescribedPointPcs<Ext, PoseidonChallenger>>::verify_at(
             &pcs, parsed, &proof, &protocol, &points, challenger,
         )

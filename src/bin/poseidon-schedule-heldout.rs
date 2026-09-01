@@ -904,7 +904,7 @@ where
         .prove(witness.clone(), public_inputs.to_vec())
         .map_err(|err| format!("{}: {phase} failed: {err:?}", row.label))?;
     row.vk
-        .verify(&proof)
+        .verify(&proof.instance.public_inputs, &proof)
         .map_err(|err| format!("{}: {phase} verify failed: {err:?}", row.label))
 }
 
@@ -928,7 +928,7 @@ where
         .map_err(|err| format!("{}: proof serialization failed: {err}", row.label))?
         .len();
     row.vk
-        .verify(&proof)
+        .verify(&proof.instance.public_inputs, &proof)
         .map_err(|err| format!("{}: verify failed: {err:?}", row.label))?;
     Ok((elapsed, proof_size))
 }

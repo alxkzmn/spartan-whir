@@ -98,20 +98,28 @@ Generate a proof from the witness:
 
 ```bash
 cargo run --release --features parallel --example end_to_end -- \
-  prove build/proving-key.bin build/example.wtns build/proof.bin
+  prove build/proving-key.bin build/example.wtns build/proof.bin \
+  build/public-inputs.bin
 ```
 
 Verify the proof:
 
 ```bash
 cargo run --release --features parallel --example end_to_end -- \
-  verify build/verifying-key.bin build/proof.bin
+  verify build/verifying-key.bin build/public-inputs.bin build/proof.bin
 ```
 
 Setup is circuit-specific and can be reused for multiple witnesses. The proof
-contains its public Spartan instance, so verification needs only the verifying
-key and proof files. The example stores keys and proofs with `bincode` and
-rebuilds derived proving-key caches after loading the proving key.
+contains its public Spartan instance, but verification also requires the
+expected public inputs selected by the verifier. In a deployment,
+`public-inputs.bin` must come from the application or another trusted statement
+source. Treat a copy supplied with the proof as untrusted. The example emits
+that file from `prove` to make the command-line workflow complete.
+
+The example stores artifacts with fixed-integer `bincode`, rejects trailing
+bytes, and applies role-specific decode limits: 4 GiB for a proving key,
+512 MiB for a verifying key, 256 MiB for a proof, and 16 MiB for public inputs.
+It rebuilds derived proving-key caches after loading the proving key.
 
 ## SNARK Instantiations
 
@@ -164,7 +172,7 @@ binding once before verification:
 let mut vk: PoseidonZkVerifyingKey<OcticBinExtension> =
     bincode::deserialize(&vk_bytes)?;
 vk.authenticate_spark_fixed_commitments()?;
-vk.verify(&proof)?;
+vk.verify(&expected_public_inputs, &proof)?;
 ```
 
 Authentication deterministically rebuilds the SPARK tables and commitments
@@ -285,7 +293,10 @@ argument, and every witness commitment-binding event. Spark adds matrix
 batching, tuple compression, grand-product identities, product sumchecks,
 per-layer reductions, batched table openings, and its table WHIR arguments and
 commitments. The budget derives strengthened internal WHIR and Merkle targets
-from the requested end-to-end target. Setup returns a structured error with the
+from the requested end-to-end target. It divides the allowed error equally
+between algebraic checks, WHIR soundness, and Merkle binding. Full-ZK witness
+WHIR with `n` code-switch rounds accounts for all `5n + 8` Poseidon commitment
+binding events. Setup returns a structured error with the
 requested bits, attainable bits, and dominant component when the extension
 field, WHIR arguments, or commitments cannot meet that target.
 

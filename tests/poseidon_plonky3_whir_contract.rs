@@ -668,8 +668,10 @@ fn poseidon_full_zk_spark_seed_controls_transcript() {
         bincode::serialize(&first).expect("first proof serializes"),
         bincode::serialize(&other).expect("other proof serializes")
     );
-    vk.verify(&first).expect("first proof verifies");
-    vk.verify(&other).expect("other proof verifies");
+    vk.verify(&first.instance.public_inputs, &first)
+        .expect("first proof verifies");
+    vk.verify(&other.instance.public_inputs, &other)
+        .expect("other proof verifies");
 }
 
 #[test]
