@@ -6,7 +6,7 @@ fn reject(
     vk: &PoseidonVerifyingKey<QuarticBinExtension>,
     proof: &PoseidonZkProof<QuarticBinExtension>,
 ) {
-    let _ = vk.verify(proof);
+    let _ = vk.verify(&[], proof);
 }
 
 fn main() {}

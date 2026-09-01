@@ -206,6 +206,15 @@ pub fn phase3_whir_params() -> WhirParams {
     }
 }
 
+pub fn phase3_zk_whir_params() -> WhirParams {
+    let mut params = phase3_whir_params();
+    // The hiding base case counts its query rows in the terminal source
+    // code, so the small fixtures need additional rate for the strongest
+    // security-boundary tests.
+    params.starting_log_inv_rate = 8;
+    params
+}
+
 pub fn phase3_pcs_config() -> WhirPcsConfig {
     WhirPcsConfig {
         num_variables: 0,

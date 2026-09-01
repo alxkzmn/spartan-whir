@@ -1,10 +1,14 @@
 use alloc::{sync::Arc, vec, vec::Vec};
+use std::sync::OnceLock;
 
 use num_bigint::BigUint;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::{dot_product, Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    dot_product, ExtensionField as P3ExtensionField, Field, PackedValue, PrimeCharacteristicRing,
+    TwoAdicField,
+};
 use p3_matrix::{
     dense::{DenseMatrix, RowMajorMatrix},
     Dimensions, Matrix,
@@ -29,7 +33,7 @@ use p3_whir::{
         SecurityAssumption as Plonky3SecurityAssumption, WhirConfig as Plonky3PlainWhirConfig,
     },
     pcs::{
-        proof::{PcsProof, WhirProof},
+        proof::{PcsProof, QueryOpenings, SharedProofOpening, WhirProof},
         prover::WhirProver,
         verifier::WhirVerifier,
         zk::{
@@ -57,6 +61,16 @@ use crate::{
 };
 
 const FULL_ZK_SECURITY_SLACK_BITS: u32 = 2;
+
+/// Returns a clone that shares Plonky3's process-wide KoalaBear twiddle cache.
+///
+/// `Radix2DFTSmallBatch::clone` shares its `Arc<RwLock<...>>`; reconstructing a
+/// default value for every static PCS call would otherwise discard the cache
+/// after each commit, open, or verification phase.
+fn shared_poseidon_dft() -> Radix2DFTSmallBatch<F> {
+    static DFT: OnceLock<Radix2DFTSmallBatch<F>> = OnceLock::new();
+    DFT.get_or_init(Radix2DFTSmallBatch::default).clone()
+}
 
 #[derive(Debug, Clone)]
 pub struct PlainParsedCommitment<Ext, Commitment> {
@@ -95,6 +109,7 @@ pub type PoseidonCommitment = <PoseidonMmcs as Mmcs<F>>::Commitment;
 pub type PoseidonRelationProof<Ext> = ZkWhirRelationProof<F, Ext, PoseidonMmcs>;
 type PoseidonPlainMerkleTree = <PoseidonMmcs as Mmcs<F>>::ProverData<DenseMatrix<F>>;
 type PoseidonPlainWhirProof<Ext> = WhirProof<F, Ext, PoseidonMmcs>;
+type PoseidonMultiProof = <PoseidonMmcs as Mmcs<F>>::MultiProof;
 type PoseidonPlainWhirConfig<Ext> = Plonky3PlainWhirConfig<Ext, F, PoseidonChallenger>;
 pub(crate) type PoseidonHidingPcs<Ext> =
     HidingWhirPcs<Ext, F, Radix2DFTSmallBatch<F>, PoseidonMmcs, PoseidonChallenger, StdRng>;
@@ -117,6 +132,240 @@ type PoseidonSparkReadPcs<Ext> = WhirProver<
 type PoseidonSparkReadProverData<Ext> = WhirProverData<F, Ext, PoseidonMmcs, PrefixProver<F, Ext>>;
 
 use plain_whir_layout::SpartanEqLayout;
+
+pub(crate) fn validate_poseidon_commitment(
+    commitment: &PoseidonCommitment,
+) -> Result<(), SpartanWhirError> {
+    if commitment.num_roots() != 1 {
+        return Err(SpartanWhirError::InvalidCommitmentShape);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_poseidon_plain_proof_commitments<Ext: ExtField>(
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    for round in &proof.rounds {
+        if let Some(commitment) = &round.commitment {
+            validate_poseidon_commitment(commitment)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_poseidon_relation_proof_shape<Ext: ExtField>(
+    config: &ZkWhirConfig<Ext, F, PoseidonChallenger>,
+    proof: &PoseidonRelationProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    let expected_rounds = config.n_rounds();
+    let expected_sumchecks = expected_rounds
+        .checked_add(1)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let expected_mask_groups = expected_rounds
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(3))
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if proof.rounds.len() != expected_rounds
+        || proof.sumchecks.len() != expected_sumchecks
+        || proof.sumcheck_mask_commitments.len() != expected_sumchecks
+        || proof.base_case.fresh_mask_commitments.len() != expected_mask_groups
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    for commitment in &proof.sumcheck_mask_commitments {
+        validate_poseidon_commitment(commitment)?;
+    }
+    for (round_index, (round, params)) in proof
+        .rounds
+        .iter()
+        .zip(&config.round_parameters)
+        .enumerate()
+    {
+        validate_poseidon_commitment(&round.commitment)?;
+        validate_poseidon_commitment(&round.mask_commitment)?;
+        if round.ood_answers.len() != params.ood_samples {
+            return Err(SpartanWhirError::InvalidProofShape);
+        }
+        let folding = config.round_folding_factor(round_index);
+        let width = 1usize
+            .checked_shl(folding as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        let leaf_count = params
+            .domain_size
+            .checked_shr(folding as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_query_opening_shape(
+            &round.openings,
+            round_index == 0,
+            params.num_queries.min(leaf_count),
+            width,
+            leaf_count,
+        )?;
+    }
+    validate_poseidon_commitment(&proof.base_case.fresh_main_commitment)?;
+    for commitment in &proof.base_case.fresh_mask_commitments {
+        validate_poseidon_commitment(commitment)?;
+    }
+    let final_config = config.final_round_config();
+    let final_width = 1usize
+        .checked_shl(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let final_leaf_count = final_config
+        .domain_size
+        .checked_shr(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    validate_query_opening_shape(
+        &proof.base_case.source_openings,
+        expected_rounds == 0,
+        config.final_queries.min(final_leaf_count),
+        final_width,
+        final_leaf_count,
+    )?;
+    Ok(())
+}
+
+fn validate_plain_sumcheck_shape<Ext>(
+    data: &SumcheckData<F, Ext>,
+    expected_rounds: usize,
+    pow_bits: usize,
+) -> Result<(), SpartanWhirError> {
+    let expected_pow_witnesses = if pow_bits == 0 { 0 } else { expected_rounds };
+    if data.polynomial_evaluations.len() != expected_rounds
+        || data.pow_witnesses.len() != expected_pow_witnesses
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    Ok(())
+}
+
+fn validate_shared_opening_shape<T>(
+    opening: &SharedProofOpening<T, PoseidonMultiProof>,
+    expected_rows: usize,
+    expected_width: usize,
+    leaf_count: usize,
+) -> Result<(), SpartanWhirError> {
+    let max_sibling_hashes = expected_rows
+        .checked_mul(log2_ceil_usize(leaf_count))
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if opening.rows.len() != expected_rows
+        || opening.rows.iter().any(|row| row.len() != expected_width)
+        || opening.proof.sibling_hashes.len() > max_sibling_hashes
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    Ok(())
+}
+
+fn validate_query_opening_shape<Ext>(
+    openings: &QueryOpenings<F, Ext, PoseidonMultiProof>,
+    expected_base: bool,
+    expected_rows: usize,
+    expected_width: usize,
+    leaf_count: usize,
+) -> Result<(), SpartanWhirError> {
+    match (openings, expected_base) {
+        (QueryOpenings::Base(opening), true) => {
+            validate_shared_opening_shape(opening, expected_rows, expected_width, leaf_count)
+        }
+        (QueryOpenings::Extension(opening), false) => {
+            validate_shared_opening_shape(opening, expected_rows, expected_width, leaf_count)
+        }
+        _ => Err(SpartanWhirError::InvalidProofShape),
+    }
+}
+
+pub(crate) fn validate_poseidon_plain_proof_shape<Ext: ExtField>(
+    config: &PoseidonPlainWhirConfig<Ext>,
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    if proof.initial_ood_answers.len() != config.commitment_ood_samples
+        || proof.rounds.len() != config.n_rounds()
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    validate_plain_sumcheck_shape(
+        &proof.initial_sumcheck,
+        config.round_folding_factor(0),
+        config.starting_folding_pow_bits,
+    )?;
+
+    for (round_index, (round, params)) in proof
+        .rounds
+        .iter()
+        .zip(&config.round_parameters)
+        .enumerate()
+    {
+        let commitment = round
+            .commitment
+            .as_ref()
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_poseidon_commitment(commitment)?;
+        if round.ood_answers.len() != params.ood_samples {
+            return Err(SpartanWhirError::InvalidProofShape);
+        }
+        validate_plain_sumcheck_shape(
+            &round.sumcheck,
+            config.round_folding_factor(round_index + 1),
+            params.folding_pow_bits,
+        )?;
+        let width = 1usize
+            .checked_shl(params.folding_factor as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        let leaf_count = params
+            .domain_size
+            .checked_shr(params.folding_factor as u32)
+            .ok_or(SpartanWhirError::InvalidProofShape)?;
+        validate_query_opening_shape(
+            &round.openings,
+            round_index == 0,
+            params.num_queries.min(leaf_count),
+            width,
+            leaf_count,
+        )?;
+    }
+
+    let final_config = config.final_round_config();
+    let expected_final_poly_len = 1usize
+        .checked_shl(final_config.num_variables as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    if proof
+        .final_poly
+        .as_ref()
+        .is_none_or(|poly| poly.as_slice().len() != expected_final_poly_len)
+    {
+        return Err(SpartanWhirError::InvalidProofShape);
+    }
+    let final_width = 1usize
+        .checked_shl(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    let final_leaf_count = final_config
+        .domain_size
+        .checked_shr(final_config.folding_factor as u32)
+        .ok_or(SpartanWhirError::InvalidProofShape)?;
+    validate_query_opening_shape(
+        &proof.final_openings,
+        config.n_rounds() == 0,
+        final_config.num_queries.min(final_leaf_count),
+        final_width,
+        final_leaf_count,
+    )?;
+    match (config.final_sumcheck_rounds, &proof.final_sumcheck) {
+        (0, None) => Ok(()),
+        (rounds, Some(data)) if rounds > 0 => {
+            validate_plain_sumcheck_shape(data, rounds, config.final_folding_pow_bits)
+        }
+        _ => Err(SpartanWhirError::InvalidProofShape),
+    }
+}
+
+pub(crate) fn validate_poseidon_plain_proof_shape_from_config<Ext: ExtField>(
+    config: &WhirPcsConfig,
+    proof: &PoseidonPlainWhirProof<Ext>,
+) -> Result<(), SpartanWhirError> {
+    config.validate()?;
+    let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+    validate_poseidon_plain_proof_shape(&pcs.config, proof)
+}
 
 #[derive(Clone)]
 pub struct RcMmcs<Inner>(Inner);
@@ -387,6 +636,8 @@ where
         let _profile = profile_scope("verify_parse_commitment_plain");
         config.validate()?;
         let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(commitment)?;
+        validate_poseidon_plain_proof_commitments(proof)?;
         observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
         challenger.observe(commitment.clone());
         parse_plain_initial_commitment::<Ext>(
@@ -452,31 +703,32 @@ where
     type ReadProverData = PoseidonSparkReadProverData<Ext>;
     type ParsedReadCommitment = PoseidonCommitment;
 
-    fn commit_read_tables(
+    fn commit_read_table(
         config: &WhirPcsConfig,
         coordinate_columns: Evaluations<F>,
         domain_size: usize,
+        column_count: usize,
         challenger: &mut PoseidonChallenger,
     ) -> Result<(Self::Commitment, Self::ReadProverData), SpartanWhirError> {
         let _profile = profile_scope("spark_commit_read_batch");
-        let coordinate_count = Ext::DIMENSION;
         let expected_len = domain_size
-            .checked_mul(2)
-            .and_then(|len| len.checked_mul(coordinate_count))
+            .checked_mul(column_count)
             .ok_or_else(SpartanWhirError::invalid_config)?;
         if domain_size == 0
             || !domain_size.is_power_of_two()
+            || column_count == 0
+            || !column_count.is_power_of_two()
             || coordinate_columns.len() != expected_len
         {
             return Err(SpartanWhirError::InvalidPolynomialLength);
         }
-        validate_spark_read_batch_config::<Ext>(config, domain_size.ilog2() as usize)?;
+        validate_spark_read_batch_config(config, domain_size.ilog2() as usize, column_count)?;
 
-        // Plonky3's table PCS stacks the 2 * DIMENSION base-coordinate columns
-        // into one committed polynomial. One selector bit chooses erow or ecol,
-        // while both tables share the encoding, Merkle tree, and WHIR opening.
-        // The shared read-table commitment follows ProveKit's `commit_e_values`
-        // organization (World Foundation, MIT; https://github.com/worldfnd/provekit).
+        // Plonky3's table PCS stacks this power-of-two coordinate group into one
+        // committed polynomial. The surrounding protocol may place erow and
+        // ecol coordinates in the same group. This follows ProveKit's
+        // `commit_e_values` organization (World Foundation, MIT;
+        // https://github.com/worldfnd/provekit).
         let table = {
             let _profile = profile_scope("spark_read_batch_pack");
             Table::new(RowMajorMatrix::new(coordinate_columns, domain_size))
@@ -496,14 +748,16 @@ where
         Ok((commitment, prover_data))
     }
 
-    fn open_read_tables(
+    fn open_read_table(
         config: &WhirPcsConfig,
         prover_data: Self::ReadProverData,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[crate::MultilinearPoint<Ext>],
         challenger: &mut PoseidonChallenger,
     ) -> Result<(Self::Proof, Vec<Vec<Ext>>), SpartanWhirError> {
         let _profile = profile_scope("spark_open_read_batch");
-        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        let protocol = spark_read_opening_protocol(config, column_count, opening_columns)?;
         if points.len() != protocol.num_openings() {
             return Err(SpartanWhirError::invalid_config());
         }
@@ -539,29 +793,36 @@ where
     fn verify_parse_read_commitment(
         config: &WhirPcsConfig,
         commitment: &Self::Commitment,
-        _proof: &Self::Proof,
+        proof: &Self::Proof,
         challenger: &mut PoseidonChallenger,
     ) -> Result<Self::ParsedReadCommitment, SpartanWhirError> {
         let _profile = profile_scope("spark_parse_read_batch");
         let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(commitment)?;
+        validate_poseidon_plain_proof_commitments(proof)?;
         observe_poseidon_plain_domain_separator::<Ext>(&pcs, challenger);
         challenger.observe(commitment.clone());
         Ok(commitment.clone())
     }
 
-    fn verify_finalize_read_tables(
+    fn verify_finalize_read_table(
         config: &WhirPcsConfig,
         parsed: &Self::ParsedReadCommitment,
         proof: &Self::Proof,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[crate::MultilinearPoint<Ext>],
         evals: &[Vec<Ext>],
         challenger: &mut PoseidonChallenger,
     ) -> Result<(), SpartanWhirError> {
         let _profile = profile_scope("spark_verify_read_batch");
-        let protocol = spark_read_opening_protocol::<Ext>(config)?;
+        let protocol = spark_read_opening_protocol(config, column_count, opening_columns)?;
         if points.len() != protocol.num_openings()
             || evals.len() != protocol.num_openings()
-            || evals.iter().any(|batch| batch.len() != Ext::DIMENSION)
+            || evals
+                .iter()
+                .zip(opening_columns)
+                .any(|(batch, columns)| batch.len() != columns.len())
         {
             return Err(SpartanWhirError::invalid_config());
         }
@@ -569,6 +830,9 @@ where
             .iter()
             .map(|point| Point::new(point.0.clone()))
             .collect::<Vec<_>>();
+        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
+        validate_poseidon_commitment(parsed)?;
+        validate_poseidon_plain_proof_shape(&pcs.config, proof)?;
         let proof = PcsProof {
             whir: proof.clone(),
             evals: evals
@@ -577,7 +841,6 @@ where
                 .map(|batch| OpeningBatch::new(batch, Vec::new()))
                 .collect(),
         };
-        let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
         <PoseidonSparkReadPcs<Ext> as PrescribedPointPcs<Ext, PoseidonChallenger>>::verify_at(
             &pcs, parsed, &proof, &protocol, &points, challenger,
         )
@@ -586,47 +849,42 @@ where
     }
 }
 
-fn spark_read_opening_protocol<Ext>(
+fn spark_read_opening_protocol(
     config: &WhirPcsConfig,
-) -> Result<OpeningProtocol, SpartanWhirError>
-where
-    Ext: ExtField,
-{
-    let column_count = Ext::DIMENSION
-        .checked_mul(2)
-        .ok_or_else(SpartanWhirError::invalid_config)?;
-    if !column_count.is_power_of_two() {
+    column_count: usize,
+    opening_columns: &[Vec<usize>],
+) -> Result<OpeningProtocol, SpartanWhirError> {
+    if column_count == 0
+        || !column_count.is_power_of_two()
+        || opening_columns.is_empty()
+        || opening_columns.iter().any(|columns| {
+            columns.is_empty() || columns.iter().any(|&column| column >= column_count)
+        })
+    {
         return Err(SpartanWhirError::invalid_config());
     }
     let local_num_variables = config
         .num_variables
         .checked_sub(log2_strict_usize(column_count))
         .ok_or_else(SpartanWhirError::invalid_config)?;
-    let erow = (0..Ext::DIMENSION).collect::<Vec<_>>();
-    let ecol = (Ext::DIMENSION..column_count).collect::<Vec<_>>();
     Ok(OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(local_num_variables, column_count),
-        vec![
-            OpeningBatch::new(erow.clone(), Vec::new()),
-            OpeningBatch::new(erow.clone(), Vec::new()),
-            OpeningBatch::new(erow, Vec::new()),
-            OpeningBatch::new(ecol.clone(), Vec::new()),
-            OpeningBatch::new(ecol.clone(), Vec::new()),
-            OpeningBatch::new(ecol, Vec::new()),
-        ],
+        opening_columns
+            .iter()
+            .cloned()
+            .map(|columns| OpeningBatch::new(columns, Vec::new()))
+            .collect(),
     )]))
 }
 
-fn validate_spark_read_batch_config<Ext>(
+fn validate_spark_read_batch_config(
     config: &WhirPcsConfig,
     local_num_variables: usize,
-) -> Result<(), SpartanWhirError>
-where
-    Ext: ExtField,
-{
-    let column_count = Ext::DIMENSION
-        .checked_mul(2)
-        .ok_or_else(SpartanWhirError::invalid_config)?;
+    column_count: usize,
+) -> Result<(), SpartanWhirError> {
+    if column_count == 0 || !column_count.is_power_of_two() {
+        return Err(SpartanWhirError::invalid_config());
+    }
     let expected = local_num_variables
         .checked_add(log2_strict_usize(column_count))
         .ok_or_else(SpartanWhirError::invalid_config)?;
@@ -645,6 +903,24 @@ mod plain_whir_layout {
         pub(super) claims: Vec<(Point<Ext>, Ext)>,
         pub(super) folding: usize,
         pub(super) num_variables: usize,
+    }
+
+    pub(super) struct PreparedSpartanEqSumcheck<Ext: ExtField> {
+        polynomial: Poly<F>,
+        claims: Vec<SvoClaim<Ext>>,
+        accumulators: Vec<SvoAccumulators<Ext>>,
+        claimed_sum: Ext,
+        folding: usize,
+        num_variables: usize,
+        randomness: Vec<Ext>,
+        pending_coefficients: Option<[Ext; 2]>,
+    }
+
+    pub(super) struct SpartanEqResidual<Ext: ExtField> {
+        evals: Poly<Ext::ExtensionPacking>,
+        weights: Poly<Ext::ExtensionPacking>,
+        claimed_sum: Ext,
+        folding_randomness: Point<Ext>,
     }
 
     impl<Ext> SpartanEqLayout<Ext>
@@ -670,6 +946,20 @@ mod plain_whir_layout {
         {
             let _profile = profile_scope("initial_sumcheck_svo");
             let alpha: Ext = challenger.sample_algebra_element();
+            let mut prepared = self.prepare_svo_sumcheck(alpha);
+            while prepared.remaining_rounds() != 0 {
+                let [c0, c_inf] = prepared.round_coefficients();
+                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+                prepared.bind_round(r);
+            }
+            prepared.into_residual().into_sumcheck()
+        }
+
+        pub(super) fn prepare_svo_sumcheck(self, alpha: Ext) -> PreparedSpartanEqSumcheck<Ext> {
+            assert!(
+                self.uses_svo(),
+                "prepared Spartan equality sumcheck requires SVO"
+            );
             let claims = self
                 .claims
                 .into_iter()
@@ -686,8 +976,7 @@ mod plain_whir_layout {
                     }
                 })
                 .collect::<Vec<_>>();
-
-            let mut claimed_sum = claims
+            let claimed_sum = claims
                 .iter()
                 .map(|claim| claim.coeff * claim.eval)
                 .sum::<Ext>();
@@ -695,58 +984,19 @@ mod plain_whir_layout {
                 let _profile = profile_scope("svo_accumulators");
                 claims
                     .iter()
-                    .map(|claim| calculate_svo_accumulators(claim))
+                    .map(calculate_svo_accumulators)
                     .collect::<Vec<_>>()
             };
-
-            let mut rs = Vec::with_capacity(self.folding);
-            for round_idx in 0..self.folding {
-                let weights = lagrange_weights_01inf_multi(&rs);
-                let (c0, c_inf) = accumulators.iter().fold(
-                    (Ext::ZERO, Ext::ZERO),
-                    |(c0, c_inf), claim_accumulators| {
-                        let round = &claim_accumulators[round_idx];
-                        (
-                            c0 + dot_product::<Ext, _, _>(
-                                round[0].iter().copied(),
-                                weights.iter().copied(),
-                            ),
-                            c_inf
-                                + dot_product::<Ext, _, _>(
-                                    round[1].iter().copied(),
-                                    weights.iter().copied(),
-                                ),
-                        )
-                    },
-                );
-                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
-                claimed_sum = extrapolate_01inf(c0, claimed_sum - c0, c_inf, r);
-                rs.push(r);
+            PreparedSpartanEqSumcheck {
+                polynomial: self.polynomial,
+                claims,
+                accumulators,
+                claimed_sum,
+                folding: self.folding,
+                num_variables: self.num_variables,
+                randomness: Vec::with_capacity(self.folding),
+                pending_coefficients: None,
             }
-
-            let rs = Point::new(rs);
-            let (compressed_evals, residual_weights) = {
-                let _profile = profile_scope("svo_residual_pack");
-                let compressed_evals = self.polynomial.compress_prefix_to_packed(&rs, Ext::ONE);
-                let residual_variables = self.num_variables - self.folding;
-                let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
-                let mut residual_weights =
-                    Ext::ExtensionPacking::zero_vec(1 << (residual_variables - packing_log));
-                for claim in &claims {
-                    claim
-                        .point
-                        .accumulate_into_packed(&mut residual_weights, &rs, claim.coeff);
-                }
-                (compressed_evals, Poly::new(residual_weights))
-            };
-
-            let product = ProductPolynomial::new_packed(
-                VariableOrder::Prefix,
-                compressed_evals,
-                residual_weights,
-            );
-            let prover = SumcheckProver::new(product, claimed_sum);
-            (prover, rs)
         }
 
         fn into_sumcheck_packed_extension<Ch>(
@@ -814,6 +1064,103 @@ mod plain_whir_layout {
     }
 
     type SvoAccumulators<Ext> = Vec<[Vec<Ext>; 2]>;
+
+    impl<Ext> PreparedSpartanEqSumcheck<Ext>
+    where
+        Ext: ExtField,
+    {
+        pub(super) fn remaining_rounds(&self) -> usize {
+            self.folding - self.randomness.len()
+        }
+
+        pub(super) fn round_coefficients(&mut self) -> [Ext; 2] {
+            assert!(self.remaining_rounds() != 0);
+            if let Some(coefficients) = self.pending_coefficients {
+                return coefficients;
+            }
+            let round_idx = self.randomness.len();
+            let weights = lagrange_weights_01inf_multi(&self.randomness);
+            let coefficients = self.accumulators.iter().fold(
+                [Ext::ZERO, Ext::ZERO],
+                |[c0, c_inf], claim_accumulators| {
+                    let round = &claim_accumulators[round_idx];
+                    [
+                        c0 + dot_product::<Ext, _, _>(
+                            round[0].iter().copied(),
+                            weights.iter().copied(),
+                        ),
+                        c_inf
+                            + dot_product::<Ext, _, _>(
+                                round[1].iter().copied(),
+                                weights.iter().copied(),
+                            ),
+                    ]
+                },
+            );
+            self.pending_coefficients = Some(coefficients);
+            coefficients
+        }
+
+        pub(super) fn bind_round(&mut self, challenge: Ext) {
+            let [c0, c_inf] = self
+                .pending_coefficients
+                .take()
+                .expect("round_coefficients must precede bind_round");
+            self.claimed_sum = extrapolate_01inf(c0, self.claimed_sum - c0, c_inf, challenge);
+            self.randomness.push(challenge);
+        }
+
+        pub(super) fn into_residual(self) -> SpartanEqResidual<Ext> {
+            assert_eq!(self.remaining_rounds(), 0);
+            assert!(self.pending_coefficients.is_none());
+            let folding_randomness = Point::new(self.randomness);
+            let evals = self
+                .polynomial
+                .compress_prefix_to_packed(&folding_randomness, Ext::ONE);
+            let residual_variables = self.num_variables - self.folding;
+            let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            let mut residual_weights =
+                Ext::ExtensionPacking::zero_vec(1 << (residual_variables - packing_log));
+            for claim in &self.claims {
+                claim.point.accumulate_into_packed(
+                    &mut residual_weights,
+                    &folding_randomness,
+                    claim.coeff,
+                );
+            }
+            let weights = Poly::new(residual_weights);
+            let product = ProductPolynomial::<F, Ext>::new_packed(
+                VariableOrder::Prefix,
+                evals.clone(),
+                weights.clone(),
+            );
+            debug_assert_eq!(product.dot_product(), self.claimed_sum);
+            SpartanEqResidual {
+                evals,
+                weights,
+                claimed_sum: self.claimed_sum,
+                folding_randomness,
+            }
+        }
+    }
+
+    impl<Ext> SpartanEqResidual<Ext>
+    where
+        Ext: ExtField,
+    {
+        pub(super) fn into_sumcheck(self) -> (SumcheckProver<F, Ext>, Point<Ext>) {
+            let product = ProductPolynomial::<F, Ext>::new_packed(
+                VariableOrder::Prefix,
+                self.evals,
+                self.weights,
+            );
+            debug_assert_eq!(product.dot_product(), self.claimed_sum);
+            (
+                SumcheckProver::new(product, self.claimed_sum),
+                self.folding_randomness,
+            )
+        }
+    }
 
     // Plonky3's accumulator builder is crate-private. This local helper mirrors the
     // prefix case only, which is the layout Spartan uses for caller-supplied claims.
@@ -1224,6 +1571,101 @@ where
     })
 }
 
+/// Derive the terminal query count and proof-of-work difficulty for a hiding
+/// WHIR source code, including its random coefficients in the code dimension.
+///
+/// This is public so the schedule-search binary uses the same derivation as the
+/// prover and verifier configuration. It is not part of the deployment API.
+#[doc(hidden)]
+pub fn hiding_terminal_budget<Base, Ext, Challenger>(
+    config: &Plonky3PlainWhirConfig<Ext, Base, Challenger>,
+) -> (usize, usize)
+where
+    Base: TwoAdicField,
+    Ext: P3ExtensionField<Base> + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let final_config = config.final_round_config();
+    let message_len = 1usize << final_config.num_variables;
+    let domain_size = final_config.domain_size >> final_config.folding_factor;
+    let protocol_security_level = config
+        .params
+        .security_level
+        .saturating_sub(config.params.pow_bits);
+    terminal_source_budget(
+        config.params.soundness_type,
+        config.params.security_level,
+        protocol_security_level,
+        message_len,
+        domain_size,
+        config.final_queries,
+    )
+}
+
+fn terminal_source_budget(
+    soundness: Plonky3SecurityAssumption,
+    security_level: usize,
+    protocol_security_level: usize,
+    message_len: usize,
+    domain_size: usize,
+    mut queries: usize,
+) -> (usize, usize) {
+    loop {
+        let dyadic_dimension = (message_len + queries).next_power_of_two();
+        if dyadic_dimension >= domain_size {
+            // Returning the domain size makes the application-side slack
+            // check reject a terminal source code with no positive rate.
+            return (domain_size, 0);
+        }
+        let log_inv_rate = domain_size.ilog2() as usize - dyadic_dimension.ilog2() as usize;
+        let next_queries = soundness.queries(protocol_security_level, log_inv_rate);
+        if next_queries <= queries {
+            let pow_bits =
+                0_f64.max(security_level as f64 - soundness.queries_error(log_inv_rate, queries));
+            return (queries, pow_bits.ceil() as usize);
+        }
+        queries = next_queries;
+    }
+}
+
+fn apply_hiding_terminal_budget<Base, Ext, Challenger>(
+    config: &mut ZkWhirConfig<Ext, Base, Challenger>,
+) -> Result<(), SpartanWhirError>
+where
+    Base: TwoAdicField,
+    Ext: P3ExtensionField<Base> + TwoAdicField,
+    Challenger: FieldChallenger<Base> + GrindingChallenger<Witness = Base>,
+{
+    let (queries, pow_bits) = hiding_terminal_budget(&config.inner);
+    let final_round = config.inner.n_rounds();
+    let final_config = config.inner.final_round_config();
+    let message_rows = 1usize << final_config.num_variables;
+    let domain_size = final_config.domain_size >> final_config.folding_factor;
+    let slack = domain_size
+        .checked_sub(message_rows)
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    if queries > slack {
+        return Err(SpartanWhirError::invalid_config_reason(
+            InvalidConfigReason::ZkWhirRandomnessExceedsSlack {
+                round: final_round,
+                randomness: queries,
+                slack,
+            },
+        ));
+    }
+
+    config.inner.final_queries = queries;
+    config.inner.final_pow_bits = pow_bits;
+    *config
+        .oracle_randomness
+        .get_mut(final_round)
+        .ok_or_else(SpartanWhirError::invalid_config)? = queries;
+    if !config.inner.check_pow_bits() {
+        return Err(SpartanWhirError::invalid_config());
+    }
+    Ok(())
+}
+
 pub(crate) fn build_poseidon_hiding_pcs<Ext>(
     config: &ZkWhirPcsConfig,
     relation_security_level: u32,
@@ -1249,7 +1691,7 @@ where
         security_level: relation_security_level as usize,
         pow_bits: base.whir.pow_bits as usize,
     };
-    let whir_config = ZkWhirConfig::<Ext, F, PoseidonChallenger>::new(
+    let mut whir_config = ZkWhirConfig::<Ext, F, PoseidonChallenger>::new(
         base.num_variables,
         protocol_params,
         ZkParameters {
@@ -1258,6 +1700,7 @@ where
         },
     )
     .map_err(map_zk_config_error)?;
+    apply_hiding_terminal_budget(&mut whir_config)?;
     let mmcs = RcMmcs(InnerPoseidonMmcs::new(
         poseidon_merkle_hash(),
         poseidon_merkle_compress(),
@@ -1265,7 +1708,7 @@ where
     ));
     Ok(HidingWhirPcs::new(
         whir_config,
-        Radix2DFTSmallBatch::<F>::default(),
+        shared_poseidon_dft(),
         mmcs,
         rand::make_rng(),
     ))
@@ -1330,7 +1773,7 @@ where
         poseidon_merkle_compress(),
         0,
     ));
-    Ok((whir_config, Radix2DFTSmallBatch::<F>::default(), mmcs))
+    Ok((whir_config, shared_poseidon_dft(), mmcs))
 }
 
 pub(crate) fn observe_poseidon_relation_domain_separator<Ext>(
@@ -1556,6 +1999,104 @@ const fn map_soundness_assumption(soundness: SoundnessAssumption) -> Plonky3Secu
         SoundnessAssumption::UniqueDecoding => Plonky3SecurityAssumption::UniqueDecoding,
         SoundnessAssumption::JohnsonBound => Plonky3SecurityAssumption::JohnsonBound,
         SoundnessAssumption::CapacityBound => Plonky3SecurityAssumption::CapacityBound,
+    }
+}
+
+#[cfg(test)]
+mod hiding_terminal_budget_tests {
+    use super::*;
+    use crate::{
+        recommended_quintic_spark_zk_whir_params, recommended_quintic_zk_whir_params,
+        QuinticExtension, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
+    };
+
+    fn protocol_parameters(whir: &WhirParams, security_level: usize) -> ProtocolParameters {
+        ProtocolParameters {
+            starting_log_inv_rate: whir.starting_log_inv_rate,
+            round_log_inv_rates: poseidon_round_log_inv_rates(
+                20,
+                &whir.effective_folding_schedule(),
+                whir.starting_log_inv_rate,
+                whir.rs_domain_initial_reduction_factor,
+                &whir.round_log_inv_rates,
+            )
+            .expect("selected round rates are valid"),
+            folding_factor: map_poseidon_folding_schedule(&whir.effective_folding_schedule()),
+            soundness_type: Plonky3SecurityAssumption::JohnsonBound,
+            security_level,
+            pow_bits: whir.pow_bits as usize,
+        }
+    }
+
+    fn assert_hiding_terminal_budget(
+        whir: WhirParams,
+        security_level: usize,
+        nominal: (usize, usize),
+        corrected: (usize, usize),
+    ) {
+        let protocol_params = protocol_parameters(&whir, security_level);
+        let plain = Plonky3PlainWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            20,
+            protocol_params.clone(),
+        )
+        .expect("selected plain WHIR config is valid");
+        assert_eq!((plain.final_queries, plain.final_pow_bits), nominal);
+        assert_eq!(hiding_terminal_budget(&plain), corrected);
+
+        let mut hiding = ZkWhirConfig::<QuinticExtension, F, PoseidonChallenger>::new(
+            20,
+            protocol_params,
+            ZkParameters {
+                ell_zk: DEFAULT_ZK_ELL,
+                mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
+            },
+        )
+        .expect("selected hiding WHIR config is valid");
+        apply_hiding_terminal_budget(&mut hiding)
+            .expect("terminal budget fits the selected config");
+
+        let final_round = hiding.inner.n_rounds();
+        assert_eq!(
+            (hiding.inner.final_queries, hiding.inner.final_pow_bits),
+            corrected
+        );
+        assert_eq!(hiding.oracle_randomness[final_round], corrected.0);
+        assert!(hiding.inner.check_pow_bits());
+    }
+
+    #[test]
+    fn direct_full_zk_uses_occupied_terminal_source_budget() {
+        assert_hiding_terminal_budget(
+            recommended_quintic_zk_whir_params(20),
+            120,
+            (61, 3),
+            (125, 4),
+        );
+    }
+
+    #[test]
+    fn spark_full_zk_uses_occupied_terminal_source_budget() {
+        assert_hiding_terminal_budget(
+            recommended_quintic_spark_zk_whir_params(20),
+            122,
+            (60, 7),
+            (124, 7),
+        );
+    }
+
+    #[test]
+    fn terminal_source_budget_rejects_a_rate_one_code() {
+        assert_eq!(
+            terminal_source_budget(
+                Plonky3SecurityAssumption::JohnsonBound,
+                120,
+                116,
+                64,
+                128,
+                61,
+            ),
+            (128, 0)
+        );
     }
 }
 

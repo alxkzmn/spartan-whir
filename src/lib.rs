@@ -34,6 +34,7 @@ pub use circom::{
 pub use config::SpartanWhirEngine;
 pub use domain_separator::{
     DomainSeparator, MatrixClosingMode, FULL_ZK_PROTOCOL_ID, NO_ZK_PROTOCOL_ID,
+    SPARK_MATRIX_CLOSING_VERSION,
 };
 pub use engine::{
     keccak_challenger, poseidon_challenger, poseidon_merkle_compress, poseidon_merkle_hash,
@@ -80,10 +81,10 @@ pub use profiling::{
     ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
-    PoseidonZkSpartanProtocol, ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof,
-    SparkPcsConfigs, SparkReadOpeningProof, SparkSpartanProof, SparkWhirParams, SpartanProof,
-    SpartanProofKind, SpartanProtocol, SpartanSnarkConfig, VerifyingKey, ZkMatrixClosingProof,
-    ZkSparkClosingProof, ZkSpartanProof,
+    read_table_group_column_counts, PoseidonZkSpartanProtocol, ProvingKey, SparkFixedCommitments,
+    SparkFixedOpeningProof, SparkPcsConfigs, SparkReadGroupOpeningProof, SparkReadOpeningProof,
+    SparkSpartanProof, SparkWhirParams, SpartanProof, SpartanProofKind, SpartanProtocol,
+    SpartanSnarkConfig, VerifyingKey, ZkMatrixClosingProof, ZkSparkClosingProof, ZkSpartanProof,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MAX_SECURITY_BITS, MIN_SECURITY_BITS};
@@ -97,8 +98,8 @@ pub use spark::{
     prove_spark_batched_product, prove_spark_grand_product, prove_spark_grand_product_terms,
     prove_spark_memory_grand_products, prove_spark_memory_grand_products_with_leaf_claims,
     prove_spark_memory_products, prove_spark_value_sumcheck, prove_spark_value_sumcheck_with_reads,
-    spark_selector_from_high_bits, spark_selector_from_joint_point, spark_selector_from_slot,
-    verify_spark_batched_memory_leaf_claims_with_openings,
+    spark_fixed_audit_is_embedded, spark_selector_from_high_bits, spark_selector_from_joint_point,
+    spark_selector_from_slot, verify_spark_batched_memory_leaf_claims_with_openings,
     verify_spark_batched_memory_product_claims,
     verify_spark_batched_memory_product_claims_with_metadata,
     verify_spark_batched_memory_products_with_tables, verify_spark_batched_product,
@@ -126,9 +127,11 @@ pub use sumcheck::{
     ZkOuterSumcheckProof,
 };
 pub use whir_params::{
-    recommended_octic_schedule, recommended_octic_spark_fixed_whir_params,
-    recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
-    recommended_octic_zk_whir_params, recommended_quintic_whir_params,
-    recommended_quintic_zk_whir_params, WhirFoldingSchedule, WhirParams,
-    FINAL_SUMCHECK_MAX_VARIABLES,
+    format_whir_params_label, parse_whir_params_label, recommended_octic_schedule,
+    recommended_octic_spark_fixed_whir_params, recommended_octic_spark_read_whir_params,
+    recommended_octic_whir_params, recommended_octic_zk_whir_params,
+    recommended_quintic_spark_fixed_whir_params, recommended_quintic_spark_read_whir_params,
+    recommended_quintic_spark_whir_params, recommended_quintic_spark_zk_whir_params,
+    recommended_quintic_whir_params, recommended_quintic_zk_whir_params, WhirFoldingSchedule,
+    WhirParams, WhirParamsLabelError, FINAL_SUMCHECK_MAX_VARIABLES,
 };

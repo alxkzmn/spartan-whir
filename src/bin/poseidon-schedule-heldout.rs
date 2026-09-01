@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    io::{self, Read},
     path::{Path, PathBuf},
     process,
     time::Instant,
@@ -9,8 +10,9 @@ use libloading::Library;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::TwoAdicField;
 use rand::distr::{Distribution, StandardUniform};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use spartan_whir::{
     engine::{ExtField, F},
     import_paths, import_r1cs_path, setup_poseidon_zk, validate_satisfaction,
@@ -73,6 +75,7 @@ enum ProofMode {
 struct HeldoutDump {
     schema_version: u32,
     provenance: BenchmarkProvenance,
+    workload_identity: WorkloadIdentity,
     measurement_kind: &'static str,
     units: &'static str,
     source_report: String,
@@ -84,11 +87,44 @@ struct HeldoutDump {
     linked_run_name: Option<String>,
     repeats: usize,
     warmups: usize,
-    row_source: &'static str,
+    #[serde(flatten)]
+    selection: RowSelectionMetadata,
     proof_mode: &'static str,
     interleaved_repeats: bool,
     randomize_linked_input_bits: bool,
     rows: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadIdentity {
+    label: String,
+    r1cs_sha256: String,
+    constraint_work: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RowSelectionMetadata {
+    row_source_requested: &'static str,
+    row_source_resolved: &'static str,
+    max_rows: usize,
+    include_strata: bool,
+    extension: Option<String>,
+    explicit_labels: Option<Vec<String>>,
+    reference_labels: Vec<String>,
+    required_labels: Vec<String>,
+    selected_row_count: usize,
+}
+
+#[derive(Debug)]
+struct SelectedRows {
+    rows: Vec<Value>,
+    metadata: RowSelectionMetadata,
+}
+
+struct MeasuredRows {
+    rows: Vec<Value>,
+    interleaved_repeats: bool,
 }
 
 fn main() {
@@ -108,17 +144,24 @@ fn run_main() -> Result<(), String> {
     let report = read_json(&args.report)?;
     let provenance = collect_provenance(enabled_features())?;
     require_matching_code_provenance(&report, &provenance)?;
-    let rows = select_rows(&report, &args)?;
+    let workload_identity = report_workload_identity(&report)?;
+    let SelectedRows {
+        rows,
+        metadata: selection,
+    } = select_rows(&report, &args)?;
     if rows.is_empty() {
         return Err("no heldout rows selected".to_owned());
     }
+    require_selected_row_workload_identities(&rows, &workload_identity)?;
 
     let (shape, input_source) = load_input_source(&args)?;
+    require_workload_matches_inputs(&workload_identity, &args, &shape)?;
     let measured = measure_rows(&shape, &input_source, rows, &args)?;
 
     let dump = HeldoutDump {
-        schema_version: 2,
+        schema_version: 4,
         provenance,
+        workload_identity,
         measurement_kind: "poseidon_schedule_full_proof_heldout",
         units: "seconds",
         source_report: args.report.display().to_string(),
@@ -130,11 +173,11 @@ fn run_main() -> Result<(), String> {
         linked_run_name: args.linked_run_name.clone(),
         repeats: args.repeats,
         warmups: args.warmups,
-        row_source: args.row_source.name(),
+        selection,
         proof_mode: args.proof_mode.name(),
-        interleaved_repeats: true,
+        interleaved_repeats: measured.interleaved_repeats,
         randomize_linked_input_bits: args.randomize_linked_input_bits,
-        rows: measured,
+        rows: measured.rows,
     };
     if let Some(parent) = args
         .out
@@ -447,12 +490,69 @@ where
     vk: PoseidonVerifyingKey<Ext>,
 }
 
+enum PreparedNoZkRowAny {
+    Quartic(PreparedNoZkRow<QuarticBinExtension>),
+    Quintic(PreparedNoZkRow<QuinticExtension>),
+    Octic(PreparedNoZkRow<OcticBinExtension>),
+}
+
+impl PreparedNoZkRowAny {
+    fn original_index(&self) -> usize {
+        match self {
+            Self::Quartic(row) => row.original_index,
+            Self::Quintic(row) => row.original_index,
+            Self::Octic(row) => row.original_index,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::Quartic(row) => &row.label,
+            Self::Quintic(row) => &row.label,
+            Self::Octic(row) => &row.label,
+        }
+    }
+
+    fn into_row(self) -> Value {
+        match self {
+            Self::Quartic(row) => row.row,
+            Self::Quintic(row) => row.row,
+            Self::Octic(row) => row.row,
+        }
+    }
+
+    fn prove_once(
+        &self,
+        witness: &R1csWitness<F>,
+        public_inputs: &[F],
+        phase: &'static str,
+    ) -> Result<(), String> {
+        match self {
+            Self::Quartic(row) => prove_no_zk_once(row, witness, public_inputs, phase),
+            Self::Quintic(row) => prove_no_zk_once(row, witness, public_inputs, phase),
+            Self::Octic(row) => prove_no_zk_once(row, witness, public_inputs, phase),
+        }
+    }
+
+    fn prove_timed(
+        &self,
+        witness: &R1csWitness<F>,
+        public_inputs: &[F],
+    ) -> Result<(f64, usize), String> {
+        match self {
+            Self::Quartic(row) => prove_no_zk_timed(row, witness, public_inputs),
+            Self::Quintic(row) => prove_no_zk_timed(row, witness, public_inputs),
+            Self::Octic(row) => prove_no_zk_timed(row, witness, public_inputs),
+        }
+    }
+}
+
 fn measure_rows(
     shape: &R1csShape<F>,
     input_source: &InputSource,
     rows: Vec<Value>,
     args: &Args,
-) -> Result<Vec<Value>, String> {
+) -> Result<MeasuredRows, String> {
     let mut measured = vec![Value::Null; rows.len()];
     let mut quartic = Vec::new();
     let mut quintic = Vec::new();
@@ -495,46 +595,27 @@ fn measure_rows(
             other => return Err(format!("unsupported extension {other}")),
         }
     }
-    match args.proof_mode {
-        ProofMode::FullZk => {
-            measure_full_zk_rows_interleaved(
-                shape,
-                input_source,
-                quartic,
-                quintic,
-                octic,
-                args,
-                &mut measured,
-            )?;
-        }
-        ProofMode::NoZk => {
-            measure_no_zk_extension_rows::<QuarticBinExtension>(
-                shape,
-                input_source,
-                quartic,
-                args,
-                &mut measured,
-            )?;
-            measure_no_zk_extension_rows::<QuinticExtension>(
-                shape,
-                input_source,
-                quintic,
-                args,
-                &mut measured,
-            )?;
-            measure_no_zk_extension_rows::<OcticBinExtension>(
-                shape,
-                input_source,
-                octic,
-                args,
-                &mut measured,
-            )?;
-        }
-    }
-    if args.proof_mode == ProofMode::FullZk {
-        annotate_paired_comparisons(&mut measured)?;
-    }
-    measured
+    let interleaved_repeats = match args.proof_mode {
+        ProofMode::FullZk => measure_full_zk_rows_interleaved(
+            shape,
+            input_source,
+            quartic,
+            quintic,
+            octic,
+            args,
+            &mut measured,
+        )?,
+        ProofMode::NoZk => measure_no_zk_rows_interleaved(
+            shape,
+            input_source,
+            quartic,
+            quintic,
+            octic,
+            args,
+            &mut measured,
+        )?,
+    };
+    let mut rows = measured
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
@@ -544,16 +625,84 @@ fn measure_rows(
                 Ok(row)
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if interleaved_repeats {
+        annotate_paired_comparisons(&mut rows)?;
+    }
+    Ok(MeasuredRows {
+        rows,
+        interleaved_repeats,
+    })
 }
 
-fn measure_no_zk_extension_rows<Ext>(
+fn measure_no_zk_rows_interleaved(
     shape: &R1csShape<F>,
     input_source: &InputSource,
-    rows: Vec<RowToMeasure>,
+    quartic: Vec<RowToMeasure>,
+    quintic: Vec<RowToMeasure>,
+    octic: Vec<RowToMeasure>,
     args: &Args,
     measured: &mut [Value],
-) -> Result<(), String>
+) -> Result<bool, String> {
+    if quartic.is_empty() && quintic.is_empty() && octic.is_empty() {
+        return Ok(false);
+    }
+    let mut prepared = Vec::with_capacity(quartic.len() + quintic.len() + octic.len());
+    prepared.extend(
+        prepare_no_zk_extension_rows::<QuarticBinExtension>(shape, quartic)?
+            .into_iter()
+            .map(PreparedNoZkRowAny::Quartic),
+    );
+    prepared.extend(
+        prepare_no_zk_extension_rows::<QuinticExtension>(shape, quintic)?
+            .into_iter()
+            .map(PreparedNoZkRowAny::Quintic),
+    );
+    prepared.extend(
+        prepare_no_zk_extension_rows::<OcticBinExtension>(shape, octic)?
+            .into_iter()
+            .map(PreparedNoZkRowAny::Octic),
+    );
+
+    for (warmup, order) in round_robin_orders(prepared.len(), args.warmups, 0xa51c_0000)
+        .into_iter()
+        .enumerate()
+    {
+        let (witness, public_inputs) = input_source.sample(shape, usize::MAX - warmup)?;
+        for index in order {
+            prepared[index].prove_once(&witness, &public_inputs, "warmup")?;
+        }
+    }
+
+    let repeat_orders = round_robin_orders(prepared.len(), args.repeats, 0);
+    let interleaved_repeats =
+        orders_cover_each_row_once(&repeat_orders, prepared.len(), args.repeats);
+    let mut samples = vec![Vec::with_capacity(args.repeats); prepared.len()];
+    let mut proof_sizes = vec![Vec::with_capacity(args.repeats); prepared.len()];
+    for (repeat, order) in repeat_orders.into_iter().enumerate() {
+        let (witness, public_inputs) = input_source.sample(shape, repeat)?;
+        for index in order {
+            let (elapsed, proof_size) = prepared[index].prove_timed(&witness, &public_inputs)?;
+            samples[index].push(elapsed);
+            proof_sizes[index].push(proof_size);
+        }
+    }
+
+    for (prepared_index, prepared_row) in prepared.into_iter().enumerate() {
+        let original_index = prepared_row.original_index();
+        let label = prepared_row.label().to_owned();
+        let row = prepared_row.into_row();
+        let measurement = summarize_samples(&samples[prepared_index], &proof_sizes[prepared_index]);
+        measured[original_index] =
+            measured_row(shape, row, &label, measurement, args, interleaved_repeats)?;
+    }
+    Ok(interleaved_repeats)
+}
+
+fn prepare_no_zk_extension_rows<Ext>(
+    shape: &R1csShape<F>,
+    rows: Vec<RowToMeasure>,
+) -> Result<Vec<PreparedNoZkRow<Ext>>, String>
 where
     Ext: ExtField + TwoAdicField,
     PoseidonChallenger: CanObserve<<Plonky3WhirPcs as MlePcs<PoseidonEngine<Ext>>>::Commitment>
@@ -561,9 +710,6 @@ where
         + FieldChallenger<F>
         + GrindingChallenger<Witness = F>,
 {
-    if rows.is_empty() {
-        return Ok(());
-    }
     let mut prepared = Vec::with_capacity(rows.len());
     for row in rows {
         let RowSetupConfig::NoZk(setup_config) = row.setup_config else {
@@ -579,37 +725,7 @@ where
             vk,
         });
     }
-
-    for warmup in 0..args.warmups {
-        let (witness, public_inputs) = input_source.sample(shape, usize::MAX - warmup)?;
-        for index in shuffled_order(prepared.len(), warmup as u64 ^ 0xa51c_0000) {
-            prove_no_zk_once(&prepared[index], &witness, &public_inputs, "warmup")?;
-        }
-    }
-
-    let mut samples = vec![Vec::with_capacity(args.repeats); prepared.len()];
-    let mut proof_sizes = vec![Vec::with_capacity(args.repeats); prepared.len()];
-    for repeat in 0..args.repeats {
-        let (witness, public_inputs) = input_source.sample(shape, repeat)?;
-        for index in shuffled_order(prepared.len(), repeat as u64) {
-            let (elapsed, proof_size) =
-                prove_no_zk_timed(&prepared[index], &witness, &public_inputs)?;
-            samples[index].push(elapsed);
-            proof_sizes[index].push(proof_size);
-        }
-    }
-
-    for (prepared_index, prepared_row) in prepared.into_iter().enumerate() {
-        let measurement = summarize_samples(&samples[prepared_index], &proof_sizes[prepared_index]);
-        measured[prepared_row.original_index] = measured_row(
-            shape,
-            prepared_row.row,
-            &prepared_row.label,
-            measurement,
-            args,
-        )?;
-    }
-    Ok(())
+    Ok(prepared)
 }
 
 fn prove_no_zk_once<Ext>(
@@ -689,9 +805,9 @@ fn measure_full_zk_rows_interleaved(
     octic: Vec<RowToMeasure>,
     args: &Args,
     measured: &mut [Value],
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if quartic.is_empty() && quintic.is_empty() && octic.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let mut prepared = Vec::with_capacity(quartic.len() + quintic.len() + octic.len());
     prepared.extend(
@@ -710,18 +826,24 @@ fn measure_full_zk_rows_interleaved(
             .map(PreparedFullZkRowAny::Octic),
     );
 
-    for warmup in 0..args.warmups {
+    for (warmup, order) in round_robin_orders(prepared.len(), args.warmups, 0xa51c_0000)
+        .into_iter()
+        .enumerate()
+    {
         let (witness, public_inputs) = input_source.sample(shape, usize::MAX - warmup)?;
-        for index in shuffled_order(prepared.len(), warmup as u64 ^ 0xa51c_0000) {
+        for index in order {
             prepared[index].prove_once(&witness, &public_inputs, "warmup")?;
         }
     }
 
+    let repeat_orders = round_robin_orders(prepared.len(), args.repeats, 0);
+    let interleaved_repeats =
+        orders_cover_each_row_once(&repeat_orders, prepared.len(), args.repeats);
     let mut samples = vec![Vec::with_capacity(args.repeats); prepared.len()];
     let mut proof_sizes = vec![Vec::with_capacity(args.repeats); prepared.len()];
-    for repeat in 0..args.repeats {
+    for (repeat, order) in repeat_orders.into_iter().enumerate() {
         let (witness, public_inputs) = input_source.sample(shape, repeat)?;
-        for index in shuffled_order(prepared.len(), repeat as u64) {
+        for index in order {
             let (elapsed, proof_size) = prepared[index].prove_timed(&witness, &public_inputs)?;
             samples[index].push(elapsed);
             proof_sizes[index].push(proof_size);
@@ -733,9 +855,10 @@ fn measure_full_zk_rows_interleaved(
         let label = prepared_row.label().to_owned();
         let row = prepared_row.into_row();
         let measurement = summarize_samples(&samples[prepared_index], &proof_sizes[prepared_index]);
-        measured[original_index] = measured_row(shape, row, &label, measurement, args)?;
+        measured[original_index] =
+            measured_row(shape, row, &label, measurement, args, interleaved_repeats)?;
     }
-    Ok(())
+    Ok(interleaved_repeats)
 }
 
 fn prepare_full_zk_extension_rows<Ext>(
@@ -781,7 +904,7 @@ where
         .prove(witness.clone(), public_inputs.to_vec())
         .map_err(|err| format!("{}: {phase} failed: {err:?}", row.label))?;
     row.vk
-        .verify(&proof)
+        .verify(&proof.instance.public_inputs, &proof)
         .map_err(|err| format!("{}: {phase} verify failed: {err:?}", row.label))
 }
 
@@ -805,7 +928,7 @@ where
         .map_err(|err| format!("{}: proof serialization failed: {err}", row.label))?
         .len();
     row.vk
-        .verify(&proof)
+        .verify(&proof.instance.public_inputs, &proof)
         .map_err(|err| format!("{}: verify failed: {err:?}", row.label))?;
     Ok((elapsed, proof_size))
 }
@@ -816,6 +939,7 @@ fn measured_row(
     label: &str,
     measurement: Measurement,
     args: &Args,
+    interleaved_repeats: bool,
 ) -> Result<Value, String> {
     let object = row
         .as_object_mut()
@@ -862,7 +986,10 @@ fn measured_row(
         "heldout_warmups".to_owned(),
         Value::from(args.warmups as u64),
     );
-    object.insert("heldout_interleaved".to_owned(), Value::from(true));
+    object.insert(
+        "heldout_interleaved".to_owned(),
+        Value::from(interleaved_repeats),
+    );
     object.insert(
         "heldout_proof_mode".to_owned(),
         Value::from(args.proof_mode.name()),
@@ -1065,6 +1192,25 @@ fn shuffled_order(len: usize, seed: u64) -> Vec<usize> {
     order
 }
 
+fn round_robin_orders(row_count: usize, round_count: usize, seed_mask: u64) -> Vec<Vec<usize>> {
+    (0..round_count)
+        .map(|round| shuffled_order(row_count, round as u64 ^ seed_mask))
+        .collect()
+}
+
+fn orders_cover_each_row_once(orders: &[Vec<usize>], row_count: usize, round_count: usize) -> bool {
+    orders.len() == round_count
+        && orders.iter().all(|order| {
+            if order.len() != row_count {
+                return false;
+            }
+            let mut seen = vec![false; row_count];
+            order
+                .iter()
+                .all(|&index| index < row_count && !std::mem::replace(&mut seen[index], true))
+        })
+}
+
 fn randomize_binary_field_input(input: &[u8], seed: u64) -> Vec<u8> {
     let mut out = input.to_vec();
     let mut rng = SplitMix64::new(seed ^ 0x0b1f_1a5c_0ded_1ced);
@@ -1096,8 +1242,15 @@ impl SplitMix64 {
     }
 }
 
-fn select_rows(report: &Value, args: &Args) -> Result<Vec<Value>, String> {
-    let source = select_source_rows(report, args.row_source)?;
+fn select_rows(report: &Value, args: &Args) -> Result<SelectedRows, String> {
+    require_report_proof_mode(report, args.proof_mode)?;
+    let (source, row_source_resolved) = select_source_rows(report, args.row_source)?;
+    let (mut reference_labels, mut required_labels) =
+        if row_source_resolved == RowSource::MeasurementShortlist {
+            measurement_shortlist_labels(report)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
     let mut rows = Vec::new();
     for row in source {
@@ -1123,61 +1276,239 @@ fn select_rows(report: &Value, args: &Args) -> Result<Vec<Value>, String> {
         }
         rows.push(row.clone());
     }
-    if args.labels.is_none() && rows.len() > args.max_rows {
-        rows = if args.include_strata {
+    if let Some(explicit_labels) = &args.labels {
+        let selected_labels = rows
+            .iter()
+            .filter_map(|row| row.get("label").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        for label in explicit_labels {
+            if !selected_labels.iter().any(|selected| *selected == label) {
+                return Err(format!("explicit label was not selected: {label}"));
+            }
+        }
+        if rows.len() > args.max_rows {
+            return Err(format!(
+                "{} explicitly selected rows exceed --max-rows {}",
+                rows.len(),
+                args.max_rows
+            ));
+        }
+        reference_labels.retain(|label| {
+            selected_labels
+                .iter()
+                .any(|selected| *selected == label.as_str())
+        });
+        required_labels.retain(|label| {
+            selected_labels
+                .iter()
+                .any(|selected| *selected == label.as_str())
+        });
+    } else {
+        rows = if row_source_resolved == RowSource::MeasurementShortlist {
+            limited_rows_preserving_labels(
+                &rows,
+                args.max_rows,
+                &required_labels,
+                args.include_strata,
+            )?
+        } else if rows.len() <= args.max_rows {
+            rows
+        } else if args.include_strata {
             stratified_rows(&rows, args.max_rows)
         } else {
             rows.into_iter().take(args.max_rows).collect()
         };
     }
-    Ok(rows)
+    require_selected_row_proof_modes(&rows, args.proof_mode)?;
+    let metadata = RowSelectionMetadata {
+        row_source_requested: args.row_source.name(),
+        row_source_resolved: row_source_resolved.name(),
+        max_rows: args.max_rows,
+        include_strata: args.include_strata,
+        extension: args.extension.clone(),
+        explicit_labels: args.labels.clone(),
+        reference_labels,
+        required_labels,
+        selected_row_count: rows.len(),
+    };
+    Ok(SelectedRows { rows, metadata })
 }
 
-fn select_source_rows(report: &Value, row_source: RowSource) -> Result<&Vec<Value>, String> {
+fn select_source_rows(
+    report: &Value,
+    row_source: RowSource,
+) -> Result<(&Vec<Value>, RowSource), String> {
     match row_source {
-        RowSource::Auto => report
-            .get("measurement_shortlist")
-            .or_else(|| report.get("measurement_candidates"))
-            .or_else(|| report.get("scores"))
-            .or_else(|| report.get("candidates"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
+        RowSource::Auto => {
+            for resolved in [
+                RowSource::MeasurementShortlist,
+                RowSource::MeasurementCandidates,
+                RowSource::Scores,
+                RowSource::Candidates,
+            ] {
+                if let Some(rows) = report.get(resolved.name()).and_then(Value::as_array) {
+                    return Ok((rows, resolved));
+                }
+            }
+            Err(
                 "report must contain measurement_shortlist, measurement_candidates, scores, or candidates array"
-                    .to_owned()
-            }),
-        RowSource::MeasurementShortlist => report
-            .get("measurement_shortlist")
+                    .to_owned(),
+            )
+        }
+        resolved => report
+            .get(resolved.name())
             .and_then(Value::as_array)
-            .ok_or_else(|| "report must contain measurement_shortlist array".to_owned()),
-        RowSource::MeasurementCandidates => report
-            .get("measurement_candidates")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "report must contain measurement_candidates array".to_owned()),
-        RowSource::Scores => report
-            .get("scores")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "report must contain scores array".to_owned()),
-        RowSource::Candidates => report
-            .get("candidates")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "report must contain candidates array".to_owned()),
+            .map(|rows| (rows, resolved))
+            .ok_or_else(|| format!("report must contain {} array", resolved.name())),
     }
+}
+
+fn require_report_proof_mode(report: &Value, proof_mode: ProofMode) -> Result<(), String> {
+    let actual = report
+        .get("proof_mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "source report must declare proof_mode as no-zk or full-zk".to_owned())?;
+    if actual != proof_mode.name() {
+        return Err(format!(
+            "source report uses proof_mode={actual}, expected {}",
+            proof_mode.name()
+        ));
+    }
+    Ok(())
+}
+
+fn require_selected_row_proof_modes(rows: &[Value], proof_mode: ProofMode) -> Result<(), String> {
+    for (index, row) in rows.iter().enumerate() {
+        if row.get("proof_mode").and_then(Value::as_str) != Some(proof_mode.name()) {
+            let label = row
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing-label>");
+            return Err(format!(
+                "selected row {index} ({label}) must use proof_mode={}",
+                proof_mode.name()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn measurement_shortlist_labels(report: &Value) -> Result<(Vec<String>, Vec<String>), String> {
+    let Some(meta) = report.get("measurement_shortlist_meta") else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let reference_labels = string_array_field(meta, "reference_labels")?;
+    let declared_required_labels = string_array_field(meta, "required_labels")?;
+    let mut required_labels = reference_labels.clone();
+    for label in declared_required_labels {
+        if !required_labels.contains(&label) {
+            required_labels.push(label);
+        }
+    }
+    Ok((reference_labels, required_labels))
+}
+
+fn string_array_field(value: &Value, field: &str) -> Result<Vec<String>, String> {
+    let Some(labels) = value.get(field) else {
+        return Ok(Vec::new());
+    };
+    let labels = labels
+        .as_array()
+        .ok_or_else(|| format!("measurement shortlist {field} must be an array"))?;
+    labels
+        .iter()
+        .map(|label| {
+            label
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| format!("measurement shortlist {field} must contain strings"))
+        })
+        .collect()
 }
 
 fn stratified_rows(rows: &[Value], max_rows: usize) -> Vec<Value> {
-    if rows.len() <= max_rows {
-        return rows.to_vec();
+    stratified_indices(rows.len(), max_rows)
+        .into_iter()
+        .map(|index| rows[index].clone())
+        .collect()
+}
+
+fn limited_rows_preserving_labels(
+    rows: &[Value],
+    max_rows: usize,
+    required_labels: &[String],
+    include_strata: bool,
+) -> Result<Vec<Value>, String> {
+    if required_labels.is_empty() {
+        return Ok(if include_strata {
+            stratified_rows(rows, max_rows)
+        } else {
+            rows.iter().take(max_rows).cloned().collect()
+        });
+    }
+
+    let mut required_indices = Vec::new();
+    for required in required_labels {
+        let mut found = false;
+        for (index, row) in rows.iter().enumerate() {
+            if row.get("label").and_then(Value::as_str) == Some(required.as_str()) {
+                found = true;
+                if !required_indices.contains(&index) {
+                    required_indices.push(index);
+                }
+            }
+        }
+        if !found {
+            return Err(format!(
+                "measurement shortlist is missing required reference label {required}"
+            ));
+        }
+    }
+    if required_indices.len() > max_rows {
+        return Err(format!(
+            "{} required reference rows exceed --max-rows {max_rows}",
+            required_indices.len()
+        ));
+    }
+
+    let available = (0..rows.len())
+        .filter(|index| !required_indices.contains(index))
+        .collect::<Vec<_>>();
+    let remaining_slots = max_rows - required_indices.len();
+    let remaining_indices = if include_strata {
+        stratified_indices(available.len(), remaining_slots)
+    } else {
+        (0..available.len().min(remaining_slots)).collect()
+    };
+    let mut selected_indices = remaining_indices
+        .into_iter()
+        .map(|index| available[index])
+        .collect::<Vec<_>>();
+    selected_indices.extend(required_indices);
+    selected_indices.sort_unstable();
+    Ok(selected_indices
+        .into_iter()
+        .map(|index| rows[index].clone())
+        .collect())
+}
+
+fn stratified_indices(len: usize, max_rows: usize) -> Vec<usize> {
+    if max_rows == 0 || len == 0 {
+        return Vec::new();
+    }
+    if len <= max_rows {
+        return (0..len).collect();
     }
     if max_rows == 1 {
-        return vec![rows[0].clone()];
+        return vec![0];
     }
-    let last = rows.len() - 1;
+    let last = len - 1;
     let mut selected = Vec::with_capacity(max_rows);
     let mut last_index = None;
     for slot in 0..max_rows {
         let index = (slot * last + (max_rows - 1) / 2) / (max_rows - 1);
         if Some(index) != last_index {
-            selected.push(rows[index].clone());
+            selected.push(index);
             last_index = Some(index);
         }
     }
@@ -1189,6 +1520,132 @@ fn read_json(path: &PathBuf) -> Result<Value, String> {
         fs::File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?;
     serde_json::from_reader(file)
         .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+}
+
+fn report_workload_identity(report: &Value) -> Result<WorkloadIdentity, String> {
+    let value = report
+        .get("workload_identity")
+        .ok_or_else(|| "source report is missing workload_identity".to_owned())?;
+    let identity: WorkloadIdentity = serde_json::from_value(value.clone())
+        .map_err(|err| format!("source report has invalid workload_identity: {err}"))?;
+    validate_workload_identity(&identity)?;
+    Ok(identity)
+}
+
+fn validate_workload_identity(identity: &WorkloadIdentity) -> Result<(), String> {
+    if identity.label.is_empty() {
+        return Err("source report workload_identity label must not be empty".to_owned());
+    }
+    if identity.constraint_work == 0 {
+        return Err("source report workload_identity constraint_work must be positive".to_owned());
+    }
+    if identity.r1cs_sha256.len() != 64
+        || !identity
+            .r1cs_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(
+            "source report workload_identity r1cs_sha256 must be 64 lowercase hex characters"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn require_selected_row_workload_identities(
+    rows: &[Value],
+    expected: &WorkloadIdentity,
+) -> Result<(), String> {
+    for (index, row) in rows.iter().enumerate() {
+        let label = row
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing-label>");
+        let value = row.get("workload_identity").ok_or_else(|| {
+            format!("selected row {index} ({label}) is missing workload_identity")
+        })?;
+        let identity: WorkloadIdentity = serde_json::from_value(value.clone()).map_err(|err| {
+            format!("selected row {index} ({label}) has invalid workload_identity: {err}")
+        })?;
+        validate_workload_identity(&identity)?;
+        if &identity != expected {
+            return Err(format!(
+                "selected row {index} ({label}) workload_identity differs from the source report"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn require_workload_matches_inputs(
+    identity: &WorkloadIdentity,
+    args: &Args,
+    shape: &R1csShape<F>,
+) -> Result<(), String> {
+    let r1cs_sha256 = sha256_file(&args.r1cs)?;
+    require_workload_metadata_matches(
+        identity,
+        &r1cs_sha256,
+        shape.num_cons,
+        args.case_label.as_deref(),
+        args.linked_run_name.as_deref(),
+    )
+}
+
+fn require_workload_metadata_matches(
+    identity: &WorkloadIdentity,
+    r1cs_sha256: &str,
+    constraint_work: usize,
+    case_label: Option<&str>,
+    linked_run_name: Option<&str>,
+) -> Result<(), String> {
+    if identity.r1cs_sha256 != r1cs_sha256 {
+        return Err("source report workload_identity does not match --r1cs".to_owned());
+    }
+    if identity.constraint_work != constraint_work {
+        return Err(format!(
+            "source report workload_identity constraint_work={} does not match R1CS constraint count {constraint_work}",
+            identity.constraint_work
+        ));
+    }
+    let case_label = case_label
+        .ok_or_else(|| "--case-label is required to validate workload_identity".to_owned())?;
+    if identity.label != case_label {
+        return Err(format!(
+            "source report workload_identity label={} does not match --case-label {case_label}",
+            identity.label
+        ));
+    }
+    if let Some(linked_run_name) = linked_run_name {
+        if identity.label != linked_run_name {
+            return Err(format!(
+                "source report workload_identity label={} does not match --linked-run-name {linked_run_name}",
+                identity.label
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open {} for SHA-256: {err}", path.display()))?;
+    sha256_reader(file)
+        .map_err(|err| format!("failed to read {} for SHA-256: {err}", path.display()))
+}
+
+fn sha256_reader(mut reader: impl Read) -> io::Result<String> {
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn require_matching_code_provenance(
@@ -1357,7 +1814,7 @@ fn parse_next_string(
 
 fn usage() {
     eprintln!(
-        "usage: poseidon-schedule-heldout --r1cs circuit.r1cs (--wtns witness.wtns | --linked-witness-library lib.so --linked-circuit-data circuit.dat --linked-input input.bin --linked-run-name symbol_prefix) --report report.json --out heldout.json [--case-label sha256_512b] [--extension octic] [--row-source auto|scores|candidates|measurement-shortlist|measurement-candidates] [--proof-mode no-zk|full-zk] [--max-rows 5] [--include-strata] [--randomize-linked-input-bits] [--repeats 3] [--warmups 1]"
+        "usage: poseidon-schedule-heldout --r1cs circuit.r1cs (--wtns witness.wtns | --linked-witness-library lib.so --linked-circuit-data circuit.dat --linked-input input.bin --linked-run-name symbol_prefix) --report report.json --out heldout.json [--labels label-a,label-b] [--case-label sha256_512b] [--extension octic] [--row-source auto|scores|candidates|measurement-shortlist|measurement-candidates] [--proof-mode no-zk|full-zk] [--max-rows 5] [--include-strata] [--randomize-linked-input-bits] [--repeats 3] [--warmups 1]"
     );
 }
 
@@ -1398,9 +1855,12 @@ mod tests {
 
     fn report() -> Value {
         json!({
+            "proof_mode": "full-zk",
             "scores": (0..7)
                 .map(|i| json!({
                     "label": format!("row{i}"),
+                    "extension": "quintic",
+                    "proof_mode": "full-zk",
                     "valid": true,
                     "accepted_for_ranking": true,
                     "setup_config": {"matrix_closing": "DirectSparse"}
@@ -1411,9 +1871,12 @@ mod tests {
 
     fn report_with_shortlist() -> Value {
         json!({
+            "proof_mode": "full-zk",
             "measurement_shortlist": [
                 {
                     "label": "short0",
+                    "extension": "quintic",
+                    "proof_mode": "full-zk",
                     "valid": true,
                     "accepted_for_ranking": true,
                     "setup_config": {"matrix_closing": "DirectSparse"}
@@ -1422,6 +1885,8 @@ mod tests {
             "scores": [
                 {
                     "label": "score0",
+                    "extension": "quintic",
+                    "proof_mode": "full-zk",
                     "valid": true,
                     "accepted_for_ranking": true,
                     "setup_config": {"matrix_closing": "DirectSparse"}
@@ -1430,11 +1895,14 @@ mod tests {
         })
     }
 
-    fn report_with_pareto_candidates() -> Value {
+    fn report_with_measurement_candidates() -> Value {
         json!({
+            "proof_mode": "full-zk",
             "measurement_candidates": [
                 {
                     "label": "candidate0",
+                    "extension": "quintic",
+                    "proof_mode": "full-zk",
                     "valid": true,
                     "accepted_for_ranking": true,
                     "setup_config": {"matrix_closing": "DirectSparse"}
@@ -1443,18 +1911,151 @@ mod tests {
             "scores": [
                 {
                     "label": "score0",
+                    "extension": "quintic",
+                    "proof_mode": "full-zk",
                     "valid": true,
                     "accepted_for_ranking": true,
                     "setup_config": {"matrix_closing": "DirectSparse"}
                 },
             ]
         })
+    }
+
+    fn workload_identity() -> WorkloadIdentity {
+        WorkloadIdentity {
+            label: "case".to_owned(),
+            r1cs_sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+                .to_owned(),
+            constraint_work: 123,
+        }
+    }
+
+    #[test]
+    fn source_report_requires_a_well_formed_workload_identity() {
+        let error = report_workload_identity(&report()).unwrap_err();
+        assert!(error.contains("source report is missing workload_identity"));
+
+        let mut report = report();
+        report["workload_identity"] = json!({
+            "label": "case",
+            "r1cs_sha256": "ABC",
+            "constraint_work": 123,
+        });
+        let error = report_workload_identity(&report).unwrap_err();
+        assert!(error.contains("64 lowercase hex characters"));
+
+        report["workload_identity"] = serde_json::to_value(workload_identity()).unwrap();
+        assert_eq!(
+            report_workload_identity(&report).unwrap(),
+            workload_identity()
+        );
+    }
+
+    #[test]
+    fn every_selected_row_must_repeat_the_report_workload_identity() {
+        let expected = workload_identity();
+        let exact = json!({
+            "label": "exact",
+            "workload_identity": expected,
+        });
+        require_selected_row_workload_identities(&[exact], &expected).unwrap();
+
+        let missing = json!({"label": "missing"});
+        let error = require_selected_row_workload_identities(&[missing], &expected).unwrap_err();
+        assert!(error.contains("selected row 0 (missing) is missing workload_identity"));
+
+        let foreign = json!({
+            "label": "foreign",
+            "workload_identity": {
+                "label": "other",
+                "r1cs_sha256": expected.r1cs_sha256,
+                "constraint_work": expected.constraint_work,
+            },
+        });
+        let error = require_selected_row_workload_identities(&[foreign], &expected).unwrap_err();
+        assert!(error.contains("workload_identity differs from the source report"));
+    }
+
+    #[test]
+    fn workload_identity_must_match_r1cs_shape_and_labels() {
+        let identity = workload_identity();
+        require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work,
+            Some("case"),
+            None,
+        )
+        .unwrap();
+        require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work,
+            Some("case"),
+            Some("case"),
+        )
+        .unwrap();
+
+        assert!(require_workload_metadata_matches(
+            &identity,
+            &"0".repeat(64),
+            identity.constraint_work,
+            Some("case"),
+            None,
+        )
+        .unwrap_err()
+        .contains("does not match --r1cs"));
+        assert!(require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work + 1,
+            Some("case"),
+            None,
+        )
+        .unwrap_err()
+        .contains("does not match R1CS constraint count"));
+        assert!(require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .contains("--case-label is required"));
+        assert!(require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work,
+            Some("other"),
+            None,
+        )
+        .unwrap_err()
+        .contains("does not match --case-label"));
+        assert!(require_workload_metadata_matches(
+            &identity,
+            &identity.r1cs_sha256,
+            identity.constraint_work,
+            Some("case"),
+            Some("other"),
+        )
+        .unwrap_err()
+        .contains("does not match --linked-run-name"));
+    }
+
+    #[test]
+    fn sha256_reader_hashes_the_exact_r1cs_bytes() {
+        assert_eq!(
+            sha256_reader(&b"abc"[..]).unwrap(),
+            workload_identity().r1cs_sha256
+        );
     }
 
     #[test]
     fn select_rows_defaults_to_top_rows() {
         let selected = select_rows(&report(), &args(false, 3)).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
@@ -1465,10 +2066,109 @@ mod tests {
     fn select_rows_can_sample_strata() {
         let selected = select_rows(&report(), &args(true, 3)).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(labels, vec!["row0", "row3", "row6"]);
+    }
+
+    #[test]
+    fn stratified_shortlist_preserves_required_reference_labels() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row4"]
+        });
+        let mut args = args(true, 3);
+        args.row_source = RowSource::MeasurementShortlist;
+
+        let selected = select_rows(&report, &args).unwrap();
+        let labels = selected
+            .rows
+            .iter()
+            .map(|row| row["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["row0", "row4", "row6"]);
+    }
+
+    #[test]
+    fn top_shortlist_preserves_required_reference_labels() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row4"]
+        });
+        let mut args = args(false, 3);
+        args.row_source = RowSource::MeasurementShortlist;
+
+        let selected = select_rows(&report, &args).unwrap();
+        let labels = selected
+            .rows
+            .iter()
+            .map(|row| row["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["row0", "row1", "row4"]);
+    }
+
+    #[test]
+    fn stratified_shortlist_rejects_more_reference_rows_than_the_cap() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row1", "row4"]
+        });
+        let mut args = args(true, 1);
+        args.row_source = RowSource::MeasurementShortlist;
+
+        let error = select_rows(&report, &args).unwrap_err();
+
+        assert!(error.contains("required reference rows exceed --max-rows"));
+    }
+
+    #[test]
+    fn shortlist_validates_reference_labels_without_truncation() {
+        let rows = vec![json!({"label": "row0"}), json!({"label": "row1"})];
+        let required = vec!["missing".to_owned()];
+
+        let error = limited_rows_preserving_labels(&rows, 5, &required, false).unwrap_err();
+
+        assert!(error.contains("missing required reference label missing"));
+    }
+
+    #[test]
+    fn shortlist_preserves_duplicate_rows_for_a_reference_label() {
+        let rows = vec![
+            json!({"id": "top", "label": "other"}),
+            json!({"id": "reference-a", "label": "reference"}),
+            json!({"id": "reference-b", "label": "reference"}),
+            json!({"id": "tail", "label": "other"}),
+        ];
+        let required = vec!["reference".to_owned()];
+
+        let selected = limited_rows_preserving_labels(&rows, 3, &required, false).unwrap();
+        let ids = selected
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["top", "reference-a", "reference-b"]);
+    }
+
+    #[test]
+    fn shortlist_rejects_a_cap_that_cannot_fit_duplicate_reference_rows() {
+        let rows = vec![
+            json!({"label": "reference"}),
+            json!({"label": "reference"}),
+            json!({"label": "other"}),
+        ];
+        let required = vec!["reference".to_owned()];
+
+        let error = limited_rows_preserving_labels(&rows, 1, &required, false).unwrap_err();
+
+        assert!(error.contains("2 required reference rows exceed --max-rows 1"));
     }
 
     #[test]
@@ -1477,6 +2177,7 @@ mod tests {
         args.row_source = RowSource::Auto;
         let selected = select_rows(&report_with_shortlist(), &args).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
@@ -1489,6 +2190,7 @@ mod tests {
         args.row_source = RowSource::Scores;
         let selected = select_rows(&report_with_shortlist(), &args).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
@@ -1496,11 +2198,12 @@ mod tests {
     }
 
     #[test]
-    fn select_rows_auto_uses_pareto_measurement_candidates() {
+    fn select_rows_auto_uses_measurement_candidates() {
         let mut args = args(false, 10);
         args.row_source = RowSource::Auto;
-        let selected = select_rows(&report_with_pareto_candidates(), &args).unwrap();
+        let selected = select_rows(&report_with_measurement_candidates(), &args).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
@@ -1508,15 +2211,150 @@ mod tests {
     }
 
     #[test]
-    fn select_rows_can_force_pareto_measurement_candidates() {
+    fn select_rows_can_force_measurement_candidates() {
         let mut args = args(false, 10);
         args.row_source = RowSource::MeasurementCandidates;
-        let selected = select_rows(&report_with_pareto_candidates(), &args).unwrap();
+        let selected = select_rows(&report_with_measurement_candidates(), &args).unwrap();
         let labels = selected
+            .rows
             .iter()
             .map(|row| row["label"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(labels, vec!["candidate0"]);
+    }
+
+    #[test]
+    fn selection_metadata_records_requested_and_resolved_sources_and_knobs() {
+        let mut report = report_with_shortlist();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["short0"]
+        });
+        let mut args = args(true, 7);
+        args.row_source = RowSource::Auto;
+        args.extension = Some("quintic".to_owned());
+        args.labels = Some(vec!["short0".to_owned()]);
+
+        let selected = select_rows(&report, &args).unwrap();
+        let metadata = serde_json::to_value(&selected.metadata).unwrap();
+
+        assert_eq!(
+            metadata,
+            json!({
+                "row_source_requested": "auto",
+                "row_source_resolved": "measurement_shortlist",
+                "max_rows": 7,
+                "include_strata": true,
+                "extension": "quintic",
+                "explicit_labels": ["short0"],
+                "reference_labels": ["short0"],
+                "required_labels": ["short0"],
+                "selected_row_count": 1
+            })
+        );
+    }
+
+    #[test]
+    fn shortlist_preserves_coverage_labels_separately_from_references() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row1"],
+            "required_labels": ["row1", "row5"]
+        });
+        let mut args = args(false, 3);
+        args.row_source = RowSource::MeasurementShortlist;
+
+        let selected = select_rows(&report, &args).unwrap();
+        let labels = selected
+            .rows
+            .iter()
+            .map(|row| row["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["row0", "row1", "row5"]);
+        assert_eq!(selected.metadata.reference_labels, vec!["row1"]);
+        assert_eq!(selected.metadata.required_labels, vec!["row1", "row5"]);
+    }
+
+    #[test]
+    fn shortlist_unions_references_into_declared_required_labels() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row5"],
+            "required_labels": ["row1"]
+        });
+        let mut args = args(false, 3);
+        args.row_source = RowSource::MeasurementShortlist;
+
+        let selected = select_rows(&report, &args).unwrap();
+        let labels = selected
+            .rows
+            .iter()
+            .map(|row| row["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels, vec!["row0", "row1", "row5"]);
+        assert_eq!(selected.metadata.required_labels, vec!["row5", "row1"]);
+    }
+
+    #[test]
+    fn explicit_labels_do_not_claim_unselected_required_rows() {
+        let mut report = report();
+        report["measurement_shortlist"] = report["scores"].clone();
+        report["measurement_shortlist_meta"] = json!({
+            "reference_labels": ["row4"],
+            "required_labels": ["row4", "row5"]
+        });
+        let mut args = args(false, 1);
+        args.row_source = RowSource::MeasurementShortlist;
+        args.labels = Some(vec!["row0".to_owned()]);
+
+        let selected = select_rows(&report, &args).unwrap();
+
+        assert_eq!(selected.rows.len(), 1);
+        assert!(selected.metadata.reference_labels.is_empty());
+        assert!(selected.metadata.required_labels.is_empty());
+    }
+
+    #[test]
+    fn explicit_labels_cannot_exceed_the_row_cap() {
+        let mut args = args(false, 1);
+        args.labels = Some(vec!["row0".to_owned(), "row1".to_owned()]);
+
+        let error = select_rows(&report(), &args).unwrap_err();
+
+        assert!(error.contains("2 explicitly selected rows exceed --max-rows 1"));
+    }
+
+    #[test]
+    fn every_explicit_label_must_be_selected() {
+        let mut args = args(false, 2);
+        args.labels = Some(vec!["row0".to_owned(), "missing".to_owned()]);
+
+        let error = select_rows(&report(), &args).unwrap_err();
+
+        assert!(error.contains("explicit label was not selected: missing"));
+    }
+
+    #[test]
+    fn report_proof_mode_must_match_the_cli_mode() {
+        let mut report = report();
+        report["proof_mode"] = Value::from("no-zk");
+
+        let error = select_rows(&report, &args(false, 1)).unwrap_err();
+
+        assert!(error.contains("source report uses proof_mode=no-zk, expected full-zk"));
+    }
+
+    #[test]
+    fn every_selected_row_must_match_the_report_proof_mode() {
+        let mut report = report();
+        report["scores"][0]["proof_mode"] = Value::from("no-zk");
+
+        let error = select_rows(&report, &args(false, 1)).unwrap_err();
+
+        assert!(error.contains("selected row 0 (row0) must use proof_mode=full-zk"));
     }
 
     #[test]
@@ -1526,6 +2364,25 @@ mod tests {
         for legacy in ["hiding", "zk", "plain", "non-zk", "legacy"] {
             assert!(parse_proof_mode(legacy).is_err());
         }
+    }
+
+    #[test]
+    fn round_robin_scheduler_visits_every_row_once_per_repeat() {
+        let orders = round_robin_orders(4, 5, 0);
+
+        assert!(orders_cover_each_row_once(&orders, 4, 5));
+        for order in orders {
+            let mut sorted = order;
+            sorted.sort_unstable();
+            assert_eq!(sorted, vec![0, 1, 2, 3]);
+        }
+    }
+
+    #[test]
+    fn incomplete_order_does_not_claim_interleaving() {
+        let orders = vec![vec![0, 1, 2], vec![0, 2]];
+
+        assert!(!orders_cover_each_row_once(&orders, 3, 2));
     }
 
     #[test]

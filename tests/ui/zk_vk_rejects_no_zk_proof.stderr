@@ -1,8 +1,8 @@
 error[E0308]: mismatched types
- --> tests/ui/zk_vk_rejects_no_zk_proof.rs:9:23
+ --> tests/ui/zk_vk_rejects_no_zk_proof.rs:9:28
   |
-9 |     let _ = vk.verify(proof);
-  |                ------ ^^^^^ expected `&PoseidonZkProof<ExtField<..., 4, ...>>`, found `&PoseidonProof<ExtField<..., 4, ...>>`
+9 |     let _ = vk.verify(&[], proof);
+  |                ------      ^^^^^ expected `&PoseidonZkProof<ExtField<..., 4, ...>>`, found `&PoseidonProof<ExtField<..., 4, ...>>`
   |                |
   |                arguments to this method are incorrect
   |
@@ -11,5 +11,5 @@ error[E0308]: mismatched types
 note: method defined here
  --> src/poseidon.rs
   |
-  |     pub fn verify(&self, proof: &PoseidonZkProof<Ext>) -> Result<(), SpartanWhirError> {
+  |     pub fn verify(
   |            ^^^^^^

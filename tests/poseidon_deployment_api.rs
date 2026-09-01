@@ -1,13 +1,21 @@
 mod common;
 
+use p3_field::PrimeCharacteristicRing;
+use p3_whir::pcs::proof::QueryOpenings;
 use rand::{rngs::StdRng, SeedableRng};
+use spartan_whir::plonky3_whir_pcs::PoseidonCommitment;
 use spartan_whir::{
-    generate_satisfiable_fixture, setup_poseidon, setup_poseidon_zk, InvalidConfigReason,
-    MatrixClosingMode, PoseidonProof, PoseidonProvingKey, PoseidonSetupConfig,
-    PoseidonVerifyingKey, PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig,
-    PoseidonZkVerifyingKey, QuarticBinExtension, SpartanSnarkConfig, SpartanWhirError,
-    SyntheticR1csConfig,
+    engine::F, generate_satisfiable_fixture, setup_poseidon, setup_poseidon_zk,
+    InvalidConfigReason, MatrixClosingMode, PoseidonProof, PoseidonProofKind, PoseidonProvingKey,
+    PoseidonSetupConfig, PoseidonVerifyingKey, PoseidonZkProof, PoseidonZkProvingKey,
+    PoseidonZkSetupConfig, PoseidonZkVerifyingKey, QuarticBinExtension, SpartanSnarkConfig,
+    SpartanWhirError, SyntheticR1csConfig, ZkMatrixClosingProof,
 };
+
+fn duplicate_cap_root(commitment: &PoseidonCommitment) -> PoseidonCommitment {
+    let root = commitment.roots()[0];
+    PoseidonCommitment::new(vec![root, root])
+}
 
 fn config(mode: MatrixClosingMode) -> PoseidonSetupConfig {
     SpartanSnarkConfig {
@@ -22,7 +30,7 @@ fn zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
     PoseidonZkSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
-        whir_params: common::phase3_whir_params(),
+        whir_params: common::phase3_zk_whir_params(),
         spark_whir_params: None,
         ell_zk: spartan_whir::DEFAULT_ZK_ELL,
         mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
@@ -49,7 +57,8 @@ fn roundtrip_mode(mode: MatrixClosingMode) {
     let proof = pk
         .prove(fixture.witness, fixture.public_inputs)
         .expect("prove succeeds");
-    vk.verify(&proof).expect("verify succeeds");
+    vk.verify(&proof.instance.public_inputs, &proof)
+        .expect("verify succeeds");
     assert_eq!(proof.closing_mode(), mode);
 }
 
@@ -61,6 +70,240 @@ fn generic_poseidon_direct_api_roundtrips() {
 #[test]
 fn generic_poseidon_spark_api_roundtrips() {
     roundtrip_mode(MatrixClosingMode::Spark);
+}
+
+#[test]
+fn poseidon_verifier_requires_expected_public_inputs() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
+        fixture.shape,
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let mut wrong = proof.instance.public_inputs.clone();
+    wrong[0] += F::ONE;
+
+    assert_eq!(
+        vk.verify(&wrong, &proof),
+        Err(SpartanWhirError::PublicInputMismatch)
+    );
+    assert_eq!(
+        vk.verify(&[], &proof),
+        Err(SpartanWhirError::InvalidPublicInputLength)
+    );
+    vk.verify(&proof.instance.public_inputs, &proof)
+        .expect("expected public inputs verify");
+}
+
+#[test]
+fn poseidon_full_zk_verifier_requires_expected_public_inputs() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let mut wrong = proof.instance.public_inputs.clone();
+    wrong[0] += F::ONE;
+
+    assert_eq!(
+        vk.verify(&wrong, &proof),
+        Err(SpartanWhirError::PublicInputMismatch)
+    );
+    assert_eq!(
+        vk.verify(&[], &proof),
+        Err(SpartanWhirError::InvalidPublicInputLength)
+    );
+    vk.verify(&proof.instance.public_inputs, &proof)
+        .expect("expected public inputs verify");
+}
+
+#[test]
+fn poseidon_verifier_rejects_multi_root_witness_cap() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon::<QuarticBinExtension>(
+        fixture.shape,
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let mut proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    proof.instance.witness_commitment = duplicate_cap_root(&proof.instance.witness_commitment);
+
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &proof),
+        Err(SpartanWhirError::InvalidCommitmentShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_verifier_rejects_multi_root_proof_cap() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let mut proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    proof.proof.application_mask_commitment =
+        duplicate_cap_root(&proof.proof.application_mask_commitment);
+
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &proof),
+        Err(SpartanWhirError::InvalidCommitmentShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_rejects_malformed_source_openings_before_plonky3() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    vk.verify(&expected_public_inputs, &proof)
+        .expect("honest proof verifies");
+
+    let mut extra_row = proof.clone();
+    match &mut extra_row.proof.pcs_proof.base_case.source_openings {
+        QueryOpenings::Base(opening) => opening.rows.push(Vec::new()),
+        QueryOpenings::Extension(opening) => opening.rows.push(Vec::new()),
+    }
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &extra_row),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+
+    let mut wrong_width = proof;
+    match &mut wrong_width.proof.pcs_proof.base_case.source_openings {
+        QueryOpenings::Base(opening) => opening.rows[0].push(F::ZERO),
+        QueryOpenings::Extension(opening) => opening.rows[0].push(QuarticBinExtension::ZERO),
+    }
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &wrong_width),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_rejects_malformed_code_switch_openings_before_plonky3() {
+    let fixture = generate_satisfiable_fixture(&SyntheticR1csConfig {
+        target_log2_witness_poly: 8,
+        num_constraints: 2,
+        num_io: 1,
+        a_terms_per_constraint: 2,
+        b_terms_per_constraint: 2,
+        seed: 0xD39E_0105_EE12,
+    })
+    .expect("fixture generation succeeds");
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("setup succeeds");
+    let proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    vk.verify(&expected_public_inputs, &proof)
+        .expect("honest proof verifies");
+    assert_eq!(proof.proof.pcs_proof.rounds.len(), 1);
+
+    let mut extra_row = proof.clone();
+    match &mut extra_row.proof.pcs_proof.rounds[0].openings {
+        QueryOpenings::Base(opening) => opening.rows.push(Vec::new()),
+        QueryOpenings::Extension(opening) => opening.rows.push(Vec::new()),
+    }
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &extra_row),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+
+    let mut wrong_width = proof.clone();
+    match &mut wrong_width.proof.pcs_proof.rounds[0].openings {
+        QueryOpenings::Base(opening) => opening.rows[0].push(F::ZERO),
+        QueryOpenings::Extension(opening) => opening.rows[0].push(QuarticBinExtension::ZERO),
+    }
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &wrong_width),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+
+    let mut final_extra_row = proof;
+    let QueryOpenings::Extension(opening) =
+        &mut final_extra_row.proof.pcs_proof.base_case.source_openings
+    else {
+        panic!("a code-switching proof ends with extension-field source openings");
+    };
+    opening.rows.push(Vec::new());
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &final_extra_row),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+}
+
+#[test]
+fn poseidon_spark_rejects_oversized_nested_whir_shape_before_clone() {
+    let fixture = fixture();
+    let (pk, vk) =
+        setup_poseidon::<QuarticBinExtension>(fixture.shape, config(MatrixClosingMode::Spark))
+            .expect("setup succeeds");
+    let mut proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    let PoseidonProofKind::Spark(spark_proof) = &mut proof.proof else {
+        panic!("Spark setup produces a Spark proof");
+    };
+    spark_proof.spark_read_openings.groups[0]
+        .proof
+        .initial_ood_answers
+        .push(QuarticBinExtension::ZERO);
+
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &proof),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
+}
+
+#[test]
+fn poseidon_full_zk_spark_rejects_extra_read_group_before_nested_preflight() {
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuarticBinExtension>(
+        fixture.shape,
+        zk_config(MatrixClosingMode::Spark),
+    )
+    .expect("setup succeeds");
+    let mut proof = pk
+        .prove(fixture.witness, fixture.public_inputs)
+        .expect("proof succeeds");
+    let expected_public_inputs = proof.instance.public_inputs.clone();
+    let ZkMatrixClosingProof::Spark(closing) = &mut proof.proof.matrix_closing else {
+        panic!("Spark setup produces a Spark proof");
+    };
+    let extra_group = closing.spark_read_openings.groups[0].clone();
+    closing.spark_read_openings.groups.push(extra_group);
+
+    assert_eq!(
+        vk.verify(&expected_public_inputs, &proof),
+        Err(SpartanWhirError::InvalidProofShape)
+    );
 }
 
 #[test]
@@ -139,7 +382,7 @@ fn poseidon_deployment_types_are_serializable() {
 
     assert_eq!(pk_roundtrip.matrix_closing, MatrixClosingMode::DirectSparse);
     vk_roundtrip
-        .verify(&proof_roundtrip)
+        .verify(&proof_roundtrip.instance.public_inputs, &proof_roundtrip)
         .expect("deserialized verifying key verifies deserialized proof");
     let missing_cache_error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
         Ok(_) => panic!("deserialized proving key proves without derived cache rebuild"),
@@ -156,7 +399,10 @@ fn poseidon_deployment_types_are_serializable() {
         .prove(witness, public_inputs)
         .expect("deserialized proving key proves");
     vk_roundtrip
-        .verify(&proof_from_roundtrip_pk)
+        .verify(
+            &proof_from_roundtrip_pk.instance.public_inputs,
+            &proof_from_roundtrip_pk,
+        )
         .expect("deserialized verifying key verifies proof from deserialized proving key");
 
     let mut tampered_proof_bytes = proof_bytes;
@@ -166,7 +412,9 @@ fn poseidon_deployment_types_are_serializable() {
         .expect("serialized proof has a digit to tamper");
     *byte = if *byte == b'0' { b'1' } else { b'0' };
     match serde_json::from_slice::<PoseidonProof<QuarticBinExtension>>(&tampered_proof_bytes) {
-        Ok(tampered_proof) => assert!(vk_roundtrip.verify(&tampered_proof).is_err()),
+        Ok(tampered_proof) => assert!(vk_roundtrip
+            .verify(&proof.instance.public_inputs, &tampered_proof)
+            .is_err()),
         Err(_) => {}
     }
 }
@@ -189,7 +437,7 @@ fn poseidon_verifier_rejects_malformed_serialized_key_without_panicking() {
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
 
     assert_eq!(
-        malformed.verify(&proof),
+        malformed.verify(&proof.instance.public_inputs, &proof),
         Err(SpartanWhirError::InvalidR1csShape)
     );
 
@@ -198,7 +446,7 @@ fn poseidon_verifier_rejects_malformed_serialized_key_without_panicking() {
     let malformed: PoseidonVerifyingKey<QuarticBinExtension> =
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
     assert_eq!(
-        malformed.verify(&proof),
+        malformed.verify(&proof.instance.public_inputs, &proof),
         Err(SpartanWhirError::invalid_config())
     );
 }
@@ -226,10 +474,10 @@ fn poseidon_full_zk_deployment_api_is_serializable() {
     let vk_roundtrip: PoseidonZkVerifyingKey<QuarticBinExtension> =
         bincode::deserialize(&vk_bytes).expect("full-ZK verifying key deserializes");
 
-    vk.verify(&decoded)
+    vk.verify(&decoded.instance.public_inputs, &decoded)
         .expect("deserialized full-ZK proof verifies");
     vk_roundtrip
-        .verify(&decoded)
+        .verify(&decoded.instance.public_inputs, &decoded)
         .expect("deserialized full-ZK verifying key verifies");
     let error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
         Ok(_) => panic!("deserialized full-ZK key must require layout preparation"),
@@ -246,7 +494,7 @@ fn poseidon_full_zk_deployment_api_is_serializable() {
         .prove(witness, public_inputs)
         .expect("deserialized full-ZK proving key proves");
     vk_roundtrip
-        .verify(&replay)
+        .verify(&replay.instance.public_inputs, &replay)
         .expect("deserialized full-ZK key pair remains reusable");
 }
 
@@ -268,7 +516,7 @@ fn poseidon_full_zk_verifier_rejects_malformed_serialized_key_without_panicking(
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
 
     assert_eq!(
-        malformed.verify(&proof),
+        malformed.verify(&proof.instance.public_inputs, &proof),
         Err(SpartanWhirError::InvalidR1csShape)
     );
 
@@ -277,7 +525,7 @@ fn poseidon_full_zk_verifier_rejects_malformed_serialized_key_without_panicking(
     let malformed: PoseidonZkVerifyingKey<QuarticBinExtension> =
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
     assert_eq!(
-        malformed.verify(&proof),
+        malformed.verify(&proof.instance.public_inputs, &proof),
         Err(SpartanWhirError::invalid_config())
     );
 }
@@ -298,14 +546,16 @@ fn poseidon_full_zk_spark_rejects_malformed_serialized_keys() {
     encoded["spark_pcs_configs"]["fixed_value"]["num_variables"] = serde_json::json!(0);
     let malformed: PoseidonZkVerifyingKey<QuarticBinExtension> =
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
-    assert!(malformed.verify(&proof).is_err());
+    assert!(malformed
+        .verify(&proof.instance.public_inputs, &proof)
+        .is_err());
 
     let mut encoded = serde_json::to_value(&vk).expect("verifying key serializes");
     encoded["spark_table_metadata"]["value_domain_size"] = serde_json::json!(1);
     let malformed: PoseidonZkVerifyingKey<QuarticBinExtension> =
         serde_json::from_value(encoded).expect("malformed key remains syntactically valid");
     assert_eq!(
-        malformed.verify(&proof),
+        malformed.verify(&proof.instance.public_inputs, &proof),
         Err(SpartanWhirError::InvalidR1csShape)
     );
 
@@ -342,7 +592,8 @@ fn poseidon_full_zk_deployment_api_accepts_seeded_rng() {
         bincode::serialize(&first).expect("first proof serializes"),
         bincode::serialize(&replay).expect("replayed proof serializes")
     );
-    vk.verify(&first).expect("seeded full-ZK proof verifies");
+    vk.verify(&first.instance.public_inputs, &first)
+        .expect("seeded full-ZK proof verifies");
 }
 
 #[test]
@@ -361,13 +612,15 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
     let second = pk
         .prove(witness.clone(), public_inputs.clone())
         .expect("second full-ZK SPARK proof succeeds");
-    vk.verify(&first).expect("first proof verifies");
-    vk.verify(&second).expect("second proof verifies");
+    vk.verify(&first.instance.public_inputs, &first)
+        .expect("first proof verifies");
+    vk.verify(&second.instance.public_inputs, &second)
+        .expect("second proof verifies");
 
     let proof_bytes = bincode::serialize(&first).expect("full-ZK SPARK proof serializes");
     let proof_roundtrip: PoseidonZkProof<QuarticBinExtension> =
         bincode::deserialize(&proof_bytes).expect("full-ZK SPARK proof deserializes");
-    vk.verify(&proof_roundtrip)
+    vk.verify(&proof_roundtrip.instance.public_inputs, &proof_roundtrip)
         .expect("deserialized full-ZK SPARK proof verifies");
 
     let pk_bytes = bincode::serialize(&pk).expect("full-ZK SPARK proving key serializes");
@@ -383,7 +636,7 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
         .prove(witness, public_inputs)
         .expect("restored full-ZK SPARK key proves");
     assert_eq!(
-        restored_vk.verify(&restored),
+        restored_vk.verify(&restored.instance.public_inputs, &restored),
         Err(SpartanWhirError::InvalidConfig(
             InvalidConfigReason::UnauthenticatedSparkVerifyingKey
         ))
@@ -392,7 +645,7 @@ fn poseidon_full_zk_spark_key_is_reusable_and_serializable() {
         .authenticate_spark_fixed_commitments()
         .expect("restored full-ZK SPARK key authenticates");
     restored_vk
-        .verify(&restored)
+        .verify(&restored.instance.public_inputs, &restored)
         .expect("restored full-ZK SPARK key verifies");
 }
 
@@ -426,16 +679,18 @@ fn poseidon_spark_proving_key_is_serializable() {
     let second = spark_pk
         .prove(witness.clone(), public_inputs.clone())
         .expect("second proof from reusable Spark key succeeds");
-    spark_vk.verify(&first).expect("first Spark proof verifies");
     spark_vk
-        .verify(&second)
+        .verify(&first.instance.public_inputs, &first)
+        .expect("first Spark proof verifies");
+    spark_vk
+        .verify(&second.instance.public_inputs, &second)
         .expect("second Spark proof verifies");
 
     let proof_bytes = bincode::serialize(&first).expect("Spark proof serializes");
     let proof_roundtrip: PoseidonProof<QuarticBinExtension> =
         bincode::deserialize(&proof_bytes).expect("Spark proof deserializes");
     spark_vk
-        .verify(&proof_roundtrip)
+        .verify(&proof_roundtrip.instance.public_inputs, &proof_roundtrip)
         .expect("deserialized Spark proof verifies");
 
     let mut pk_roundtrip: PoseidonProvingKey<QuarticBinExtension> =
@@ -444,6 +699,14 @@ fn poseidon_spark_proving_key_is_serializable() {
         bincode::deserialize(&vk_bytes).expect("spark verifying key deserializes");
     assert_eq!(pk_roundtrip.matrix_closing, MatrixClosingMode::Spark);
     assert_eq!(vk_roundtrip.matrix_closing(), MatrixClosingMode::Spark);
+    let missing_cache_error = match pk_roundtrip.prove(witness.clone(), public_inputs.clone()) {
+        Ok(_) => panic!("deserialized Spark proving key proves without derived cache rebuild"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        missing_cache_error,
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::MissingDerivedProverData)
+    );
     pk_roundtrip
         .prepare_for_proving()
         .expect("deserialized Spark key prepares for proving");
@@ -451,7 +714,7 @@ fn poseidon_spark_proving_key_is_serializable() {
         .prove(witness, public_inputs)
         .expect("deserialized Spark key proves");
     assert_eq!(
-        vk_roundtrip.verify(&roundtrip_proof),
+        vk_roundtrip.verify(&roundtrip_proof.instance.public_inputs, &roundtrip_proof),
         Err(SpartanWhirError::InvalidConfig(
             InvalidConfigReason::UnauthenticatedSparkVerifyingKey
         ))
@@ -460,7 +723,7 @@ fn poseidon_spark_proving_key_is_serializable() {
         .authenticate_spark_fixed_commitments()
         .expect("deserialized Spark verifying key authenticates");
     vk_roundtrip
-        .verify(&roundtrip_proof)
+        .verify(&roundtrip_proof.instance.public_inputs, &roundtrip_proof)
         .expect("proof from deserialized Spark key verifies");
 }
 
@@ -492,7 +755,8 @@ fn poseidon_can_prove_from_linked_witness_generator() {
     let proof = pk
         .prove_from_witness_generator(&generator, b"\x05")
         .expect("prove from witness generator succeeds");
-    vk.verify(&proof).expect("proof verifies");
+    vk.verify(&proof.instance.public_inputs, &proof)
+        .expect("proof verifies");
 }
 
 #[test]
@@ -509,7 +773,7 @@ fn poseidon_full_zk_spark_can_prove_compiled_circuit() {
     let proof = pk
         .prove(witness, public_inputs)
         .expect("compiled-circuit full-ZK SPARK proof succeeds");
-    vk.verify(&proof)
+    vk.verify(&proof.instance.public_inputs, &proof)
         .expect("compiled-circuit full-ZK SPARK proof verifies");
 }
 
@@ -600,7 +864,7 @@ fn linked_witness_generator_rejects_unsatisfied_witness() {
         .prove_from_witness_generator(&bad, b"\x05")
         .expect("fast path proves without explicit satisfaction validation");
     assert!(
-        vk.verify(&proof).is_err(),
+        vk.verify(&proof.instance.public_inputs, &proof).is_err(),
         "unsatisfied fast-path proof must not verify"
     );
 

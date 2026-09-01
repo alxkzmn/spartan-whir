@@ -182,7 +182,7 @@ fn shared_union_tables_aggregate_duplicates_and_sort_lexicographically() {
         .verifier_operation_report(5)
         .expect("operation report succeeds");
     assert_eq!(report.setup_commitments, 2);
-    assert_eq!(report.per_proof_commitments, 1);
+    assert_eq!(report.per_proof_commitments, 2);
     assert_eq!(report.padded_value_domain_size, tables.value_domain_size);
     assert_eq!(
         report.padded_memory_domain_size,
@@ -215,10 +215,11 @@ fn shared_union_tables_aggregate_duplicates_and_sort_lexicographically() {
         report.fixed_value_domain_slots,
         8 * tables.value_domain_size
     );
-    assert_eq!(report.proof_time_read_columns, 16);
+    assert_eq!(report.proof_time_read_columns, 10);
+    assert_eq!(report.read_commitment_count, 2);
     assert_eq!(
         report.proof_time_read_domain_slots,
-        16 * tables.value_domain_size
+        10 * tables.value_domain_size
     );
     assert_eq!(report.extension_element_bytes, 20);
     assert_eq!(
@@ -241,7 +242,7 @@ fn shared_union_tables_aggregate_duplicates_and_sort_lexicographically() {
     assert_eq!(report.fixed_opening_eval_ext_elements, 12);
     assert_eq!(report.read_opening_eval_ext_elements, 30);
     assert_eq!(report.opening_eval_ext_elements, 42);
-    assert_eq!(report.duplicate_commitment_bytes, 96);
+    assert_eq!(report.duplicate_commitment_bytes, 128);
     assert_eq!(
         report.estimated_spark_payload_bytes_excluding_whir,
         report.estimated_product_proof_bytes
@@ -287,7 +288,7 @@ fn layout_report_exposes_imbalanced_wasted_slots() {
     assert!(report.joint.wasted_value_slots > 0);
     assert!(report.per_matrix.wasted_value_slots > 0);
     assert_eq!(report.joint.setup_commitments, 2);
-    assert_eq!(report.per_matrix.setup_commitments, 2);
+    assert_eq!(report.per_matrix.setup_commitments, 1);
 }
 
 #[test]
@@ -303,16 +304,14 @@ fn profile_layout_report_supports_provekit_sha_2k_shape_without_entries() {
     .expect("profile comparison succeeds");
 
     assert_eq!(report.joint.setup_commitments, 2);
-    assert_eq!(report.joint.per_proof_commitments, 1);
     assert_eq!(report.per_matrix.setup_commitments, 2);
-    assert_eq!(report.per_matrix.per_proof_commitments, 1);
 
     let operation_report = report
         .joint
         .verifier_operation_report(345_399, 612_724, 5)
         .expect("operation report succeeds");
     assert_eq!(operation_report.setup_commitments, 2);
-    assert_eq!(operation_report.per_proof_commitments, 1);
+    assert_eq!(operation_report.per_proof_commitments, 2);
     assert_eq!(operation_report.padded_value_domain_size, 1_048_576);
     assert_eq!(operation_report.padded_memory_domain_size, 1_048_576);
     assert_eq!(operation_report.proof_ops_layers, 20);
@@ -320,7 +319,8 @@ fn profile_layout_report_supports_provekit_sha_2k_shape_without_entries() {
     assert_eq!(operation_report.proof_ops_sumcheck_rounds, 190);
     assert_eq!(operation_report.proof_mem_sumcheck_rounds, 190);
     assert_eq!(operation_report.total_product_sumcheck_rounds, 380);
-    assert_eq!(operation_report.proof_time_read_columns, 16);
+    assert_eq!(operation_report.proof_time_read_columns, 10);
+    assert_eq!(operation_report.read_commitment_count, 2);
     assert_eq!(operation_report.estimated_opening_eval_bytes, 840);
 
     let gas = operation_report
@@ -331,12 +331,12 @@ fn profile_layout_report_supports_provekit_sha_2k_shape_without_entries() {
             calldata_gas_per_nonzero_byte: 16,
         })
         .expect("gas estimate succeeds");
-    assert_eq!(gas.whir_opening_count, 3);
+    assert_eq!(gas.whir_opening_count, 4);
     assert_eq!(gas.product_sumcheck_replay_gas, 380_000);
-    assert_eq!(gas.whir_opening_execution_gas, 3_000_000);
-    assert_eq!(gas.spark_payload_calldata_gas_upper_bound, 496_576);
-    assert_eq!(gas.whir_opening_calldata_gas_upper_bound, 480_000);
-    assert_eq!(gas.total_gas_upper_bound, 4_356_576);
+    assert_eq!(gas.whir_opening_execution_gas, 4_000_000);
+    assert_eq!(gas.spark_payload_calldata_gas_upper_bound, 497_088);
+    assert_eq!(gas.whir_opening_calldata_gas_upper_bound, 640_000);
+    assert_eq!(gas.total_gas_upper_bound, 5_517_088);
 }
 
 #[test]
@@ -394,8 +394,8 @@ fn value_sumcheck_matches_direct_matrix_evaluation() {
     let r = spartan_whir::QuinticExtension::from(fe(9));
     let read_tables = compute_spark_read_tables(&tables, &r_x, &r_y).expect("read tables compute");
 
-    let t_x = EqPolynomial::evals_from_point(&r_x.0);
-    let t_y = EqPolynomial::evals_from_point(&r_y.0);
+    let t_x = EqPolynomial::evals_from_point_with_base::<F>(&r_x.0);
+    let t_y = EqPolynomial::evals_from_point_with_base::<F>(&r_y.0);
     let (eval_a, eval_b, eval_c) = shape
         .evaluate_with_tables(&t_x, &t_y)
         .expect("direct evaluation succeeds");

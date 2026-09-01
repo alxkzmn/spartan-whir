@@ -5,6 +5,7 @@ use p3_field::PrimeCharacteristicRing;
 use spartan_whir::{
     engine::F, DomainSeparator, MatrixClosingMode, QuarticBinExtension, SecurityConfig,
     SparkWhirParams, WhirFoldingSchedule, WhirParams, FULL_ZK_PROTOCOL_ID, NO_ZK_PROTOCOL_ID,
+    SPARK_MATRIX_CLOSING_VERSION,
 };
 
 fn expected_shared_direct_body() -> Vec<u8> {
@@ -112,6 +113,10 @@ fn domain_separator_changes_when_matrix_closing_changes() {
     assert_ne!(direct.to_bytes(), spark.to_bytes());
     assert_eq!(direct.to_bytes()[NO_ZK_PROTOCOL_ID.len()], 0);
     assert_eq!(spark.to_bytes()[NO_ZK_PROTOCOL_ID.len()], 1);
+    assert_eq!(
+        spark.to_bytes()[NO_ZK_PROTOCOL_ID.len() + 1],
+        SPARK_MATRIX_CLOSING_VERSION
+    );
 }
 
 #[test]
@@ -128,6 +133,26 @@ fn domain_separator_canonicalizes_legacy_constant_schedule() {
     let explicit_bytes = DomainSeparator::new(&shape, &security, &explicit).to_bytes();
 
     assert_eq!(legacy_bytes, explicit_bytes);
+}
+
+#[test]
+fn domain_separator_binds_explicit_round_log_inv_rates() {
+    let shape = common::sample_shape();
+    let security = SecurityConfig::default();
+    let rate_three = WhirParams {
+        round_log_inv_rates: vec![3],
+        ..WhirParams::default()
+    };
+    let rate_four = WhirParams {
+        round_log_inv_rates: vec![4],
+        ..rate_three.clone()
+    };
+
+    let rate_three = DomainSeparator::new(&shape, &security, &rate_three);
+    let rate_four = DomainSeparator::new(&shape, &security, &rate_four);
+
+    assert_ne!(rate_three.to_bytes(), rate_four.to_bytes());
+    assert_ne!(absorb_separator(&rate_three), absorb_separator(&rate_four));
 }
 
 #[test]

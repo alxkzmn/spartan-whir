@@ -29,6 +29,7 @@ num-bigint = { version = "0.5.1", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std_rng", "sys_rng"] }
 serde = { version = "1", default-features = false, features = ["alloc", "derive", "rc"] }
 serde_json = "1.0"
+sha2 = "0.10"
 tracing = { version = "0.1.44", default-features = false }
 
 [features]
@@ -65,7 +66,6 @@ path = "examples/end_to_end.rs"
 
 [dev-dependencies]
 criterion = "0.8"
-sha2 = "0.10"
 tracing = { version = "0.1.44", features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 trybuild = "1"

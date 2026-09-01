@@ -6,6 +6,10 @@ use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, Whi
 
 pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v0";
 pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v0";
+/// Version of the verifier-visible SPARK matrix-closing transcript contract.
+/// Version 3 uses tagged transcript branches for the fixed-table and read-table
+/// openings.
+pub const SPARK_MATRIX_CLOSING_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatrixClosingMode {
@@ -121,6 +125,9 @@ impl DomainSeparator {
         let mut out = Vec::new();
         out.extend_from_slice(&self.protocol_id);
         out.push(matrix_closing_to_byte(self.matrix_closing));
+        if self.matrix_closing == MatrixClosingMode::Spark {
+            out.push(SPARK_MATRIX_CLOSING_VERSION);
+        }
         out.extend_from_slice(&(self.num_cons as u64).to_le_bytes());
         out.extend_from_slice(&(self.num_vars as u64).to_le_bytes());
         out.extend_from_slice(&(self.num_io as u64).to_le_bytes());

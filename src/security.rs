@@ -5,7 +5,7 @@ use crate::{
     engine::ExtField,
     error::{InvalidConfigReason, SecurityBoundComponent},
     protocol::SparkPcsConfigs,
-    spark::SparkTableMetadata,
+    spark::{spark_fixed_audit_is_embedded, SparkTableMetadata},
     whir_params::whir_folding_round_count,
     WhirPcsConfig,
 };
@@ -112,11 +112,11 @@ where
     )
 }
 
-/// Derive per-argument targets for the four WHIR arguments in a SPARK proof.
+/// Derive per-argument targets for the WHIR arguments in a SPARK proof.
 ///
-/// The composed error budget reserves one half for algebraic checks and one
-/// quarter each for WHIR soundness and Merkle binding. All arithmetic that
-/// counts protocol events is checked integer arithmetic.
+/// The composed error budget is divided equally between algebraic checks,
+/// WHIR soundness, and Merkle binding. All arithmetic that counts protocol
+/// events is checked integer arithmetic.
 pub(crate) fn derive_spark_component_security<Ext>(
     requested: &SecurityConfig,
     metadata: &SparkTableMetadata,
@@ -167,32 +167,49 @@ where
         spark_configs.fixed_value.num_variables,
         &spark_configs.fixed_value.whir,
     )?;
-    let fixed_audit_rounds = whir_folding_round_count(
-        spark_configs.fixed_audit.num_variables,
-        &spark_configs.fixed_audit.whir,
+    let fixed_audit_embedded = spark_fixed_audit_is_embedded(
+        metadata.value_domain_size,
+        metadata.row_memory_size,
+        metadata.col_memory_size,
+    );
+    let fixed_audit_rounds = if fixed_audit_embedded {
+        None
+    } else {
+        Some(whir_folding_round_count(
+            spark_configs.fixed_audit.num_variables,
+            &spark_configs.fixed_audit.whir,
+        )?)
+    };
+    let read_commitment_events = spark_configs.read.iter().try_fold(
+        0usize,
+        |events, config| -> Result<usize, SpartanWhirError> {
+            let rounds = whir_folding_round_count(config.num_variables, &config.whir)?;
+            events
+                .checked_add(rounds.checked_add(1).ok_or_else(composed_budget_overflow)?)
+                .ok_or_else(composed_budget_overflow)
+        },
     )?;
-    let read_rounds =
-        whir_folding_round_count(spark_configs.read.num_variables, &spark_configs.read.whir)?;
-    let table_commitment_events = fixed_value_rounds
+    let mut table_commitment_events = fixed_value_rounds
         .checked_add(1)
-        .and_then(|events| {
-            fixed_audit_rounds
-                .checked_add(1)
-                .and_then(|audit| events.checked_add(audit))
-        })
-        .and_then(|events| {
-            read_rounds
-                .checked_add(1)
-                .and_then(|read| events.checked_add(read))
-        })
+        .and_then(|events| events.checked_add(read_commitment_events))
         .ok_or_else(composed_budget_overflow)?;
+    if let Some(rounds) = fixed_audit_rounds {
+        table_commitment_events = table_commitment_events
+            .checked_add(rounds.checked_add(1).ok_or_else(composed_budget_overflow)?)
+            .ok_or_else(composed_budget_overflow)?;
+    }
     let witness_commitment_events = witness_commitment_events(witness_rounds, mode)?;
     let commitment_binding_events = table_commitment_events
         .checked_add(witness_commitment_events)
         .ok_or_else(composed_budget_overflow)?;
 
-    // Fixed value, fixed audit, shared read-table, and witness/relation.
-    let whir_argument_count = 4usize;
+    // Embedded audit tables share the fixed value argument. Read coordinates
+    // use one argument per power-of-two group.
+    let whir_argument_count = spark_configs
+        .read
+        .len()
+        .checked_add(if fixed_audit_embedded { 2 } else { 3 })
+        .ok_or_else(composed_budget_overflow)?;
     compose_security_budget::<Ext>(
         requested,
         algebraic_error_terms,
@@ -235,11 +252,11 @@ fn witness_commitment_events(
 ) -> Result<usize, SpartanWhirError> {
     match mode {
         SpartanSoundnessMode::NoZk => witness_rounds.checked_add(1),
-        // Witness, one application mask root, n+1 sumcheck-mask roots,
-        // two roots per code-switch round, and three base-case fresh roots.
+        // Three top-level roots, n+1 relation sumcheck-mask roots, two roots
+        // per code-switch round, and 2n+4 base-case fresh roots.
         SpartanSoundnessMode::FullZk { .. } => witness_rounds
-            .checked_mul(3)
-            .and_then(|events| events.checked_add(6)),
+            .checked_mul(5)
+            .and_then(|events| events.checked_add(8)),
     }
     .ok_or_else(composed_budget_overflow)
 }
@@ -257,10 +274,10 @@ where
         return Err(composed_budget_overflow());
     }
     let requested_bits = requested.effective_security_bits();
-    let whir_slack_bits = quarter_budget_slack(whir_argument_count)?;
-    let merkle_slack_bits = quarter_budget_slack(commitment_binding_events)?;
+    let whir_slack_bits = three_way_budget_slack(whir_argument_count)?;
+    let merkle_slack_bits = three_way_budget_slack(commitment_binding_events)?;
 
-    let field_denominator = BigUint::from(algebraic_error_terms) << 1usize;
+    let field_denominator = BigUint::from(algebraic_error_terms) * BigUint::from(3u8);
     let field_quotient = Ext::order() / field_denominator;
     let field_attainable = field_quotient.bits().saturating_sub(1).min(u32::MAX as u64) as u32;
     let whir_attainable = MAX_SECURITY_BITS.saturating_sub(whir_slack_bits);
@@ -310,8 +327,8 @@ where
     Ok((component_security, budget))
 }
 
-fn quarter_budget_slack(events: usize) -> Result<u32, SpartanWhirError> {
-    let weighted = events.checked_mul(4).ok_or_else(composed_budget_overflow)?;
+fn three_way_budget_slack(events: usize) -> Result<u32, SpartanWhirError> {
+    let weighted = events.checked_mul(3).ok_or_else(composed_budget_overflow)?;
     Ok(usize::BITS - weighted.saturating_sub(1).leading_zeros())
 }
 
@@ -337,9 +354,9 @@ mod composed_tests {
         let (internal, budget) =
             compose_security_budget::<OcticBinExtension>(&config(100), 1_000, 5, 25)
                 .expect("budget is attainable");
-        assert_eq!(internal.security_level_bits, 105);
+        assert_eq!(internal.security_level_bits, 104);
         assert_eq!(internal.merkle_security_bits, 107);
-        assert_eq!(budget.whir_slack_bits, 5);
+        assert_eq!(budget.whir_slack_bits, 4);
         assert_eq!(budget.merkle_slack_bits, 7);
     }
 
@@ -359,10 +376,24 @@ mod composed_tests {
             compose_security_budget::<OcticBinExtension>(&requested, 42, 1, 10)
                 .expect("DirectSparse budget is attainable");
         assert_eq!(internal.security_level_bits, 102);
-        assert_eq!(internal.merkle_security_bits, 106);
+        assert_eq!(internal.merkle_security_bits, 105);
         assert_eq!(budget.whir_argument_count, 1);
         assert_eq!(budget.whir_slack_bits, 2);
-        assert_eq!(budget.merkle_slack_bits, 6);
+        assert_eq!(budget.merkle_slack_bits, 5);
+    }
+
+    #[test]
+    fn full_zk_counts_every_poseidon_commitment() {
+        let events = witness_commitment_events(5, SpartanSoundnessMode::FullZk { inner_degree: 3 })
+            .expect("commitment count fits");
+        assert_eq!(events, 33);
+
+        let (internal, budget) =
+            compose_security_budget::<OcticBinExtension>(&config(116), 100, 1, events)
+                .expect("116-bit target remains attainable");
+        assert_eq!(internal.security_level_bits, 118);
+        assert_eq!(internal.merkle_security_bits, 123);
+        assert_eq!(budget.merkle_slack_bits, 7);
     }
 
     #[test]

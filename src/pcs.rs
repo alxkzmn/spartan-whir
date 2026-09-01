@@ -80,27 +80,29 @@ pub trait ProtocolPcs<E: SpartanWhirEngine>: MlePcs<E> {
     ) -> Result<(), SpartanWhirError>;
 }
 
-/// Plain PCS support for SPARK's two read tables.
+/// Plain PCS support for one power-of-two group of SPARK read coordinates.
 ///
-/// The logical row and column tables share one commitment and one opening
-/// argument. Their extension-field entries are supplied as one column-major
-/// base-coordinate buffer, with all row-table coordinates followed by all
-/// column-table coordinates. The opening points are fixed by the surrounding
-/// SPARK transcript before this interface is called.
+/// The surrounding protocol decomposes all row and column coordinates into
+/// power-of-two groups. Each group has one commitment and one opening argument.
+/// Opening column lists and points are fixed by the surrounding SPARK
+/// transcript before this interface is called.
 pub trait SparkReadPcs<E: SpartanWhirEngine>: ProtocolPcs<E, Config = WhirPcsConfig> {
     type ReadProverData;
     type ParsedReadCommitment;
 
-    fn commit_read_tables(
+    fn commit_read_table(
         config: &WhirPcsConfig,
         coordinate_columns: Evaluations<E::F>,
         domain_size: usize,
+        column_count: usize,
         challenger: &mut E::Challenger,
     ) -> Result<(Self::Commitment, Self::ReadProverData), SpartanWhirError>;
 
-    fn open_read_tables(
+    fn open_read_table(
         config: &WhirPcsConfig,
         prover_data: Self::ReadProverData,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[MultilinearPoint<E::EF>],
         challenger: &mut E::Challenger,
     ) -> Result<(Self::Proof, Vec<Vec<E::EF>>), SpartanWhirError>;
@@ -112,10 +114,12 @@ pub trait SparkReadPcs<E: SpartanWhirEngine>: ProtocolPcs<E, Config = WhirPcsCon
         challenger: &mut E::Challenger,
     ) -> Result<Self::ParsedReadCommitment, SpartanWhirError>;
 
-    fn verify_finalize_read_tables(
+    fn verify_finalize_read_table(
         config: &WhirPcsConfig,
         parsed: &Self::ParsedReadCommitment,
         proof: &Self::Proof,
+        column_count: usize,
+        opening_columns: &[Vec<usize>],
         points: &[MultilinearPoint<E::EF>],
         evals: &[Vec<E::EF>],
         challenger: &mut E::Challenger,

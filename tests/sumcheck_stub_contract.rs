@@ -184,7 +184,7 @@ fn inner_sumcheck_roundtrip_and_round_count_guard() {
 #[test]
 fn eq_polynomial_table_generation_is_consistent() {
     let point = vec![EF::from(F::from_u32(3)), EF::from(F::from_u32(5))];
-    let table = EqPolynomial::evals_from_point(&point);
+    let table = EqPolynomial::evals_from_point_with_base::<F>(&point);
     assert_eq!(table.len(), 4);
 
     let eval = evaluate_mle_table(&table, &point).unwrap();

@@ -18,9 +18,9 @@
 */
 
 /*
- * For Boolean a, b, and c, the multiplier in this row is always one of
- * +/-1, +/-2, or +/-3. The row therefore uniquely determines out as the
- * Boolean three-input XOR without a separate intermediate product.
+ * For Boolean a, b, and c, -6 + 3*a + 4*b + 5*c is always one of
+ * +/-1, +/-2, +/-3, or +/-6. The row therefore uniquely determines out as
+ * the Boolean three-input XOR without a separate intermediate product.
  */
 pragma circom 2.0.0;
 
@@ -32,8 +32,8 @@ template Xor3(n) {
 
     for (var k=0; k<n; k++) {
         out[k] <-- (a[k] + b[k] + c[k]) & 1;
-        6*a[k] + 6*b[k] - 24*c[k] ===
-            (out[k] + 2*a[k] + 2*b[k] + 7*c[k]) * (a[k] + b[k] - 4*c[k] + 1);
+        (-6 + 3*a[k] + 4*b[k] + 5*c[k]) *
+            (5*out[k] + 1 - 4*a[k] - 3*b[k]) === -6;
     }
 }
 
@@ -52,9 +52,8 @@ template Xor3ZeroTail(n, live) {
     for (var k=0; k<n; k++) {
         if (k < live) {
             out[k] <-- (a[k] + b[k] + c[k]) & 1;
-            6*a[k] + 6*b[k] - 24*c[k] ===
-                (out[k] + 2*a[k] + 2*b[k] + 7*c[k]) *
-                    (a[k] + b[k] - 4*c[k] + 1);
+            (-6 + 3*a[k] + 4*b[k] + 5*c[k]) *
+                (5*out[k] + 1 - 4*a[k] - 3*b[k]) === -6;
         } else {
             c[k] === 0;
             out[k] <-- (a[k] + b[k]) & 1;

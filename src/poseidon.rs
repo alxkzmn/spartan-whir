@@ -223,7 +223,10 @@ impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
                     .ok_or_else(SpartanWhirError::invalid_config)?;
                 configs.fixed_value.validate()?;
                 configs.fixed_audit.validate()?;
-                configs.read.validate()?;
+                configs
+                    .read
+                    .iter()
+                    .try_for_each(|config| config.validate())?;
                 if self.spark_fixed_commitments.is_none() {
                     return Err(SpartanWhirError::invalid_config());
                 }
@@ -231,10 +234,13 @@ impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
                     Some(params)
                         if configs.fixed_value.whir == params.fixed_value
                             && configs.fixed_audit.whir == params.fixed_audit
-                            && configs.read.whir == params.read => {}
+                            && configs.read.iter().all(|config| config.whir == params.read) => {}
                     None if configs.fixed_value.whir == self.whir_params
                         && configs.fixed_audit.whir == self.whir_params
-                        && configs.read.whir == self.whir_params => {}
+                        && configs
+                            .read
+                            .iter()
+                            .all(|config| config.whir == self.whir_params) => {}
                     _ => return Err(SpartanWhirError::invalid_config()),
                 }
                 let metadata = self
@@ -255,7 +261,10 @@ impl<Ext: ExtField> PoseidonZkVerifyingKey<Ext> {
                 if self.pcs_config.base.security != expected_security
                     || configs.fixed_value.security != expected_security
                     || configs.fixed_audit.security != expected_security
-                    || configs.read.security != expected_security
+                    || configs
+                        .read
+                        .iter()
+                        .any(|config| config.security != expected_security)
                 {
                     return Err(SpartanWhirError::invalid_config());
                 }
@@ -552,7 +561,23 @@ where
         + FieldChallenger<F>
         + GrindingChallenger<Witness = F>,
 {
-    pub fn verify(&self, proof: &PoseidonProof<Ext>) -> Result<(), SpartanWhirError> {
+    /// Verify a proof against public inputs selected by the verifier.
+    ///
+    /// The caller must obtain `expected_public_inputs` from the application or
+    /// another trusted statement source, not from the party supplying `proof`.
+    pub fn verify(
+        &self,
+        expected_public_inputs: &[F],
+        proof: &PoseidonProof<Ext>,
+    ) -> Result<(), SpartanWhirError> {
+        if expected_public_inputs.len() != self.num_io()
+            || proof.instance.public_inputs.len() != self.num_io()
+        {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if proof.instance.public_inputs != expected_public_inputs {
+            return Err(SpartanWhirError::PublicInputMismatch);
+        }
         let mut challenger = poseidon_challenger();
         SpartanProtocol::<PoseidonEngine<Ext>, Plonky3WhirPcs>::verify_with_mode(
             self,
@@ -618,7 +643,23 @@ where
     StandardUniform: Distribution<Ext> + Distribution<F>,
     PoseidonChallenger: CanObserve<PoseidonCommitment>,
 {
-    pub fn verify(&self, proof: &PoseidonZkProof<Ext>) -> Result<(), SpartanWhirError> {
+    /// Verify a proof against public inputs selected by the verifier.
+    ///
+    /// The caller must obtain `expected_public_inputs` from the application or
+    /// another trusted statement source, not from the party supplying `proof`.
+    pub fn verify(
+        &self,
+        expected_public_inputs: &[F],
+        proof: &PoseidonZkProof<Ext>,
+    ) -> Result<(), SpartanWhirError> {
+        if expected_public_inputs.len() != self.num_io
+            || proof.instance.public_inputs.len() != self.num_io
+        {
+            return Err(SpartanWhirError::InvalidPublicInputLength);
+        }
+        if proof.instance.public_inputs != expected_public_inputs {
+            return Err(SpartanWhirError::PublicInputMismatch);
+        }
         let mut challenger = poseidon_challenger();
         PoseidonZkSpartanProtocol::<Ext>::verify(
             self,

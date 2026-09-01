@@ -1061,7 +1061,7 @@ mod tests {
             .into_iter()
             .map(|v| EF::from(F::from_u32(v)))
             .collect();
-        let eq_rx = EqPolynomial::evals_from_point(&point);
+        let eq_rx = EqPolynomial::evals_from_point_with_base::<F>(&point);
         let r = EF::from(F::from_u32(19));
 
         let layout = shape.direct_bind_layout().expect("layout builds");

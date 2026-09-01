@@ -12,12 +12,13 @@ use libloading::Library;
 use p3_field::PrimeField32;
 use sha2::{Digest, Sha256};
 use spartan_whir::{
-    compare_spark_layouts, engine::F, import_r1cs_path, recommended_octic_spark_fixed_whir_params,
+    compare_spark_layouts, engine::F, format_whir_params_label, import_r1cs_path,
+    parse_whir_params_label, recommended_octic_spark_fixed_whir_params,
     recommended_octic_spark_read_whir_params, recommended_octic_whir_params,
     recommended_octic_zk_whir_params, MatrixClosingMode, OcticBinExtension,
     PoseidonSpartanProtocol, PoseidonWitnessGenerator, PoseidonZkProvingKey, PoseidonZkSetupConfig,
     PoseidonZkSpartanProtocol, R1csShape, SecurityConfig, SoundnessAssumption, SparkLayoutDecision,
-    SparkWhirParams, SpartanSnarkConfig, WhirFoldingSchedule, WhirParams,
+    SparkWhirParams, SpartanSnarkConfig, WhirParams,
 };
 use spartan_whir::{
     protocol::{fixed_audit_column_count, fixed_value_column_bits, read_table_column_bits},
@@ -759,7 +760,7 @@ fn poseidon_direct_configs(
                 ProofMode::FullZk => recommended_octic_zk_whir_params(num_variables),
             };
             return Ok(vec![DirectBenchConfig {
-                label: whir_schedule_label(&whir_params),
+                label: format_whir_params_label("octic", &whir_params),
                 config: protocol_config(MatrixClosingMode::DirectSparse, whir_params, None),
             }]);
         }
@@ -784,98 +785,7 @@ fn poseidon_direct_whir_params_from_label(
     label: &str,
     num_variables: usize,
 ) -> Result<WhirParams, Box<dyn Error>> {
-    let parts = label.split('_').collect::<Vec<_>>();
-    if parts.first() != Some(&"octic") {
-        return Err(format!("unsupported direct schedule label: {label}").into());
-    }
-    let (pow_bits, first, starting_log_inv_rate, rs_domain_initial_reduction_factor, schedule) =
-        match parts.as_slice() {
-            [_, "constant", pow, first, lir, rsv] => {
-                let first = parse_labeled_usize(first, "ff")?;
-                (
-                    parse_labeled_usize(pow, "pow")? as u32,
-                    first,
-                    parse_labeled_usize(lir, "lir")?,
-                    parse_labeled_usize(rsv, "rsv")?,
-                    WhirFoldingSchedule::Constant(first),
-                )
-            }
-            [_, "cfsr", pow, first, rest, lir, rsv] => {
-                let first = parse_labeled_usize(first, "ff")?;
-                (
-                    parse_labeled_usize(pow, "pow")? as u32,
-                    first,
-                    parse_labeled_usize(lir, "lir")?,
-                    parse_labeled_usize(rsv, "rsv")?,
-                    WhirFoldingSchedule::ConstantFromSecondRound {
-                        first,
-                        rest: parse_labeled_usize(rest, "rest")?,
-                    },
-                )
-            }
-            _ => return Err(format!("unsupported direct schedule label: {label}").into()),
-        };
-    Ok(WhirParams {
-        pow_bits,
-        folding_factor: first,
-        starting_log_inv_rate,
-        rs_domain_initial_reduction_factor,
-        folding_schedule: Some(schedule.clone()),
-        round_log_inv_rates: derive_round_log_inv_rates(
-            num_variables,
-            &schedule,
-            starting_log_inv_rate,
-            rs_domain_initial_reduction_factor,
-        ),
-        ..WhirParams::default()
-    })
-}
-
-fn parse_labeled_usize(value: &str, prefix: &str) -> Result<usize, Box<dyn Error>> {
-    let raw = value
-        .strip_prefix(prefix)
-        .ok_or_else(|| format!("expected {prefix} component, got {value}"))?;
-    Ok(raw.parse()?)
-}
-
-fn derive_round_log_inv_rates(
-    num_variables: usize,
-    schedule: &WhirFoldingSchedule,
-    starting_log_inv_rate: usize,
-    rs_domain_initial_reduction_factor: usize,
-) -> Vec<usize> {
-    let num_rounds = derived_folding_schedule_len(num_variables, schedule).saturating_sub(1);
-    let mut rate = starting_log_inv_rate;
-    let mut out = Vec::with_capacity(num_rounds);
-    for round in 0..num_rounds {
-        let Some(folding) = schedule.at_round(round) else {
-            break;
-        };
-        let reduction = if round == 0 {
-            rs_domain_initial_reduction_factor
-        } else {
-            1
-        };
-        rate += folding - reduction;
-        out.push(rate);
-    }
-    out
-}
-
-fn derived_folding_schedule_len(num_variables: usize, schedule: &WhirFoldingSchedule) -> usize {
-    let mut remaining = num_variables;
-    let mut len = 0;
-    for round in 0.. {
-        let Some(folding) = schedule.at_round(round) else {
-            break;
-        };
-        len += 1;
-        remaining = remaining.saturating_sub(folding.min(remaining));
-        if remaining <= spartan_whir::FINAL_SUMCHECK_MAX_VARIABLES {
-            break;
-        }
-    }
-    len
+    Ok(parse_whir_params_label(num_variables, "octic", label)?)
 }
 
 fn spark_protocol_config(
@@ -914,10 +824,10 @@ fn spark_protocol_config(
 
     println!(
         "spark_schedules: witness={} fixed_value={} fixed_audit={} read={}",
-        whir_schedule_label(&witness),
-        whir_schedule_label(&fixed_value),
-        whir_schedule_label(&fixed_audit),
-        whir_schedule_label(&read)
+        format_whir_params_label("octic", &witness),
+        format_whir_params_label("octic", &fixed_value),
+        format_whir_params_label("octic", &fixed_audit),
+        format_whir_params_label("octic", &read)
     );
 
     Ok(protocol_config(
@@ -929,30 +839,6 @@ fn spark_protocol_config(
             read,
         }),
     ))
-}
-
-fn whir_schedule_label(params: &WhirParams) -> String {
-    match params.effective_folding_schedule() {
-        WhirFoldingSchedule::Constant(factor) => format!(
-            "octic_constant_pow{}_ff{factor}_lir{}_rsv{}",
-            params.pow_bits,
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-        WhirFoldingSchedule::ConstantFromSecondRound { first, rest } => format!(
-            "octic_cfsr_pow{}_ff{first}_rest{rest}_lir{}_rsv{}",
-            params.pow_bits,
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-        WhirFoldingSchedule::PerRound(factors) => format!(
-            "octic_per_round_pow{}_factors{:?}_lir{}_rsv{}",
-            params.pow_bits,
-            factors,
-            params.starting_log_inv_rate,
-            params.rs_domain_initial_reduction_factor
-        ),
-    }
 }
 
 fn log2_power_of_two(value: usize) -> Result<usize, Box<dyn Error>> {

@@ -99,7 +99,7 @@ fn poseidon_zk_config(mode: MatrixClosingMode) -> PoseidonZkSetupConfig {
     PoseidonZkSetupConfig {
         matrix_closing: mode,
         security: common::phase3_security(),
-        whir_params: common::phase3_whir_params(),
+        whir_params: common::phase3_zk_whir_params(),
         spark_whir_params: None,
         ell_zk: spartan_whir::DEFAULT_ZK_ELL,
         mask_log_inv_rate: spartan_whir::DEFAULT_ZK_MASK_LOG_INV_RATE,
@@ -551,9 +551,12 @@ fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
 
     let mut tampered = proof.clone();
     let closing = spark_closing_mut(&mut tampered);
-    let mut roots = closing.spark_read_openings.commitment.roots().to_vec();
+    let mut roots = closing.spark_read_openings.groups[0]
+        .commitment
+        .roots()
+        .to_vec();
     roots[0][0] += F::ONE;
-    closing.spark_read_openings.commitment = p3_symmetric::MerkleCap::new(roots);
+    closing.spark_read_openings.groups[0].commitment = p3_symmetric::MerkleCap::new(roots);
     verify_zk_rejects(&vk, &instance, &tampered);
 
     let mut tampered = proof.clone();
@@ -564,9 +567,7 @@ fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
     verify_zk_rejects(&vk, &instance, &tampered);
 
     let mut tampered = proof.clone();
-    *spark_closing_mut(&mut tampered)
-        .spark_read_openings
-        .erow_low_evals
+    *spark_closing_mut(&mut tampered).spark_read_openings.groups[0].evals[0]
         .first_mut()
         .expect("read-table opening has a low evaluation") += EF::ONE;
     verify_zk_rejects(&vk, &instance, &tampered);
@@ -581,8 +582,7 @@ fn poseidon_full_zk_spark_rejects_tampered_closing_payloads() {
     verify_zk_rejects(&vk, &instance, &tampered);
 
     let mut tampered = proof.clone();
-    *spark_closing_mut(&mut tampered)
-        .spark_read_openings
+    *spark_closing_mut(&mut tampered).spark_read_openings.groups[0]
         .proof
         .initial_ood_answers
         .first_mut()
@@ -668,8 +668,10 @@ fn poseidon_full_zk_spark_seed_controls_transcript() {
         bincode::serialize(&first).expect("first proof serializes"),
         bincode::serialize(&other).expect("other proof serializes")
     );
-    vk.verify(&first).expect("first proof verifies");
-    vk.verify(&other).expect("other proof verifies");
+    vk.verify(&first.instance.public_inputs, &first)
+        .expect("first proof verifies");
+    vk.verify(&other.instance.public_inputs, &other)
+        .expect("other proof verifies");
 }
 
 #[test]
@@ -795,6 +797,33 @@ fn poseidon_spark_plonky3_whir_roundtrip() {
 
     Protocol::verify_spark(&vk, &instance, &proof, &mut verifier_challenger)
         .expect("Poseidon Spark verify succeeds");
+}
+
+#[test]
+fn poseidon_full_zk_quintic_spark_roundtrip_uses_two_read_commitments() {
+    type QuinticProtocol = PoseidonZkSpartanProtocol<QuinticExtension>;
+    let fixture = fixture();
+    let (pk, vk) = setup_poseidon_zk::<QuinticExtension>(
+        fixture.shape,
+        poseidon_zk_config(MatrixClosingMode::Spark),
+    )
+    .expect("quintic full-ZK SPARK setup succeeds");
+    let mut prover_challenger = spartan_whir::poseidon_challenger();
+    let (instance, proof) = QuinticProtocol::prove(
+        &pk,
+        &fixture.public_inputs,
+        &fixture.witness,
+        &mut prover_challenger,
+    )
+    .expect("quintic full-ZK SPARK proof succeeds");
+    let ZkMatrixClosingProof::Spark(closing) = &proof.matrix_closing else {
+        panic!("expected SPARK closing payload");
+    };
+    assert_eq!(closing.spark_read_openings.groups.len(), 2);
+
+    let mut verifier_challenger = spartan_whir::poseidon_challenger();
+    QuinticProtocol::verify(&vk, &instance, &proof, &mut verifier_challenger)
+        .expect("quintic full-ZK SPARK proof verifies");
 }
 
 #[test]

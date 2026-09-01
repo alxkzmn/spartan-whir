@@ -8,43 +8,43 @@
 - competitive for client-side proving,
 - suitable for comparison benchmarks against other WHIR-based systems.
 
-There are two client-side SNARK lines to keep separate:
+The two matrix-closing variants have different optimization objectives:
 
-- The current off-chain verification line is a pure client-side SNARK. For this line, optimize WHIR schedules primarily for prover speed while keeping RAM low enough for mobile feasibility.
-- A later recursive/on-chain-targeted line may care more about proof size and verifier-facing calldata, but that is contingent on future recursion/on-chain research and is not the default schedule-selection objective today.
+- DirectSparse prioritizes client-side proving time. Proof size and recursive verification cost are not selection criteria for DirectSparse.
+- Spark balances client-side proving performance with recursion friendliness. Evaluate proof size and the work imposed on the recursive verifier together with prover time.
 
-Proof size and verifier-facing calldata are primary optimization targets only for SNARK paths that explicitly target on-chain deployment or recursive verification toward on-chain deployment. For the current off-chain client-side schedule work, use proof size only as a deterministic tie-breaker behind projected proving time.
+On-chain verification targets the final recursive root proof produced by a separate wrapper SNARK. That wrapper and direct EVM verification are outside this repository.
 
 ## Default Path Invariants
 
-- Keep the current off-chain client-side default path aligned with fast proving and feasible memory use.
+- Keep DirectSparse aligned with fast client-side proving and feasible memory use.
+- Keep Spark aligned with both client-side proving and recursive verification.
 - Keep the no-ZK and full-ZK APIs separate.
 - Unqualified `Plonky3WhirPcs` means plain WHIR and is the no-ZK PCS. Full ZK uses dedicated Poseidon ZK keys and the lower-level hiding-WHIR committed-relation APIs.
 - Treat privacy and matrix closing as independent axes: no ZK and full ZK both support DirectSparse and Spark.
-- Preserve verifier-facing protocol details deliberately, but do not treat EVM verifier efficiency as the default objective for the off-chain client-side line.
+- Preserve verifier-facing protocol details deliberately, including the proof structure consumed by a recursive verifier.
 - Do not switch transcript, hash, or commitment choices as a refactor convenience. Treat those as protocol choices that need an explicit benchmark or verifier-design reason.
-- For explicitly on-chain-targeted or recursive/on-chain-targeted paths, keep the transcript and commitment choices aligned with that verifier story.
 - Treat transcript ordering, proof encoding, digest layout, and other verifier-facing details as protocol surface, not incidental implementation details.
-- The project is still pre-production / PoC. Protocol-surface changes are allowed when they improve the design, reduce meaningful complexity, or improve verifier/prover tradeoffs. Do not block them solely to preserve existing unpublished proofs or fixtures; instead, call out what changes and update affected Rust proof structs, codecs, tests, and benchmark fixtures.
+- The project is pre-production / PoC. Protocol-surface changes are allowed when they improve the design, reduce meaningful complexity, or improve the applicable DirectSparse or Spark objective. Do not block them solely to preserve existing unpublished proofs or fixtures; instead, call out what changes and update affected Rust proof structs, codecs, tests, and benchmark fixtures.
 
 ## What Is Flexible
 
-- Field choices, extension choices, proof-system tuning, and internal structure may evolve when supported by benchmarks and verifier-cost reasoning.
+- Field choices, extension choices, proof-system tuning, and internal structure may evolve when supported by client-side prover benchmarks and, for Spark, recursion analysis.
 - Additive experimental paths are welcome when they are clearly separated from the default path.
-- If you want to try a non-EVM-oriented primitive or alternative challenger, add it as an explicit experiment, feature, or separate API instead of silently changing the default.
+- Add alternative primitives or challengers as explicit experiments, features, or separate APIs instead of silently changing the default.
 
 ## Refactoring Rules
 
 - Do not broaden abstractions around cryptographic backends unless there is a concrete need in this crate.
 - Do not make "cleanups" that change verifier-relevant behavior without calling that out explicitly.
-- If a change can affect verifier gas, calldata size, proof size, transcript compatibility, or benchmark comparability, state that impact in your summary.
+- If a change can affect client-side proving, recursive verifier work, proof size, transcript compatibility, or benchmark comparability, state that impact in your summary. Recursive verifier work and proof size are optimization criteria for Spark, not DirectSparse.
 - When changing extension choices or adding a new extension, document extension-specific algebraic limits and support level explicitly. This includes `TWO_ADICITY`-dependent behavior, skip-path feasibility, and which paths are currently exercised by tests or benchmarks.
 - Prefer changes that keep `spartan-whir` representative for future client-side proving comparison benchmarks.
 
 ## Docs and Benchmarks
 
 - When you add, rename, or materially change a public benchmark target or its environment knobs, update `README.md` in the same change.
-- Keep schedule calibration, candidate search, heldout validation, Pareto exploration, and model-interpretation workflows in this file rather than `README.md`.
+- Keep schedule calibration, candidate search, heldout validation, schedule tradeoff analysis, and model-interpretation workflows in this file rather than `README.md`.
 - Keep benchmark commands, benchmark target names, environment knobs, and output examples aligned with the code.
 - For SHA256 comparisons across no-ZK/full-ZK and DirectSparse/Spark, use the Criterion target with native CPU tuning:
   `RUSTFLAGS='-C target-cpu=native -C debuginfo=0' SHA256_BENCH_WORKDIR=target/sha256-optimized-cache cargo bench --features parallel --bench sha256_full_zk`.
@@ -52,11 +52,12 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
   that benchmark:
   `tests/circuits/build_sha256_optimized_fixture.sh ../circom/target/release/circom`.
 - The Criterion target only loads existing circuit artifacts from `SHA256_BENCH_WORKDIR`; it must not compile the circuit as part of a benchmark run. Use `sha256_bench` for schedule screening and detailed tracing, and treat its `Instant` timings as diagnostic rather than comparison results.
-- The default `SHA256_ZK_BENCH_EXTENSION=selected` run uses quintic DirectSparse and octic Spark with the selected per-mode schedules. Set `SHA256_ZK_BENCH_EXTENSION=octic|quintic` to run all four variants over one extension. In a forced single-extension run, `SHA256_ZK_BENCH_SCHEDULE` applies one schedule to every variant; the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` values override it.
-- For an independent DirectSparse schedule measurement, set `SHA256_ZK_BENCH_PROVING_ONLY=1`, `SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct|full_zk_direct`, and `SHA256_ZK_BENCH_SECURITY_BITS=<end-to-end target>`. This constructs only the selected DirectSparse key, so the run does not depend on another mode accepting the same extension or schedule.
+- The default `SHA256_ZK_BENCH_EXTENSION=selected` run uses quintic DirectSparse and quintic Spark with the selected per-mode schedules. Set `SHA256_ZK_BENCH_EXTENSION=octic|quintic` to run all four variants over one extension, or `SHA256_ZK_BENCH_EXTENSION=spark` to compare quintic and octic Spark in one invocation. In a forced single-extension run, `SHA256_ZK_BENCH_SCHEDULE` applies one schedule to every witness variant; the variant-specific `SHA256_ZK_BENCH_{NO_ZK_DIRECT,NO_ZK_SPARK,FULL_ZK_DIRECT,FULL_ZK_SPARK}_SCHEDULE` values override it. `SHA256_ZK_BENCH_SPARK_{FIXED_VALUE,FIXED_AUDIT,READ}_SCHEDULE` overrides the corresponding SPARK table schedule.
+- For an independent schedule measurement, set `SHA256_ZK_BENCH_PROVING_ONLY=1`, `SHA256_ZK_BENCH_SINGLE_PROVING_VARIANT=no_zk_direct|full_zk_direct|no_zk_spark|full_zk_spark`, and `SHA256_ZK_BENCH_SECURITY_BITS=<end-to-end target>`. This constructs only the selected configuration and key, so the run does not depend on another mode accepting the same extension or schedule.
 - Profile the 2048-byte full-ZK Spark path without rebuilding the circuit with:
   `SHA256_BENCH_WORKDIR=target/sha256-optimized-cache SHA256_BENCH_REUSE_ARTIFACTS=1 SHA256_BENCH_SIZES=2048 SHA256_BENCH_PROOF_MODES=full-zk SHA256_BENCH_MODES=spark SHA256_BENCH_SECURITY_BITS=116 SHA256_BENCH_PROFILE=1 SHA256_BENCH_PROFILE_DETAIL=1 RUSTFLAGS='-C target-cpu=native -C debuginfo=0' cargo run --release --features parallel --example sha256_bench`.
 - Benchmark/profiling output intended for direct human inspection should be stable and human-readable. Prefer labeled `key: value` fields and clear tree/group structure over raw debug dumps.
+- Record accepted benchmark comparisons under `benchmark-results/` with the workload, commit or working-tree description, machine, toolchain, flags, sample count, confidence intervals, proof sizes, and exact commands. Update the current result snapshot in `README.md` when it quotes an affected measurement. Keep the control measurements in the dated result so later work can recover the baseline numbers without rerunning that checkout.
 - If a benchmark fixture is only shape-similar to a real circuit, document that approximation explicitly instead of describing it as the real circuit.
 - Keep `README.md` focused on the current codebase state rather than changelog-style history; describe the format and behavior that exist now.
 - Any protocol change that affects Spark fixed-table commitments must regenerate serialized `spark_fixed_commitments` and fixtures containing them.
@@ -66,14 +67,15 @@ Proof size and verifier-facing calldata are primary optimization targets only fo
 The Poseidon Plonky3-WHIR prover uses an offline schedule-scoring workflow with
 Johnson-bound soundness. The component scorer ranks one WHIR commitment at a
 time. Full-ZK Spark uses `poseidon_spark_schedule_scorer.py` to compose the
-witness, fixed-value, fixed-audit, and combined-read reports. The scorers are
+witness, fixed-value, fixed-audit, and read reports. The scorers are
 not part of setup. Generate and measure schedules for the target circuit, then
 pass the selected setup configuration into setup.
 
-Optimize the client-side line for prover time while keeping memory feasible.
-Use proof size as a deterministic tie-breaker between schedules whose measured
-proving times overlap. Use the linked native witness generator for end-to-end
-client benchmarks; reserve `.wtns` inputs for schedule-model calibration.
+For DirectSparse, optimize prover time while keeping memory feasible. Do not use
+proof size or recursive verifier cost to select a DirectSparse schedule. For
+Spark, retain candidates that balance prover time, proof size, and recursive
+verifier work. Use the linked native witness generator for end-to-end client
+benchmarks; reserve `.wtns` inputs for schedule-model calibration.
 Rerun component calibration after changes to Plonky3 kernels, SPARK batching,
 or the number or shape of commitments and openings represented by the model.
 Do not rank schedules with calibration data from a different implementation.
@@ -96,6 +98,7 @@ RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 cargo run --release --features parallel -q --bin poseidon-schedule-candidates -- \
   --num-variables 19 \
   --field koalabear \
+  --extension quintic \
   --security-bits 116 \
   --merkle-security-bits 116 \
   --max-pow-bits 22 \
@@ -107,10 +110,19 @@ Use `--proof-mode full-zk` for schedules that must satisfy hiding-WHIR mask
 slack and extension-field two-adicity limits. The fallback parameter helpers
 are `recommended_quintic_whir_params` and
 `recommended_quintic_zk_whir_params` for DirectSparse,
-`recommended_octic_whir_params` and `recommended_octic_zk_whir_params` for the
-Spark witness, `recommended_octic_spark_fixed_whir_params` for fixed tables,
-and `recommended_octic_spark_read_whir_params` for read tables. Use
-scheduler-selected `WhirParams` for benchmarked deployments.
+`recommended_quintic_spark_whir_params` and
+`recommended_quintic_spark_zk_whir_params` for the Spark witness,
+`recommended_quintic_spark_fixed_whir_params` for fixed tables, and
+`recommended_quintic_spark_read_whir_params` for read tables. The corresponding
+octic helpers are explicit octic controls and fallbacks. Use scheduler-selected
+`WhirParams` for benchmarked deployments.
+
+Use `--extension quartic|quintic|octic` to bound a candidate file or component
+report to one extension; the default is `all`. The scorer passes this option to
+the Rust candidate generator. `--round-log-inv-rate-offset-max N` keeps offset
+zero as the backend-derived schedule with an empty `round_log_inv_rates` list
+and also searches explicit schedules formed by adding each offset from one
+through `N` to every backend-derived round rate.
 
 DirectSparse searches interpret `--security-bits` and
 `--merkle-security-bits` as end-to-end targets and derive the stronger WHIR
@@ -124,6 +136,8 @@ python3 scripts/poseidon_schedule_scorer.py \
   --candidates /tmp/poseidon-candidates.json \
   --calibration /tmp/poseidon-calibration.json \
   --constraint-work 483648 \
+  --case-label circuit \
+  --workload-r1cs circuit.r1cs \
   --out-report /tmp/poseidon-report.json \
   --out-config /tmp/poseidon-config.json
 ```
@@ -134,33 +148,46 @@ grid:
 ```bash
 python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 20 \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
   --constraint-work 605424 \
+  --case-label sha256_2048b \
+  --workload-r1cs target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs \
   --security-bits 116 \
   --merkle-security-bits 116 \
   --proof-mode full-zk \
+  --round-log-inv-rate-offset-max 3 \
+  --reference-label quintic_cfsr_pow4_ff8_rest6_lir1_rsv6_round_log_inv_rates_4 \
   --measurement-shortlist-margin-ratio 0.01 \
   --out-report /tmp/poseidon-zk-report.json \
   --out-config /tmp/poseidon-zk-config.json
 ```
 
+Pass `--reference-label <accepted-label>` once for each accepted baseline or
+finalist that must remain in `measurement_shortlist` even when it lies outside
+the model margin. The option is repeatable and rejects labels that are absent
+from the accepted candidate rows.
+
 The default ZK sweep is `ell_zk = 3,4,8,16` and
 `mask_log_inv_rate = 1,2,3,4,5`. Include low mask rates in the sweep and let
 the backend slack checks reject invalid rows.
 
+#### Spark component reports
+
 For the 2048-byte Spark workload at 116-bit composed security, score the
-witness, fixed-value, fixed-audit, and combined-read arguments independently.
-Their variable counts are 20, 25, 22, and 26. The composed budget requires
-120-bit WHIR components and 123-bit Merkle binding. The table reports are
-shared by both privacy modes; generate a witness report for each privacy mode.
-Component searches omit `--out-config`; the Spark composer produces the
-standalone setup configuration:
+witness, fixed-value, fixed-audit, and each read group independently. Their
+variable counts are 20, 25, 22, 25, and 23. The composed budget requires
+120-bit WHIR components and 123-bit Merkle binding. Generate separate reports
+for both read groups even though the protocol stores one shared read schedule.
+The table reports are shared by both privacy modes; generate a witness report
+for each privacy mode. Component searches omit `--out-config`:
 
 ```bash
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 20 \
   --field koalabear \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
   --out-report /tmp/spark-witness-no-zk.json \
   --max-pow-bits 22 \
@@ -169,12 +196,16 @@ python3 scripts/poseidon_schedule_scorer.py \
   --component-security-bits 120 \
   --component-merkle-security-bits 123 \
   --constraint-work 605424 \
-  --proof-mode no-zk
+  --case-label sha256_2048b \
+  --workload-r1cs target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs \
+  --proof-mode no-zk \
+  --reference-label quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived
 
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 20 \
   --field koalabear \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
   --out-report /tmp/spark-witness-full-zk.json \
   --max-pow-bits 22 \
@@ -183,14 +214,19 @@ python3 scripts/poseidon_schedule_scorer.py \
   --component-security-bits 120 \
   --component-merkle-security-bits 123 \
   --constraint-work 605424 \
+  --case-label sha256_2048b \
+  --workload-r1cs target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs \
   --proof-mode full-zk \
   --zk-ell-values 3 \
-  --zk-mask-log-inv-rate-values 3
+  --zk-mask-log-inv-rate-values 3 \
+  --round-log-inv-rate-offset-max 3 \
+  --reference-label quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived
 
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 25 \
   --field koalabear \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
   --out-report /tmp/spark-fixed-value.json \
   --max-pow-bits 22 \
@@ -198,12 +234,14 @@ python3 scripts/poseidon_schedule_scorer.py \
   --merkle-security-bits 116 \
   --component-security-bits 120 \
   --component-merkle-security-bits 123 \
-  --proof-mode no-zk
+  --proof-mode no-zk \
+  --reference-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived
 
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
   --num-variables 22 \
   --field koalabear \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
   --out-report /tmp/spark-fixed-audit.json \
   --max-pow-bits 22 \
@@ -211,31 +249,84 @@ python3 scripts/poseidon_schedule_scorer.py \
   --merkle-security-bits 116 \
   --component-security-bits 120 \
   --component-merkle-security-bits 123 \
-  --proof-mode no-zk
+  --proof-mode no-zk \
+  --reference-label quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived
 
 RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
 python3 scripts/poseidon_schedule_scorer.py \
-  --num-variables 26 \
+  --num-variables 25 \
   --field koalabear \
+  --extension quintic \
   --calibration /tmp/poseidon-calibration.json \
-  --out-report /tmp/spark-read.json \
+  --out-report /tmp/spark-read-25.json \
   --max-pow-bits 22 \
   --security-bits 116 \
   --merkle-security-bits 116 \
   --component-security-bits 120 \
   --component-merkle-security-bits 123 \
-  --proof-mode no-zk
+  --proof-mode no-zk \
+  --reference-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived
+
+RUSTFLAGS="-C target-cpu=native -C debuginfo=0" \
+python3 scripts/poseidon_schedule_scorer.py \
+  --num-variables 23 \
+  --field koalabear \
+  --extension quintic \
+  --calibration /tmp/poseidon-calibration.json \
+  --out-report /tmp/spark-read-23.json \
+  --max-pow-bits 22 \
+  --security-bits 116 \
+  --merkle-security-bits 116 \
+  --component-security-bits 120 \
+  --component-merkle-security-bits 123 \
+  --proof-mode no-zk \
+  --reference-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived
 ```
 
-Compose the reports before heldout measurement:
+For the grouped quintic read argument, intersect schedules accepted by both
+read reports and sum their projected work and proof-size estimates. Compare the
+complete parameter tuple, not only the schedule label, and keep
+`round_log_inv_rates` derived because the two groups can have different round
+counts. Do not use the 25-variable report alone as the read cost. Confirm the
+shortlist with the full Criterion target.
+
+#### Spark composition
+
+The Spark composer requires an explicit `--extension` and accepts one
+`--read-report` for each read group. With multiple read reports, it intersects
+the complete `WhirParams` tuple except `round_log_inv_rates`, verifies that
+each source rate list is empty or backend-derived, writes an empty shared rate
+list into the setup configuration, and sums the projected time and proof size
+for every read group. Quintic composition requires read dimensions equal to
+the fixed-value dimension and that dimension minus two. Octic composition
+requires one read report at the fixed-value dimension plus one. The setup
+configuration uses separate Spark openings. The composer derives whether the
+fixed audit tables fit in the fixed value bundle from their dimensions and
+requires `--fixed-audit-embedded` to match. Embedded audit configuration and
+security checks remain present while its per-proof time and proof size are
+zero. The embedded audit schedule is pinned to its explicit reference, or to
+the component report's selected row when no reference is supplied.
+
+The composer retains the exact prover-time/proof-size Pareto set for each
+component and for the composition. `--top-per-component` limits only the
+component alternatives used to build the calibration shortlist. It does not
+truncate the retained component candidates. `--max-report-rows` must fit the
+composed Pareto rows, shortlist rows, and measured rows; composition fails
+instead of silently dropping any of them. The report records that no validated
+recursive-verifier metric is available. Proof size is not a substitute for
+recursive cycles or trace rows.
+
+Compose both 2048-byte privacy modes before heldout measurement:
 
 ```bash
 python3 scripts/poseidon_spark_schedule_scorer.py \
   --witness-report /tmp/spark-witness-no-zk.json \
   --fixed-value-report /tmp/spark-fixed-value.json \
   --fixed-audit-report /tmp/spark-fixed-audit.json \
-  --read-report /tmp/spark-read.json \
+  --read-report /tmp/spark-read-25.json \
+  --read-report /tmp/spark-read-23.json \
   --out-report /tmp/spark-no-zk-combined.json \
+  --extension quintic \
   --proof-mode no-zk \
   --security-bits 116 \
   --merkle-security-bits 116 \
@@ -244,17 +335,23 @@ python3 scripts/poseidon_spark_schedule_scorer.py \
   --measurement-rows 10 \
   --max-fixed-value-log-domain 26 \
   --max-fixed-audit-log-domain 23 \
-  --reference-witness-label octic_constant_pow0_ff8_lir1_rsv8 \
-  --reference-fixed-value-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8 \
-  --reference-fixed-audit-label octic_cfsr_pow0_ff8_rest4_lir1_rsv6 \
-  --reference-read-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8
+  --fixed-audit-embedded \
+  --workload-r1cs target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs \
+  --workload-label sha256_2048b \
+  --reference-witness-label quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-fixed-value-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-fixed-audit-label quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-read-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-read-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived
 
 python3 scripts/poseidon_spark_schedule_scorer.py \
   --witness-report /tmp/spark-witness-full-zk.json \
   --fixed-value-report /tmp/spark-fixed-value.json \
   --fixed-audit-report /tmp/spark-fixed-audit.json \
-  --read-report /tmp/spark-read.json \
+  --read-report /tmp/spark-read-25.json \
+  --read-report /tmp/spark-read-23.json \
   --out-report /tmp/spark-full-zk-combined.json \
+  --extension quintic \
   --proof-mode full-zk \
   --security-bits 116 \
   --merkle-security-bits 116 \
@@ -265,21 +362,27 @@ python3 scripts/poseidon_spark_schedule_scorer.py \
   --measurement-rows 10 \
   --max-fixed-value-log-domain 26 \
   --max-fixed-audit-log-domain 23 \
-  --reference-witness-label octic_cfsr_pow4_ff8_rest6_lir1_rsv6 \
-  --reference-fixed-value-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8 \
-  --reference-fixed-audit-label octic_cfsr_pow0_ff8_rest4_lir1_rsv6 \
-  --reference-read-label octic_cfsr_pow4_ff8_rest6_lir1_rsv8
+  --fixed-audit-embedded \
+  --workload-r1cs target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs \
+  --workload-label sha256_2048b \
+  --reference-witness-label quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived \
+  --reference-fixed-value-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-fixed-audit-label quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-read-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived \
+  --reference-read-label quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived
 ```
 
-The composer requires all four reports to carry the requested 116-bit
+Every component report must carry the requested 116-bit
 end-to-end target and the same explicit 120-bit WHIR and 123-bit Merkle
 component targets. Its `setup_config` retains the 116-bit end-to-end target.
 
 Use the matching combined report for heldout measurement. After measurement,
 rerun the composer with `--measurements /tmp/spark-heldout.json`. Require
 `model.calibration.validation_within_ten_percent` before selecting a schedule.
-Pass all four `--reference-*-label` options to include the configured baseline
-in the shortlist when it is outside the model's top component rows.
+To include a configured baseline when it is outside the model's top component
+rows, pass the witness, fixed-value, and fixed-audit reference labels once and
+pass `--reference-read-label` once per read report in the same order as the
+reports.
 
 4. Measure shortlisted rows. For a `.wtns` calibration fixture:
 
@@ -289,6 +392,7 @@ cargo run --release --features parallel \
   --bin poseidon-schedule-heldout -- \
   --r1cs circuit.r1cs \
   --wtns witness.wtns \
+  --case-label circuit \
   --report /tmp/poseidon-report.json \
   --out /tmp/poseidon-heldout.json \
   --extension octic \
@@ -310,6 +414,7 @@ cargo run --release --features parallel \
   --linked-circuit-data target/sha256-optimized-cache/sha256_2048b/sha256_2048b_cpp/sha256_2048b.dat \
   --linked-input target/poseidon-schedule/sha256_2048b_input.bin \
   --linked-run-name sha256_2048b \
+  --case-label sha256_2048b \
   --report /tmp/poseidon-report.json \
   --out /tmp/poseidon-heldout.json \
   --extension octic \
@@ -321,21 +426,7 @@ cargo run --release --features parallel \
   --warmups 3
 ```
 
-5. Build the ZK proving-time/proof-size Pareto report:
-
-```bash
-python3 scripts/poseidon_schedule_pareto.py \
-  --report /tmp/poseidon-zk-report.json \
-  --measurements /tmp/poseidon-heldout.json \
-  --out /tmp/poseidon-zk-pareto.json \
-  --out-svg /tmp/poseidon-zk-pareto.svg
-```
-
-Measure another Pareto batch by passing the compact report to heldout with
-`--row-source measurement-candidates`. Keep
-`--randomize-linked-input-bits` enabled for SHA-style linked witnesses.
-
-6. Merge heldout measurements and refit component scales:
+5. Merge heldout measurements and refit component scales:
 
 ```bash
 python3 scripts/poseidon_schedule_add_heldout.py \
@@ -355,16 +446,22 @@ from the full-ZK prover; never relabel a full-ZK report as no ZK. Pass
 ### Selection Rules
 
 - Treat the scorer as a pruning model, not a sub-percent ordering oracle.
-- Use untruncated component reports before pinning a schedule. The composed
-  cross-product report may be capped after auditing the best row from each
-  extension, folding, and rate family inside the model-resolution band.
+- Use untruncated component reports before pinning a schedule. The Spark
+  composer retains the time/proof-size frontier and fails when the report cap
+  cannot contain every frontier, shortlist, and measured row.
 - Interpret overlapping bootstrap median confidence intervals or a measured
   slowdown of at most 1% as a time tie.
-- Prefer smaller proofs among time-tied rows. Prefer lower PoW before label
-  order because it has lower grind variance.
-- A higher-PoW row can win a median-time tie on proof size, but it carries a
-  tail-latency cost. Revisit the PoW-free tied row if p99 proving latency becomes
-  an objective.
+- For DirectSparse, prefer lower PoW and then stable label order among time-tied
+  rows. Proof size is not a DirectSparse selection criterion.
+- For Spark, retain the Pareto set across measured prover time, proof size, and
+  recursive verifier work. Prefer lower PoW when the relevant tradeoffs are
+  tied because it has lower grind variance.
+- When recursive-verifier cycles or trace rows have not been measured, keep the
+  native-time/proof-size finalists and state that the recursive choice remains
+  unresolved. Do not treat proof size as recursive-verifier work.
+- A higher-PoW Spark row can win a prover-time tie through its proof size or
+  recursive verifier cost, but it carries a tail-latency cost. Revisit the
+  PoW-free tied row if p99 proving latency becomes an objective.
 - Compare absolute timings only within one heldout run. Cite the heldout
   artifact when quoting a value because medians drift across batches.
 - Use full-proof Criterion benchmarks as the final decision point.
@@ -373,6 +470,10 @@ from the full-ZK prover; never relabel a full-ZK report as no ZK. Pass
 `--randomize-linked-input-bits`, it varies SHA-style inputs per repeat to
 average deterministic PoW grind luck. Its output includes samples, the median,
 the mean, and a bootstrap median confidence interval.
+The source report and every measured row carry one workload identity that binds
+the case label, R1CS SHA-256 digest, and constraint count. Heldout measurement
+checks it against `--r1cs`, `--case-label`, and the linked run name before setup
+or timing.
 
 ### Artifacts and Model Limits
 
@@ -386,7 +487,10 @@ the mean, and a bootstrap median confidence interval.
   estimates.
 - `poseidon_schedule_scorer.py` writes projected time, `cost_breakdown`,
   validation status, `selected`, and `measurement_shortlist`. With measured
-  input it also writes `selected_measured`.
+  input it also writes `selected_measured`, and `--out-config` writes that
+  measured selection rather than the model-only selection. Pass `--workload-r1cs`,
+  `--constraint-work`, and `--case-label` together for a report that will be
+  measured by `poseidon-schedule-heldout`.
 - `poseidon-schedule-heldout` consumes `measurement_shortlist`,
   `measurement_candidates`, `scores`, or `candidates`, in that order. Use
   `--include-strata` to sample across the accepted ranking.
@@ -394,13 +498,12 @@ the mean, and a bootstrap median confidence interval.
   scales. Heldout rows must contain every modeled component metric. Keep each
   refit scoped to one proof mode and extension; mixed workloads can be too
   collinear to identify the component coefficients.
-- `poseidon_schedule_pareto.py` separates measured and interpolated frontier
-  rows and emits `measurement_candidates` for the next batch.
-
-Candidate validity and achieved security come from constructing Plonky3 WHIR
-configs; the scorer has no independent security derivation. Rows are rejected
-when backend derivation fails, achieved security is below target, PoW exceeds
-the cap, or field two-adicity is insufficient.
+Candidate WHIR validity and achieved security come from constructing Plonky3
+WHIR configs. DirectSparse rows also reproduce the composed algebraic, WHIR,
+and Merkle security gate used by setup. Rows are rejected when backend
+derivation fails, achieved security is below target, PoW exceeds the cap, field
+two-adicity is insufficient, or the requested end-to-end security is
+unattainable.
 
 The linear model is:
 
@@ -409,7 +512,7 @@ projected_time = fixed_overhead + dft + merkle + merkle_path + row_opening + sum
 ```
 
 The SPARK composer adds the witness relation, post-setup fixed-table work, and
-one combined-read commitment and opening. It excludes each fixed table's
+every read group's commitment and opening. It excludes each fixed table's
 initial setup commitment. The fixed-value and fixed-audit log-domain caps keep
 the search within the configured setup footprint.
 
@@ -428,4 +531,6 @@ the measured rows.
 
 ## Decision Heuristic
 
-If a change improves software neatness but makes the current off-chain client-side path slower, less representative, or materially harder to benchmark on realistic devices, reject it by default.
+- For DirectSparse, reject changes that slow client-side proving unless they are required for correctness, security, or feasible client memory use. Do not trade DirectSparse proving speed for smaller proofs or cheaper recursion.
+- For Spark, evaluate client-side prover performance and recursion friendliness together. Require benchmark evidence and recursion analysis for changes that improve one by making the other worse.
+- Treat direct EVM verification as outside the scope of `spartan-whir`. The on-chain verifier checks the final recursive root proof produced by a separate wrapper SNARK.
