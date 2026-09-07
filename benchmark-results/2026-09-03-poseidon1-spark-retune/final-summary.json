@@ -1,0 +1,760 @@
+{
+  "selected_measured": {
+    "component_labels": {
+      "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+      "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "read": [
+        "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+      ],
+      "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+    },
+    "component_scores": {
+      "fixed_audit": 0.0,
+      "fixed_value": 2.4389962850444746,
+      "read": 4.265443356789116,
+      "witness": 0.11111460821062745
+    },
+    "component_verifier_scores": {
+      "fixed_audit": 0.0,
+      "fixed_value": 0.010193532361891428,
+      "read": 0.019663944638259885,
+      "witness": 0.01896191435758103
+    },
+    "extension": "quintic",
+    "fixed_audit_embedded": true,
+    "heldout_median_ci_seconds": [
+      1.009172792,
+      1.016569792
+    ],
+    "heldout_proof_size_median_bytes": 2741805,
+    "heldout_verify_seconds": 0.07541225,
+    "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+    "matrix_closing": "Spark",
+    "measured_seconds": 1.011992083,
+    "projected_schedule_seconds": 6.815554250044218,
+    "projected_seconds": 1.015082511882599,
+    "proof_mode": "full-zk",
+    "proof_size_bytes_estimate": 4101500,
+    "setup_config": {
+      "ell_zk": 3,
+      "mask_log_inv_rate": 3,
+      "matrix_closing": "Spark",
+      "security": {
+        "merkle_security_bits": 116,
+        "security_level_bits": 116,
+        "soundness_assumption": "JohnsonBound"
+      },
+      "spark_whir_params": {
+        "fixed_audit": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "Constant": 8
+          },
+          "pow_bits": 6,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 8,
+          "starting_log_inv_rate": 1
+        },
+        "fixed_value": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 4
+            }
+          },
+          "pow_bits": 9,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 8,
+          "starting_log_inv_rate": 1
+        },
+        "read": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 4
+            }
+          },
+          "pow_bits": 9,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 8,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "whir_params": {
+        "folding_factor": 8,
+        "folding_schedule": {
+          "ConstantFromSecondRound": {
+            "first": 8,
+            "rest": 3
+          }
+        },
+        "pow_bits": 7,
+        "round_log_inv_rates": [],
+        "rs_domain_initial_reduction_factor": 7,
+        "starting_log_inv_rate": 1
+      }
+    },
+    "valid": true,
+    "verifier_component_projection_seconds": 0.04881939135773235,
+    "verifier_projected_seconds": 0.07553198862113716,
+    "workload_identity": {
+      "constraint_work": 605424,
+      "label": "sha256_2048b",
+      "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+    }
+  },
+  "measurement_summary": {
+    "measured_rows": 6,
+    "paired_confidence_interval_role": "diagnostic_only",
+    "prover_median_confidence_interval_role": "diagnostic_only",
+    "prover_selection_band_relative": 0.01,
+    "selection": "one_percent_prover_band_then_one_percent_or_overlapping_verifier_median_ci_then_proof_size_then_label",
+    "source_measurements": "./spark-full-zk-combined-v5.json",
+    "source_verifier_measurements": "./spark-full-zk-combined-v5.json",
+    "tied_with_best": [
+      {
+        "component_labels": {
+          "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+          "fixed_value": "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+          "read": [
+            "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+            "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived"
+          ],
+          "witness": "quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+        },
+        "configuration_only_pow_bits": {
+          "fixed_audit": 6
+        },
+        "configured_component_pow_bits": {
+          "fixed_audit": 6,
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 6
+        },
+        "extension": "quintic",
+        "heldout_median_ci_seconds": [
+          1.000562,
+          1.011853917
+        ],
+        "heldout_paired_relative_median_ci": [
+          0.0,
+          0.0
+        ],
+        "heldout_proof_size_median_bytes": 4540210,
+        "heldout_relative_median_difference": 0.0,
+        "heldout_verify_median_ci_seconds": [
+          0.110105625,
+          0.110888917
+        ],
+        "heldout_verify_seconds": 0.11024375,
+        "label": "spark_w=quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+        "max_per_proof_component_pow_bits": 9,
+        "measured_rank": 1,
+        "measured_seconds": 1.00534825,
+        "per_proof_component_pow_bits": {
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 6
+        },
+        "proof_mode": "full-zk",
+        "proof_size_bytes_estimate": 5863036,
+        "relative_slowdown_from_fastest": 0.0,
+        "selection_proof_size_bytes": 4540210,
+        "setup_config": {
+          "ell_zk": 3,
+          "mask_log_inv_rate": 3,
+          "matrix_closing": "Spark",
+          "security": {
+            "merkle_security_bits": 116,
+            "security_level_bits": 116,
+            "soundness_assumption": "JohnsonBound"
+          },
+          "spark_whir_params": {
+            "fixed_audit": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "Constant": 8
+              },
+              "pow_bits": 6,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "fixed_value": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 7
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "read": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 7
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            }
+          },
+          "whir_params": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 3
+              }
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 7,
+            "starting_log_inv_rate": 1
+          }
+        }
+      },
+      {
+        "component_labels": {
+          "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+          "fixed_value": "quintic_cfsr_pow9_ff8_rest6_lir1_rsv8_round_log_inv_rates_derived",
+          "read": [
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+          ],
+          "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+        },
+        "configuration_only_pow_bits": {
+          "fixed_audit": 6
+        },
+        "configured_component_pow_bits": {
+          "fixed_audit": 6,
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "extension": "quintic",
+        "heldout_median_ci_seconds": [
+          0.999860375,
+          1.011550125
+        ],
+        "heldout_paired_relative_median_ci": [
+          -0.0118530370822294,
+          0.006168882275370935
+        ],
+        "heldout_proof_size_median_bytes": 2980856,
+        "heldout_relative_median_difference": 0.0006421904051656657,
+        "heldout_verify_median_ci_seconds": [
+          0.079674833,
+          0.080328584
+        ],
+        "heldout_verify_seconds": 0.079708958,
+        "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest6_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "max_per_proof_component_pow_bits": 9,
+        "measured_rank": 2,
+        "measured_seconds": 1.005993875,
+        "per_proof_component_pow_bits": {
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "proof_mode": "full-zk",
+        "proof_size_bytes_estimate": 4329628,
+        "relative_slowdown_from_fastest": 0.0006421904051655563,
+        "selection_proof_size_bytes": 2980856,
+        "setup_config": {
+          "ell_zk": 3,
+          "mask_log_inv_rate": 3,
+          "matrix_closing": "Spark",
+          "security": {
+            "merkle_security_bits": 116,
+            "security_level_bits": 116,
+            "soundness_assumption": "JohnsonBound"
+          },
+          "spark_whir_params": {
+            "fixed_audit": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "Constant": 8
+              },
+              "pow_bits": 6,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "fixed_value": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 6
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "read": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            }
+          },
+          "whir_params": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 3
+              }
+            },
+            "pow_bits": 7,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 7,
+            "starting_log_inv_rate": 1
+          }
+        }
+      },
+      {
+        "component_labels": {
+          "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+          "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "read": [
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+          ],
+          "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+        },
+        "configuration_only_pow_bits": {
+          "fixed_audit": 6
+        },
+        "configured_component_pow_bits": {
+          "fixed_audit": 6,
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "extension": "quintic",
+        "heldout_median_ci_seconds": [
+          1.009172792,
+          1.016569792
+        ],
+        "heldout_paired_relative_median_ci": [
+          0.00013654737870627542,
+          0.015998800674021263
+        ],
+        "heldout_proof_size_median_bytes": 2741805,
+        "heldout_relative_median_difference": 0.006608489147914787,
+        "heldout_verify_median_ci_seconds": [
+          0.074995541,
+          0.076383208
+        ],
+        "heldout_verify_seconds": 0.07541225,
+        "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "max_per_proof_component_pow_bits": 9,
+        "measured_rank": 3,
+        "measured_seconds": 1.011992083,
+        "per_proof_component_pow_bits": {
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "proof_mode": "full-zk",
+        "proof_size_bytes_estimate": 4101500,
+        "relative_slowdown_from_fastest": 0.006608489147914709,
+        "selection_proof_size_bytes": 2741805,
+        "setup_config": {
+          "ell_zk": 3,
+          "mask_log_inv_rate": 3,
+          "matrix_closing": "Spark",
+          "security": {
+            "merkle_security_bits": 116,
+            "security_level_bits": 116,
+            "soundness_assumption": "JohnsonBound"
+          },
+          "spark_whir_params": {
+            "fixed_audit": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "Constant": 8
+              },
+              "pow_bits": 6,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "fixed_value": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "read": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            }
+          },
+          "whir_params": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 3
+              }
+            },
+            "pow_bits": 7,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 7,
+            "starting_log_inv_rate": 1
+          }
+        }
+      },
+      {
+        "component_labels": {
+          "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+          "fixed_value": "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+          "read": [
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+          ],
+          "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+        },
+        "configuration_only_pow_bits": {
+          "fixed_audit": 6
+        },
+        "configured_component_pow_bits": {
+          "fixed_audit": 6,
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "extension": "quintic",
+        "heldout_median_ci_seconds": [
+          1.004277,
+          1.020311125
+        ],
+        "heldout_paired_relative_median_ci": [
+          -0.0010655511659763972,
+          0.01204481381463629
+        ],
+        "heldout_proof_size_median_bytes": 3337176,
+        "heldout_relative_median_difference": 0.007226682893216374,
+        "heldout_verify_median_ci_seconds": [
+          0.08648025,
+          0.087269833
+        ],
+        "heldout_verify_seconds": 0.087143167,
+        "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "max_per_proof_component_pow_bits": 9,
+        "measured_rank": 4,
+        "measured_seconds": 1.012613583,
+        "per_proof_component_pow_bits": {
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "proof_mode": "full-zk",
+        "proof_size_bytes_estimate": 4685404,
+        "relative_slowdown_from_fastest": 0.007226682893216451,
+        "selection_proof_size_bytes": 3337176,
+        "setup_config": {
+          "ell_zk": 3,
+          "mask_log_inv_rate": 3,
+          "matrix_closing": "Spark",
+          "security": {
+            "merkle_security_bits": 116,
+            "security_level_bits": 116,
+            "soundness_assumption": "JohnsonBound"
+          },
+          "spark_whir_params": {
+            "fixed_audit": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "Constant": 8
+              },
+              "pow_bits": 6,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "fixed_value": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 7
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "read": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            }
+          },
+          "whir_params": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 3
+              }
+            },
+            "pow_bits": 7,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 7,
+            "starting_log_inv_rate": 1
+          }
+        }
+      }
+    ],
+    "tied_with_best_count": 4,
+    "verifier_rayon_threads": 1,
+    "verifier_selection_band_relative": 0.01,
+    "verifier_tied": [
+      {
+        "component_labels": {
+          "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+          "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "read": [
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+            "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+          ],
+          "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+        },
+        "configuration_only_pow_bits": {
+          "fixed_audit": 6
+        },
+        "configured_component_pow_bits": {
+          "fixed_audit": 6,
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "extension": "quintic",
+        "heldout_median_ci_seconds": [
+          1.009172792,
+          1.016569792
+        ],
+        "heldout_paired_relative_median_ci": [
+          0.00013654737870627542,
+          0.015998800674021263
+        ],
+        "heldout_proof_size_median_bytes": 2741805,
+        "heldout_relative_median_difference": 0.006608489147914787,
+        "heldout_verify_median_ci_seconds": [
+          0.074995541,
+          0.076383208
+        ],
+        "heldout_verify_seconds": 0.07541225,
+        "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "max_per_proof_component_pow_bits": 9,
+        "measured_rank": 3,
+        "measured_seconds": 1.011992083,
+        "per_proof_component_pow_bits": {
+          "fixed_value": 9,
+          "read": 9,
+          "witness": 7
+        },
+        "proof_mode": "full-zk",
+        "proof_size_bytes_estimate": 4101500,
+        "relative_slowdown_from_fastest": 0.006608489147914709,
+        "selection_proof_size_bytes": 2741805,
+        "setup_config": {
+          "ell_zk": 3,
+          "mask_log_inv_rate": 3,
+          "matrix_closing": "Spark",
+          "security": {
+            "merkle_security_bits": 116,
+            "security_level_bits": 116,
+            "soundness_assumption": "JohnsonBound"
+          },
+          "spark_whir_params": {
+            "fixed_audit": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "Constant": 8
+              },
+              "pow_bits": 6,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "fixed_value": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            },
+            "read": {
+              "folding_factor": 8,
+              "folding_schedule": {
+                "ConstantFromSecondRound": {
+                  "first": 8,
+                  "rest": 4
+                }
+              },
+              "pow_bits": 9,
+              "round_log_inv_rates": [],
+              "rs_domain_initial_reduction_factor": 8,
+              "starting_log_inv_rate": 1
+            }
+          },
+          "whir_params": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 3
+              }
+            },
+            "pow_bits": 7,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 7,
+            "starting_log_inv_rate": 1
+          }
+        }
+      }
+    ],
+    "verifier_tied_count": 1
+  },
+  "model": {
+    "calibration": {
+      "calibration_rows": 8,
+      "intercept_seconds": -5.800471738161619,
+      "method": "unit-scale offset fit with every third measured row held out",
+      "scale": 1.0,
+      "validation_max_relative_error": 0.012935436242545839,
+      "validation_rows": 3,
+      "validation_within_ten_percent": true
+    },
+    "fixed_audit_embedded": true,
+    "fixed_audit_excludes_setup_commitment": true,
+    "fixed_setup_log_domain_caps": {
+      "fixed_audit": 23,
+      "fixed_value": 26
+    },
+    "fixed_value_excludes_setup_commitment": true,
+    "formula": "witness + fixed_value + fixed_audit + sum(read reports)",
+    "read_report_count": 2,
+    "verifier_calibration": {
+      "calibration_max_relative_error": 0.0010592951683347737,
+      "calibration_rows": 3,
+      "intercept_seconds": 0.026194474107855303,
+      "measurement": "native wall time",
+      "method": "affine fit over measured verifier rows",
+      "rayon_threads": 1,
+      "rows": 6,
+      "scale": 1.0106130605306585,
+      "source_measurements": "./spark-full-zk-combined-v5.json",
+      "validation_max_relative_error": 0.008368319084541402,
+      "validation_rows": 3,
+      "validation_within_twenty_percent": true
+    }
+  },
+  "candidate_retention": {
+    "component_objectives": [
+      "component_score",
+      "component_verifier_score",
+      "component_proof_size"
+    ],
+    "components": {
+      "fixed_audit": {
+        "eligible_rows": 1732,
+        "pareto_objective_points": 1,
+        "pareto_rows": 1,
+        "rows_within_prover_selection_band": 1732
+      },
+      "fixed_value": {
+        "eligible_rows": 1910,
+        "pareto_objective_points": 47,
+        "pareto_rows": 86,
+        "rows_within_prover_selection_band": 139
+      },
+      "read": {
+        "eligible_rows": 715,
+        "pareto_objective_points": 49,
+        "pareto_rows": 49,
+        "rows_within_prover_selection_band": 74
+      },
+      "witness": {
+        "eligible_rows": 185,
+        "pareto_objective_points": 25,
+        "pareto_rows": 58,
+        "rows_within_prover_selection_band": 185
+      }
+    },
+    "composed_objectives": [
+      "projected_seconds",
+      "verifier_projected_seconds",
+      "proof_size_bytes_estimate"
+    ],
+    "composed_pareto_rows": 501,
+    "prover_selection_band": {
+      "best_composed_projected_seconds": 6.806999344678851,
+      "margin_seconds": 0.06806999344678852,
+      "policy": "component excess bounded by one percent of the best composed prover projection",
+      "relative_margin": 0.01
+    },
+    "recursive_verifier_metric": "calibrated native verifier wall time",
+    "recursive_verifier_used_for_ranking": "tie_break_only",
+    "required_report_rows": 502,
+    "top_per_component": 16,
+    "top_per_component_scope": "measurement_shortlist"
+  }
+}

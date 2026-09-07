@@ -127,6 +127,10 @@ It rebuilds derived proving-key caches after loading the proving key.
 KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. Circuits are written
 over KoalaBear.
 
+`Poseidon1Engine<Ext>` is the corresponding Poseidon1 instantiation. `setup_poseidon1_zk` creates its full-ZK proving and verifying keys. Its no-ZK and full-ZK transcript identifiers are `spartan-whir-poseidon1-no-zk-v0` and `spartan-whir-poseidon1-full-zk-v0`.
+
+The Poseidon1 challenger, leaf hash, and Merkle-node compression use Plonky3's width-16 KoalaBear Poseidon1 permutation with an eight-element rate. Leaves use padding-free sponge hashing to eight field elements, and nodes compress two eight-element digests to eight field elements. The `poseidon1` Cargo feature selects Poseidon1 in comparison benchmarks and fixture binaries; both Poseidon1 and Poseidon2 library types are available in every build.
+
 ### Linked Witness Generation
 
 The Poseidon proving API uses a linked native witness generator. A
@@ -402,6 +406,25 @@ cargo test protocol_e2e_target_2_pow_22 -- --ignored
 ```
 
 ## Run Benchmarks
+
+#### SPARK proof encoding
+
+`Poseidon1ZkSpartanProtocol::prove_compressed_with_rng` and the corresponding Poseidon2 method produce an opt-in full-ZK SPARK transport proof. Serialize it with `CompressedZkProofFor::to_bytes`, parse it with `from_bytes`, and pass the result to `verify_compressed`. The verifier reconstructs omitted field values and runs the original verification checks. Commitments, WHIR schedules and transcript operations are preserved. The ordinary proof APIs and LeanVM guest input format retain their existing encoding.
+
+`ProofCompressionOptions` controls structured initial rows, fresh hiding rows, 31-bit field packing, compact integers, factored SPARK product rounds and final WHIR rows. Further options remove derived product fields, compact small metadata and encode nonadjacent duplicate columns. Its default leaves every option disabled for controlled comparisons. Use `ProofCompressionOptions::recommended()` for the choices retained on the selected 2048-byte SHA-256 workload.
+
+The `spark_proof_compression` Criterion target fixes the selected Poseidon1, quintic, 116-bit full-ZK SPARK schedule for the optimized 2048-byte SHA-256 circuit. It compares cumulative encodings on matched valid inputs and measures linked witness generation plus proving and encoding, encoding alone, and decoding plus native verification:
+
+```bash
+RUSTFLAGS='-C target-cpu=native -C debuginfo=0' \
+RAYON_NUM_THREADS=12 \
+SHA256_BENCH_WORKDIR=target/sha256-optimized-cache \
+cargo bench --features parallel,poseidon1 --bench spark_proof_compression
+```
+
+`SPARK_COMPRESSION_VARIANTS` selects comma-separated variant names emitted by the target; `SPARK_COMPRESSION_PHASES` selects `end_to_end`, `encode` or `decode_verify`. Both default to `all`. `SPARK_COMPRESSION_SIZES_ONLY=1` runs the correctness and size comparison without timing. `SPARK_COMPRESSION_CORPUS_SIZE` defaults to four and must be at least four. `SPARK_COMPRESSION_SAMPLES`, `SPARK_COMPRESSION_WARMUP_SECONDS` and `SPARK_COMPRESSION_MEASUREMENT_SECONDS` control Criterion; `SPARK_COMPRESSION_REVERSE=1` reverses the candidate order. `SPARK_COMPRESSION_REPORT` selects the JSON size report, defaulting to `target/spark-proof-compression-sizes.json`. The report includes configuration, per-input sizes and transcript challenge comparisons. See the [proof-size analysis and measurements](benchmark-results/2026-09-05-spark-proof-size/README.md) for the optimization scope and reconstruction equations.
+
+The matched corpus uses one thread so repeated proofs select the same PoW witnesses. Timed operations use `RAYON_NUM_THREADS`. `SPARK_COMPRESSION_DUMP_DIR` optionally writes the first corpus proof for each variant outside the timed intervals.
 
 ### SHA-256 No-ZK and Full-ZK
 

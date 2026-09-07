@@ -1,0 +1,2582 @@
+{
+  "criterion": [
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "baseline",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/baseline",
+        "directory_name": "spark_proof_compression_decode_verify/baseline",
+        "title": "spark_proof_compression/decode_verify/baseline"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 61819191.853992455,
+            "upper_bound": 62037297.329166666
+          },
+          "point_estimate": 61917335.484103166,
+          "standard_error": 55836.79113931705
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 61795432.96,
+            "upper_bound": 61975411.13333334
+          },
+          "point_estimate": 61924872.18611111,
+          "standard_error": 52148.818530127646
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 7274.796840843593,
+            "upper_bound": 248737.682604027
+          },
+          "point_estimate": 133990.93631118868,
+          "standard_error": 61820.69790665871
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 61783075.602850355,
+            "upper_bound": 62130604.86092347
+          },
+          "point_estimate": 61923989.84311688,
+          "standard_error": 91216.14566392594
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 70752.68891718525,
+            "upper_bound": 263848.8911096847
+          },
+          "point_estimate": 185737.87524549582,
+          "standard_error": 56073.71789053987
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          5.0,
+          10.0,
+          15.0,
+          20.0,
+          25.0,
+          30.0,
+          35.0,
+          40.0,
+          45.0,
+          50.0
+        ],
+        "times": [
+          309001542.0,
+          618269209.0,
+          930115083.0,
+          1238847499.0,
+          1548785335.0,
+          1858294502.0,
+          2158524538.0,
+          2494322833.0,
+          2785831624.0,
+          3088197251.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "derived_products",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/derived_products",
+        "directory_name": "spark_proof_compression_decode_verify/derived_products",
+        "title": "spark_proof_compression/decode_verify/derived_products"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76643947.75850272,
+            "upper_bound": 77107063.5061508
+          },
+          "point_estimate": 76850835.41594246,
+          "standard_error": 119464.44912046399
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76575320.16666666,
+            "upper_bound": 77061005.9404762
+          },
+          "point_estimate": 76714648.5125,
+          "standard_error": 106150.75783243903
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23241.274252393738,
+            "upper_bound": 573829.1738374972
+          },
+          "point_estimate": 284471.7047358669,
+          "standard_error": 145895.64983776686
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76576316.59639849,
+            "upper_bound": 76970714.17531332
+          },
+          "point_estimate": 76736674.23961039,
+          "standard_error": 99858.55376572933
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 139445.57066488243,
+            "upper_bound": 546889.3542144098
+          },
+          "point_estimate": 397744.19061379984,
+          "standard_error": 113384.87089201165
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          305893499.0,
+          622127292.0,
+          922494626.0,
+          1231015871.0,
+          1534136210.0,
+          1840254374.0,
+          2162928872.0,
+          2453632755.0,
+          2751335204.0,
+          3068899461.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "duplicate_columns",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/duplicate_columns",
+        "directory_name": "spark_proof_compression_decode_verify/duplicate_columns",
+        "title": "spark_proof_compression/decode_verify/duplicate_columns"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 79548238.60428572,
+            "upper_bound": 80062494.11552083
+          },
+          "point_estimate": 79785123.84276786,
+          "standard_error": 130972.7945017007
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 79539309.5375,
+            "upper_bound": 79939567.79166667
+          },
+          "point_estimate": 79729119.72321428,
+          "standard_error": 111172.9309069892
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 45170.85524306143,
+            "upper_bound": 616008.3047136738
+          },
+          "point_estimate": 288339.69643095025,
+          "standard_error": 140673.56940569766
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 79675173.62411971,
+            "upper_bound": 80308956.3943318
+          },
+          "point_estimate": 79933655.66883117,
+          "standard_error": 169722.81601103154
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 145382.2568667228,
+            "upper_bound": 622865.9101089626
+          },
+          "point_estimate": 436589.9021063885,
+          "standard_error": 130649.26637385607
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          316459790.0,
+          638051583.0,
+          955230417.0,
+          1271129872.0,
+          1599101210.0,
+          1918549627.0,
+          2231650164.0,
+          2585428249.0,
+          2876674917.0,
+          3185320083.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "final_rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/final_rows",
+        "directory_name": "spark_proof_compression_decode_verify/final_rows",
+        "title": "spark_proof_compression/decode_verify/final_rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76598128.60249999,
+            "upper_bound": 77418051.09280753
+          },
+          "point_estimate": 76951714.8276885,
+          "standard_error": 213675.87375734746
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76378243.75,
+            "upper_bound": 77127662.04642858
+          },
+          "point_estimate": 76834078.125,
+          "standard_error": 172286.42533319478
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76207.74929287656,
+            "upper_bound": 840408.3397980989
+          },
+          "point_estimate": 521854.66599147767,
+          "standard_error": 210171.0703037464
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76436811.90419501,
+            "upper_bound": 77082437.29391482
+          },
+          "point_estimate": 76663412.07597403,
+          "standard_error": 166305.76031057668
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 241622.1274226611,
+            "upper_bound": 1035889.2843711664
+          },
+          "point_estimate": 710804.0452073654,
+          "standard_error": 246066.3535424887
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          307264126.0,
+          614816998.0,
+          944956752.0,
+          1233315457.0,
+          1539104459.0,
+          1832598625.0,
+          2164402832.0,
+          2455460079.0,
+          2746634710.0,
+          3055129750.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "refined_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/refined_metadata",
+        "directory_name": "spark_proof_compression_decode_verify/refined_metadata",
+        "title": "spark_proof_compression/decode_verify/refined_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76711009.6957143,
+            "upper_bound": 77232741.1876307
+          },
+          "point_estimate": 76962373.1062004,
+          "standard_error": 133686.02011775816
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76642007.9375,
+            "upper_bound": 77411179.275
+          },
+          "point_estimate": 76851718.85357141,
+          "standard_error": 195460.0685733756
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 91447.63343272524,
+            "upper_bound": 751840.303667169
+          },
+          "point_estimate": 358760.33867529145,
+          "standard_error": 173440.7234749459
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76612616.26515152,
+            "upper_bound": 77275547.44204545
+          },
+          "point_estimate": 76977751.4422078,
+          "standard_error": 173432.0459915029
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 236699.56791162209,
+            "upper_bound": 555617.4033402671
+          },
+          "point_estimate": 443481.05142113956,
+          "standard_error": 80545.3452207904
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          311033042.0,
+          613770708.0,
+          924513249.0,
+          1226272127.0,
+          1538761372.0,
+          1832416456.0,
+          2149430335.0,
+          2477330625.0,
+          2756788873.0,
+          3096447171.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/rows",
+        "directory_name": "spark_proof_compression_decode_verify/rows",
+        "title": "spark_proof_compression/decode_verify/rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 65374648.2043857,
+            "upper_bound": 65835381.64572143
+          },
+          "point_estimate": 65586122.22142857,
+          "standard_error": 118479.19513589593
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 65331774.53,
+            "upper_bound": 65839202.977142856
+          },
+          "point_estimate": 65461022.900000006,
+          "standard_error": 121023.77411424035
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 50212.63660453778,
+            "upper_bound": 616799.7956516196
+          },
+          "point_estimate": 216729.948262282,
+          "standard_error": 138559.17998568653
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 65372370.9954071,
+            "upper_bound": 65734815.95831265
+          },
+          "point_estimate": 65507462.76415584,
+          "standard_error": 96227.76279820668
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 132972.46142183823,
+            "upper_bound": 516328.33601125027
+          },
+          "point_estimate": 394532.27168116806,
+          "standard_error": 99550.53228475423
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          5.0,
+          10.0,
+          15.0,
+          20.0,
+          25.0,
+          30.0,
+          35.0,
+          40.0,
+          45.0,
+          50.0
+        ],
+        "times": [
+          332047541.0,
+          656988626.0,
+          977139291.0,
+          1305668998.0,
+          1638981456.0,
+          1962216456.0,
+          2314170170.0,
+          2613849248.0,
+          2948167377.0,
+          3269004958.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "rows_fresh",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/rows_fresh",
+        "directory_name": "spark_proof_compression_decode_verify/rows_fresh",
+        "title": "spark_proof_compression/decode_verify/rows_fresh"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74409166.34528275,
+            "upper_bound": 74958345.42958334
+          },
+          "point_estimate": 74633910.03204364,
+          "standard_error": 147039.30476050498
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74354223.83333333,
+            "upper_bound": 74696279.70833334
+          },
+          "point_estimate": 74512698.03125,
+          "standard_error": 97736.8780553152
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 51352.49096956104,
+            "upper_bound": 429958.04892504227
+          },
+          "point_estimate": 233881.54608111078,
+          "standard_error": 101144.27701496845
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74327498.74924925,
+            "upper_bound": 74870563.00131233
+          },
+          "point_estimate": 74534981.787013,
+          "standard_error": 139446.25488661721
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 116058.43776354137,
+            "upper_bound": 734172.6452203122
+          },
+          "point_estimate": 489593.20198336843,
+          "standard_error": 197602.591478066
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          299314126.0,
+          595157376.0,
+          894768335.0,
+          1191423129.0,
+          1518704629.0,
+          1784501372.0,
+          2081323042.0,
+          2385966416.0,
+          2688110126.0,
+          2969373042.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "rows_fresh_packed",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/rows_fresh_packed",
+        "directory_name": "spark_proof_compression_decode_verify/rows_fresh_packed",
+        "title": "spark_proof_compression/decode_verify/rows_fresh_packed"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74956885.92420138,
+            "upper_bound": 75502766.1633507
+          },
+          "point_estimate": 75179096.77986112,
+          "standard_error": 146197.4648132738
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74919419.1875,
+            "upper_bound": 75281878.67708334
+          },
+          "point_estimate": 75008486.625,
+          "standard_error": 80469.9778916125
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 21106.51973361525,
+            "upper_bound": 403421.59945034963
+          },
+          "point_estimate": 115460.66465849432,
+          "standard_error": 100649.88380703265
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74969669.72171994,
+            "upper_bound": 75357738.935394
+          },
+          "point_estimate": 75101790.56233767,
+          "standard_error": 100332.77526710316
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 70136.79597690723,
+            "upper_bound": 722046.4907069916
+          },
+          "point_estimate": 488510.7459319162,
+          "standard_error": 196295.99071138955
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          299518916.0,
+          599672875.0,
+          899813916.0,
+          1223401126.0,
+          1502235500.0,
+          1812479584.0,
+          2095548917.0,
+          2401400790.0,
+          2698416745.0,
+          3001299210.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/rows_fresh_packed_metadata",
+        "directory_name": "spark_proof_compression_decode_verify/rows_fresh_packed_metadata",
+        "title": "spark_proof_compression/decode_verify/rows_fresh_packed_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74880919.42718253,
+            "upper_bound": 75631828.98722419
+          },
+          "point_estimate": 75207188.13968256,
+          "standard_error": 195854.0392207423
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74847605.03125,
+            "upper_bound": 75542137.21875
+          },
+          "point_estimate": 75000001.125,
+          "standard_error": 135778.87794578943
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 12695.902023348264,
+            "upper_bound": 805489.7735384523
+          },
+          "point_estimate": 63013.40818962504,
+          "standard_error": 207215.96034300228
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 74953689.51130825,
+            "upper_bound": 75165957.72284952
+          },
+          "point_estimate": 75023250.4590909,
+          "standard_error": 55659.784346259104
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 124275.10983828132,
+            "upper_bound": 878689.1370666468
+          },
+          "point_estimate": 648809.0984891078,
+          "standard_error": 204348.80491454076
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          304282499.0,
+          596877958.0,
+          920200167.0,
+          1195432915.0,
+          1499976836.0,
+          1799535669.0,
+          2101180292.0,
+          2400436790.0,
+          2698457377.0,
+          3000046418.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/decode_verify",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata_factored",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/decode_verify/rows_fresh_packed_metadata_factored",
+        "directory_name": "spark_proof_compression_decode_verify/rows_fresh_packed_metadata_factored",
+        "title": "spark_proof_compression/decode_verify/rows_fresh_packed_metadata_factored"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 75856492.66148065,
+            "upper_bound": 76875268.6497123
+          },
+          "point_estimate": 76318508.76624008,
+          "standard_error": 263110.05020556506
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 75677513.84375,
+            "upper_bound": 76874361.53571428
+          },
+          "point_estimate": 76208767.2986111,
+          "standard_error": 260390.36630509057
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 75268.41042621544,
+            "upper_bound": 1268781.2587246299
+          },
+          "point_estimate": 698734.4283408077,
+          "standard_error": 328996.02458506526
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 76154752.68930428,
+            "upper_bound": 76923173.43919049
+          },
+          "point_estimate": 76439047.97857143,
+          "standard_error": 197909.64674198063
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 299950.0326444878,
+            "upper_bound": 1168175.0233588151
+          },
+          "point_estimate": 876716.5920078346,
+          "standard_error": 233253.2847321321
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          4.0,
+          8.0,
+          12.0,
+          16.0,
+          20.0,
+          24.0,
+          28.0,
+          32.0,
+          36.0,
+          40.0
+        ],
+        "times": [
+          302913708.0,
+          603219250.0,
+          908958333.0,
+          1209735999.0,
+          1564407168.0,
+          1858559748.0,
+          2136644540.0,
+          2442003541.0,
+          2743572122.0,
+          3048287915.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "baseline",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/baseline",
+        "directory_name": "spark_proof_compression_encode/baseline",
+        "title": "spark_proof_compression/encode/baseline"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 312416.2089448482,
+            "upper_bound": 315388.3582332041
+          },
+          "point_estimate": 313807.5974363695,
+          "standard_error": 756.6255015109381
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 311803.3576550387,
+            "upper_bound": 314809.2941860465
+          },
+          "point_estimate": 314108.4251744186,
+          "standard_error": 699.2468419493553
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 186.39692942044653,
+            "upper_bound": 4265.36855147227
+          },
+          "point_estimate": 1378.5579458745608,
+          "standard_error": 1037.9398083075678
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 313110.35999712005,
+            "upper_bound": 314827.52350190945
+          },
+          "point_estimate": 313892.77189972816,
+          "standard_error": 432.42791670829126
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 929.3943810767079,
+            "upper_bound": 3487.609101576775
+          },
+          "point_estimate": 2520.024349642749,
+          "standard_error": 664.8500265509941
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          860.0,
+          1720.0,
+          2580.0,
+          3440.0,
+          4300.0,
+          5160.0,
+          6020.0,
+          6880.0,
+          7740.0,
+          8600.0
+        ],
+        "times": [
+          270735993.0,
+          534265065.0,
+          800686463.0,
+          1098502742.0,
+          1351111560.0,
+          1615015456.0,
+          1895379787.0,
+          2162083383.0,
+          2420018473.0,
+          2700441793.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "derived_products",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/derived_products",
+        "directory_name": "spark_proof_compression_encode/derived_products",
+        "title": "spark_proof_compression/encode/derived_products"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4697094.469059935,
+            "upper_bound": 4714889.097321838
+          },
+          "point_estimate": 4704077.331233579,
+          "standard_error": 4866.34849083479
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4696001.11227422,
+            "upper_bound": 4704661.04224138
+          },
+          "point_estimate": 4699339.972198276,
+          "standard_error": 2572.4038358953476
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 749.3047181626154,
+            "upper_bound": 11118.602254458412
+          },
+          "point_estimate": 5021.200040726725,
+          "standard_error": 2810.5993698652314
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4697456.946984163,
+            "upper_bound": 4728076.684123027
+          },
+          "point_estimate": 4709552.570353785,
+          "standard_error": 8949.10828342198
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2812.3312382938307,
+            "upper_bound": 24694.585079908746
+          },
+          "point_estimate": 16270.750568269727,
+          "standard_error": 7207.340642654196
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          58.0,
+          116.0,
+          174.0,
+          232.0,
+          290.0,
+          348.0,
+          406.0,
+          464.0,
+          522.0,
+          580.0
+        ],
+        "times": [
+          272800251.0,
+          544318209.0,
+          819259743.0,
+          1089556177.0,
+          1362408302.0,
+          1634049175.0,
+          1906762199.0,
+          2181134211.0,
+          2478745851.0,
+          2726540999.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "duplicate_columns",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/duplicate_columns",
+        "directory_name": "spark_proof_compression_encode/duplicate_columns",
+        "title": "spark_proof_compression/encode/duplicate_columns"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4697311.839306497,
+            "upper_bound": 4713166.209964689
+          },
+          "point_estimate": 4703894.642136131,
+          "standard_error": 4210.0185273786765
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4696215.670702179,
+            "upper_bound": 4708341.788135594
+          },
+          "point_estimate": 4699296.262711864,
+          "standard_error": 2488.2898387467644
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 789.157811413459,
+            "upper_bound": 12968.90715534815
+          },
+          "point_estimate": 3503.1901861110605,
+          "standard_error": 3319.7167585919383
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4696416.842684806,
+            "upper_bound": 4722773.360351958
+          },
+          "point_estimate": 4706531.590138675,
+          "standard_error": 7704.513550021441
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2174.761556583768,
+            "upper_bound": 20349.606434727575
+          },
+          "point_estimate": 14026.585094111293,
+          "standard_error": 5283.647558814917
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          59.0,
+          118.0,
+          177.0,
+          236.0,
+          295.0,
+          354.0,
+          413.0,
+          472.0,
+          531.0,
+          590.0
+        ],
+        "times": [
+          277201005.0,
+          556524796.0,
+          830756588.0,
+          1109055256.0,
+          1386609665.0,
+          1664133259.0,
+          1939537072.0,
+          2218025160.0,
+          2516744048.0,
+          2770061859.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "final_rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/final_rows",
+        "directory_name": "spark_proof_compression_encode/final_rows",
+        "title": "spark_proof_compression/encode/final_rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4698938.379326508,
+            "upper_bound": 4715318.148059387
+          },
+          "point_estimate": 4706678.157016283,
+          "standard_error": 4187.674911619921
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4699633.244971264,
+            "upper_bound": 4712419.386853448
+          },
+          "point_estimate": 4705120.999425287,
+          "standard_error": 3064.5384898570856
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2039.0470100068885,
+            "upper_bound": 21491.22304224828
+          },
+          "point_estimate": 6865.41690535636,
+          "standard_error": 4777.8424361338475
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4702723.632377486,
+            "upper_bound": 4724401.935314609
+          },
+          "point_estimate": 4711728.488804299,
+          "standard_error": 6070.364314716506
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4703.788699391275,
+            "upper_bound": 19765.361041252094
+          },
+          "point_estimate": 13971.659924238154,
+          "standard_error": 3898.8222425785225
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          58.0,
+          116.0,
+          174.0,
+          232.0,
+          290.0,
+          348.0,
+          406.0,
+          464.0,
+          522.0,
+          580.0
+        ],
+        "times": [
+          271641128.0,
+          547176967.0,
+          817234997.0,
+          1090983163.0,
+          1364832653.0,
+          1636965032.0,
+          1912435875.0,
+          2184417323.0,
+          2472902716.0,
+          2726679684.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "refined_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/refined_metadata",
+        "directory_name": "spark_proof_compression_encode/refined_metadata",
+        "title": "spark_proof_compression/encode/refined_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4701326.634318555,
+            "upper_bound": 4723573.27021403
+          },
+          "point_estimate": 4710313.585712234,
+          "standard_error": 5980.709532385288
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4699545.082512315,
+            "upper_bound": 4715197.58045977
+          },
+          "point_estimate": 4702997.629885057,
+          "standard_error": 4073.625409205543
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1522.8803160672685,
+            "upper_bound": 17643.933564343617
+          },
+          "point_estimate": 5693.184750994038,
+          "standard_error": 4228.738784565814
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4701884.725844109,
+            "upper_bound": 4740096.500204282
+          },
+          "point_estimate": 4717860.602373488,
+          "standard_error": 10791.943562067654
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3548.9073850842155,
+            "upper_bound": 30022.626631559408
+          },
+          "point_estimate": 19994.88461580374,
+          "standard_error": 8289.867771166011
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          58.0,
+          116.0,
+          174.0,
+          232.0,
+          290.0,
+          348.0,
+          406.0,
+          464.0,
+          522.0,
+          580.0
+        ],
+        "times": [
+          272588246.0,
+          545028078.0,
+          820444379.0,
+          1091797004.0,
+          1362005126.0,
+          1636301413.0,
+          1908432334.0,
+          2188472207.0,
+          2486771256.0,
+          2728308229.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/rows",
+        "directory_name": "spark_proof_compression_encode/rows",
+        "title": "spark_proof_compression/encode/rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4552118.913898149,
+            "upper_bound": 4563087.541724867
+          },
+          "point_estimate": 4557154.440271164,
+          "standard_error": 2809.935412103323
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4552178.44625,
+            "upper_bound": 4561086.425
+          },
+          "point_estimate": 4554914.876666667,
+          "standard_error": 2850.558351430131
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 669.6746211667511,
+            "upper_bound": 13257.35274938539
+          },
+          "point_estimate": 5832.180735208601,
+          "standard_error": 3381.2994541558573
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4552765.67395786,
+            "upper_bound": 4564197.989317391
+          },
+          "point_estimate": 4556650.573679654,
+          "standard_error": 2990.3237102791554
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3585.3338296788756,
+            "upper_bound": 13253.057838216395
+          },
+          "point_estimate": 9368.601362276673,
+          "standard_error": 2730.9981063941545
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          60.0,
+          120.0,
+          180.0,
+          240.0,
+          300.0,
+          360.0,
+          420.0,
+          480.0,
+          540.0,
+          600.0
+        ],
+        "times": [
+          272600289.0,
+          547145043.0,
+          820165533.0,
+          1094660742.0,
+          1366006371.0,
+          1648364380.0,
+          1916054461.0,
+          2184803770.0,
+          2458386062.0,
+          2731609423.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "rows_fresh",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/rows_fresh",
+        "directory_name": "spark_proof_compression_encode/rows_fresh",
+        "title": "spark_proof_compression/encode/rows_fresh"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4167075.4419179894,
+            "upper_bound": 4182771.0836701384
+          },
+          "point_estimate": 4172769.040280784,
+          "standard_error": 4585.506498193708
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4166559.716161616,
+            "upper_bound": 4170679.3431818183
+          },
+          "point_estimate": 4167948.089556277,
+          "standard_error": 1492.7713004823406
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 653.4830819588507,
+            "upper_bound": 4843.302540276915
+          },
+          "point_estimate": 2354.251425817816,
+          "standard_error": 1616.1895925161969
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4166279.976010101,
+            "upper_bound": 4170617.9961858173
+          },
+          "point_estimate": 4168564.1306572217,
+          "standard_error": 1147.4677639289646
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1315.8334699612824,
+            "upper_bound": 23525.975084020505
+          },
+          "point_estimate": 15306.395572026451,
+          "standard_error": 7880.733852708823
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          66.0,
+          132.0,
+          198.0,
+          264.0,
+          330.0,
+          396.0,
+          462.0,
+          528.0,
+          594.0,
+          660.0
+        ],
+        "times": [
+          278253752.0,
+          550370005.0,
+          825099472.0,
+          1100215049.0,
+          1374763626.0,
+          1649973485.0,
+          1925807699.0,
+          2201550007.0,
+          2474098013.0,
+          2753446708.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "rows_fresh_packed",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/rows_fresh_packed",
+        "directory_name": "spark_proof_compression_encode/rows_fresh_packed",
+        "title": "spark_proof_compression/encode/rows_fresh_packed"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4764814.23865497,
+            "upper_bound": 4781280.184229375
+          },
+          "point_estimate": 4771383.297554302,
+          "standard_error": 4454.917250124026
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4762792.6783625735,
+            "upper_bound": 4772684.630169174
+          },
+          "point_estimate": 4768303.8,
+          "standard_error": 2754.7380385343467
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1088.7290833023621,
+            "upper_bound": 11044.26598221531
+          },
+          "point_estimate": 7577.536385822337,
+          "standard_error": 3054.5030243892065
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4767118.166011113,
+            "upper_bound": 4796538.518284347
+          },
+          "point_estimate": 4780170.94472545,
+          "standard_error": 8736.349990227358
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3302.70033211357,
+            "upper_bound": 22427.942022021794
+          },
+          "point_estimate": 14837.8607175198,
+          "standard_error": 6306.264617215908
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          57.0,
+          114.0,
+          171.0,
+          228.0,
+          285.0,
+          342.0,
+          399.0,
+          456.0,
+          513.0,
+          570.0
+        ],
+        "times": [
+          271371545.0,
+          542882169.0,
+          814437548.0,
+          1087770206.0,
+          1358933586.0,
+          1629148794.0,
+          1905494505.0,
+          2174980377.0,
+          2446199244.0,
+          2742566359.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/rows_fresh_packed_metadata",
+        "directory_name": "spark_proof_compression_encode/rows_fresh_packed_metadata",
+        "title": "spark_proof_compression/encode/rows_fresh_packed_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4736127.564174979,
+            "upper_bound": 4747673.536286945
+          },
+          "point_estimate": 4741661.895999589,
+          "standard_error": 2958.1490348658467
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4733371.666666667,
+            "upper_bound": 4750385.137356322
+          },
+          "point_estimate": 4740324.685960591,
+          "standard_error": 4427.574653067129
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2030.9233846337559,
+            "upper_bound": 17019.210729918675
+          },
+          "point_estimate": 9500.713648569892,
+          "standard_error": 4095.4844397276875
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4737682.767083333,
+            "upper_bound": 4751280.163866784
+          },
+          "point_estimate": 4743794.672189879,
+          "standard_error": 3513.1509694460387
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 5296.448138113357,
+            "upper_bound": 12157.096488621286
+          },
+          "point_estimate": 9870.141457879523,
+          "standard_error": 1743.5685715425063
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          58.0,
+          116.0,
+          174.0,
+          232.0,
+          290.0,
+          348.0,
+          406.0,
+          464.0,
+          522.0,
+          580.0
+        ],
+        "times": [
+          274288166.0,
+          550240000.0,
+          823606670.0,
+          1097921449.0,
+          1379160458.0,
+          1651673408.0,
+          1923303645.0,
+          2207863093.0,
+          2476913259.0,
+          2746756873.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/encode",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata_factored",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/encode/rows_fresh_packed_metadata_factored",
+        "directory_name": "spark_proof_compression_encode/rows_fresh_packed_metadata_factored",
+        "title": "spark_proof_compression/encode/rows_fresh_packed_metadata_factored"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4707504.66920635,
+            "upper_bound": 4714347.918628336
+          },
+          "point_estimate": 4710912.526462097,
+          "standard_error": 1753.40708357489
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4707600.582375479,
+            "upper_bound": 4716139.386494253
+          },
+          "point_estimate": 4709192.706280788,
+          "standard_error": 2269.811029516776
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 775.7439612279888,
+            "upper_bound": 10187.258832587797
+          },
+          "point_estimate": 4705.697760422269,
+          "standard_error": 2694.7821943162176
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4708661.629358751,
+            "upper_bound": 4716482.090044679
+          },
+          "point_estimate": 4711816.366995074,
+          "standard_error": 2023.7432299340658
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3008.5594634742533,
+            "upper_bound": 7586.214312681627
+          },
+          "point_estimate": 5853.654530333451,
+          "standard_error": 1150.8794991404682
+        }
+      },
+      "samples": {
+        "sampling_mode": "Linear",
+        "iters": [
+          58.0,
+          116.0,
+          174.0,
+          232.0,
+          290.0,
+          348.0,
+          406.0,
+          464.0,
+          522.0,
+          580.0
+        ],
+        "times": [
+          272639549.0,
+          546763047.0,
+          819040036.0,
+          1092368410.0,
+          1367183048.0,
+          1642143872.0,
+          1912069582.0,
+          2190146419.0,
+          2457367504.0,
+          2731135565.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "baseline",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/baseline",
+        "directory_name": "spark_proof_compression_end_to_end/baseline",
+        "title": "spark_proof_compression/end_to_end/baseline"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1046143038.5712501,
+            "upper_bound": 1063486481.15
+          },
+          "point_estimate": 1053769604.0,
+          "standard_error": 4461873.1604856895
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1046321156.25,
+            "upper_bound": 1060715948.0
+          },
+          "point_estimate": 1048745666.5,
+          "standard_error": 3437373.7373389853
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1174497.907948494,
+            "upper_bound": 20995577.107053995
+          },
+          "point_estimate": 5162227.783352137,
+          "standard_error": 5088825.445757245
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3734397.35744043,
+            "upper_bound": 20588233.847139556
+          },
+          "point_estimate": 14826547.270808462,
+          "standard_error": 4530874.79386637
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2093312332.0,
+          2071823333.0,
+          2104315417.0,
+          2176791875.0,
+          2110333457.0,
+          2098924208.0,
+          2094896708.0,
+          2138548375.0,
+          2096058458.0,
+          2090387917.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "derived_products",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/derived_products",
+        "directory_name": "spark_proof_compression_end_to_end/derived_products",
+        "title": "spark_proof_compression/end_to_end/derived_products"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1052519685.55,
+            "upper_bound": 1059956795.5275
+          },
+          "point_estimate": 1056069162.5,
+          "standard_error": 1907777.9492986074
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1050597281.25,
+            "upper_bound": 1060221187.25
+          },
+          "point_estimate": 1055712687.5,
+          "standard_error": 3082791.0596414492
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 704822.0970869064,
+            "upper_bound": 11659721.797348559
+          },
+          "point_estimate": 6620457.519963384,
+          "standard_error": 2735325.7300716923
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3648017.2609310113,
+            "upper_bound": 8135412.04426121
+          },
+          "point_estimate": 6358221.528902831,
+          "standard_error": 1234162.6667365322
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2097925834.0,
+          2105949292.0,
+          2098883875.0,
+          2116939416.0,
+          2101483750.0,
+          2123945333.0,
+          2137083958.0,
+          2116901458.0,
+          2118765084.0,
+          2103505250.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "duplicate_columns",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/duplicate_columns",
+        "directory_name": "spark_proof_compression_end_to_end/duplicate_columns",
+        "title": "spark_proof_compression/end_to_end/duplicate_columns"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1055064870.3125,
+            "upper_bound": 1063900558.45
+          },
+          "point_estimate": 1059382435.45,
+          "standard_error": 2261209.7405869565
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1053718614.75,
+            "upper_bound": 1065867656.25
+          },
+          "point_estimate": 1058720208.25,
+          "standard_error": 3220820.641409265
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1039626.900292933,
+            "upper_bound": 12966232.260203362
+          },
+          "point_estimate": 6198225.649559498,
+          "standard_error": 3209989.6841625036
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4118313.7978876466,
+            "upper_bound": 9495568.05803956
+          },
+          "point_estimate": 7582714.01843109,
+          "standard_error": 1353190.7548456162
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2122701250.0,
+          2143862126.0,
+          2108783541.0,
+          2104486834.0,
+          2112179583.0,
+          2124001375.0,
+          2139469250.0,
+          2125506125.0,
+          2096271000.0,
+          2110387625.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "final_rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/final_rows",
+        "directory_name": "spark_proof_compression_end_to_end/final_rows",
+        "title": "spark_proof_compression/end_to_end/final_rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1053600610.5,
+            "upper_bound": 1064673970.32625
+          },
+          "point_estimate": 1058772754.2,
+          "standard_error": 2835828.9466060745
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1052266677.5,
+            "upper_bound": 1065604947.75
+          },
+          "point_estimate": 1055062645.75,
+          "standard_error": 4014391.79619578
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 697639.2708644271,
+            "upper_bound": 15768933.320045471
+          },
+          "point_estimate": 7657968.379443884,
+          "standard_error": 3947800.939742222
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 4544293.632132774,
+            "upper_bound": 12126902.151451275
+          },
+          "point_estimate": 9421242.605297234,
+          "standard_error": 1992268.0539772245
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2155143208.0,
+          2123722000.0,
+          2106005626.0,
+          2129044625.0,
+          2094786750.0,
+          2113934959.0,
+          2106315624.0,
+          2104743417.0,
+          2138697791.0,
+          2103061084.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "refined_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/refined_metadata",
+        "directory_name": "spark_proof_compression_end_to_end/refined_metadata",
+        "title": "spark_proof_compression/end_to_end/refined_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1055875245.325,
+            "upper_bound": 1085112906.4950001
+          },
+          "point_estimate": 1068685229.1,
+          "standard_error": 7566106.100947598
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1054338073.0,
+            "upper_bound": 1081595468.75
+          },
+          "point_estimate": 1056462145.75,
+          "standard_error": 6512334.547193949
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 812588.2120236754,
+            "upper_bound": 33568349.573242664
+          },
+          "point_estimate": 5332556.651978195,
+          "standard_error": 7525951.3733189
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 3444094.580782865,
+            "upper_bound": 33980057.08059642
+          },
+          "point_estimate": 25309741.10190838,
+          "standard_error": 7913986.520812889
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2105581709.0,
+          2101701707.0,
+          2206413125.0,
+          2251696209.0,
+          2113585375.0,
+          2109578250.0,
+          2112263208.0,
+          2119968750.0,
+          2141145666.0,
+          2111770583.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "rows",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/rows",
+        "directory_name": "spark_proof_compression_end_to_end/rows",
+        "title": "spark_proof_compression/end_to_end/rows"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1049047279.4,
+            "upper_bound": 1059981206.03625
+          },
+          "point_estimate": 1054598848.15,
+          "standard_error": 2804383.8477332154
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1043945667.0,
+            "upper_bound": 1063714521.0
+          },
+          "point_estimate": 1055272177.5,
+          "standard_error": 4524141.668285273
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1514197.8856176138,
+            "upper_bound": 15953717.538414896
+          },
+          "point_estimate": 13080206.76252991,
+          "standard_error": 3904076.181304067
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 5734310.549737897,
+            "upper_bound": 11106173.700812755
+          },
+          "point_estimate": 9347988.538370064,
+          "standard_error": 1349971.1383520926
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2084169251.0,
+          2085581041.0,
+          2087891334.0,
+          2127429042.0,
+          2104669209.0,
+          2106711834.0,
+          2135053751.0,
+          2114376876.0,
+          2128949583.0,
+          2117145042.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "rows_fresh",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/rows_fresh",
+        "directory_name": "spark_proof_compression_end_to_end/rows_fresh",
+        "title": "spark_proof_compression/end_to_end/rows_fresh"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1061789476.15625,
+            "upper_bound": 1070759972.85
+          },
+          "point_estimate": 1065535962.55,
+          "standard_error": 2357133.5343916616
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1060839125.0,
+            "upper_bound": 1068056552.25
+          },
+          "point_estimate": 1063387843.75,
+          "standard_error": 1621078.1610502852
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 726520.6890016794,
+            "upper_bound": 7913145.703263581
+          },
+          "point_estimate": 3040024.5441287756,
+          "standard_error": 1969787.1001973304
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1703206.7578040482,
+            "upper_bound": 11419172.112634296
+          },
+          "point_estimate": 7846631.459493942,
+          "standard_error": 2860406.6437901133
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2143719751.0,
+          2129902084.0,
+          2127941958.0,
+          2120421624.0,
+          2128506458.0,
+          2122414625.0,
+          2125609417.0,
+          2122934876.0,
+          2118304667.0,
+          2170963791.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "rows_fresh_packed",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/rows_fresh_packed",
+        "directory_name": "spark_proof_compression_end_to_end/rows_fresh_packed",
+        "title": "spark_proof_compression/end_to_end/rows_fresh_packed"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1061557447.2437501,
+            "upper_bound": 1072068058.05
+          },
+          "point_estimate": 1066739920.7,
+          "standard_error": 2687027.4675033144
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1060006646.0,
+            "upper_bound": 1074524771.0
+          },
+          "point_estimate": 1066768916.5,
+          "standard_error": 3315313.523350866
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 930361.5061327815,
+            "upper_bound": 15588271.100252867
+          },
+          "point_estimate": 10762285.871431231,
+          "standard_error": 3680421.4559514862
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 5013425.782377843,
+            "upper_bound": 11383241.690927316
+          },
+          "point_estimate": 8959736.54619111,
+          "standard_error": 1643245.4094965684
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2151580791.0,
+          2120013292.0,
+          2127074124.0,
+          2135544166.0,
+          2133705749.0,
+          2149049542.0,
+          2106045834.0,
+          2164455916.0,
+          2113959083.0,
+          2133369917.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/rows_fresh_packed_metadata",
+        "directory_name": "spark_proof_compression_end_to_end/rows_fresh_packed_metadata",
+        "title": "spark_proof_compression/end_to_end/rows_fresh_packed_metadata"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1050451554.15,
+            "upper_bound": 1060721237.4
+          },
+          "point_estimate": 1054796831.25,
+          "standard_error": 2684656.808019148
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1048976041.5,
+            "upper_bound": 1057858333.0
+          },
+          "point_estimate": 1052215312.25,
+          "standard_error": 2445560.237205553
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1308162.8205254674,
+            "upper_bound": 10502707.44958967
+          },
+          "point_estimate": 5456693.635824323,
+          "standard_error": 2252708.2062248415
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2959305.7360752104,
+            "upper_bound": 13114525.140776606
+          },
+          "point_estimate": 8965399.665388508,
+          "standard_error": 3180729.045189476
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2115716666.0,
+          2104729291.0,
+          2100373459.0,
+          2116237375.0,
+          2155379750.0,
+          2104131958.0,
+          2093005917.0,
+          2096844084.0,
+          2111566042.0,
+          2097952083.0
+        ]
+      }
+    },
+    {
+      "benchmark": {
+        "group_id": "spark_proof_compression/end_to_end",
+        "function_id": null,
+        "value_str": "rows_fresh_packed_metadata_factored",
+        "throughput": {
+          "Elements": 1
+        },
+        "full_id": "spark_proof_compression/end_to_end/rows_fresh_packed_metadata_factored",
+        "directory_name": "spark_proof_compression_end_to_end/rows_fresh_packed_metadata_factored",
+        "title": "spark_proof_compression/end_to_end/rows_fresh_packed_metadata_factored"
+      },
+      "estimates_ns": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1052092963.17375,
+            "upper_bound": 1063423849.3775
+          },
+          "point_estimate": 1057235283.4,
+          "standard_error": 2910829.160150916
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 1049959250.0,
+            "upper_bound": 1065553770.5
+          },
+          "point_estimate": 1053680864.75,
+          "standard_error": 3384799.4200179037
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 857359.7660288215,
+            "upper_bound": 13169225.400799513
+          },
+          "point_estimate": 5519349.052011967,
+          "standard_error": 3127168.483215938
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 2920055.8916687914,
+            "upper_bound": 12140276.02914292
+          },
+          "point_estimate": 9709206.112304984,
+          "standard_error": 2435183.3785245065
+        }
+      },
+      "samples": {
+        "sampling_mode": "Flat",
+        "iters": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "times": [
+          2116941209.0,
+          2113881791.0,
+          2148333291.0,
+          2102412875.0,
+          2099913959.0,
+          2099918500.0,
+          2109997459.0,
+          2104726000.0,
+          2098178292.0,
+          2150402292.0
+        ]
+      }
+    }
+  ],
+  "source_sha256": {
+    "Cargo.lock": "ad3ae13738d09443b16298ff218fafb941a701415f0758569e6b7679cfe6d898",
+    "Cargo.toml": "f36975b22248e6808c9dbc8abe0f06ddb5036161f483a4345d11b86a7d2780bc",
+    "benches/sha256_full_zk.rs": "b24af6b67cb07449c8d594a500746bb7e272b09774658041a7217c7485f7c743",
+    "benches/spark_proof_compression.rs": "25b7f0a4b358c283d4978ad453289f6a5cfd676b1524d73199dd41e8fbd469ca",
+    "benches/sumcheck_replay.rs": "d39bbc909f1a6898c7e4da9e4de4348a426b17dafc8df02d08592f00013299f6",
+    "benches/support/sha256.rs": "74a46771179a47fb3cd379d66cfa24a40a8cbfc3d86720e1e63c5a6777afe953",
+    "src/bin/circom-adapter-check.rs": "6085e623f86d3b03b66de974e8c7694189c630c48a1f898b8470db98e70c33a9",
+    "src/bin/leanvm-full-zk-fixture.rs": "d1a8a2d4c19086984dabb1515f1ed3c6bdc2653e9243e66ef8ad0d9796adaa53",
+    "src/bin/leanvm-full-zk-spark-fixture.rs": "7b313cb6288b56e00b72c6ddda39c0cb253870dfa84c13b79e7e582a3a4b9bcf",
+    "src/bin/leanvm-m0-fixture.rs": "f7161a0c864e6b4d695f843c45875d27dbf0975372260a09c108e7e4d94a6c82",
+    "src/bin/poseidon-schedule-calibration.rs": "1e0afeca7440f75b2a8491939950f7bd0ea55ef9a40af5dc6997dc66da3e98e8",
+    "src/bin/poseidon-schedule-candidates.rs": "2a5dcdbe73df1a44c6c51aef1f95e24c6d59cf4d6119cf606cc421f600a2940e",
+    "src/bin/poseidon-schedule-heldout.rs": "0a34837f50629ee5b18176fecd4ae84ac23297946caa5eb1d380338ac77cc19d",
+    "src/bin/poseidon_schedule_support/mod.rs": "4c00a269cdeaba8e9a74192c228cd5d65225a16f182eec4413a3c3de4f0c378a",
+    "src/bin/spark-sha256-layouts.rs": "d110349ca538e2b822800c9beda36f7cc811d455dcb0e3035080047a23d5071b",
+    "src/canonical_challenger.rs": "de35745433b39665a516701f3f992821ef053007fc4044135335a58720598c9d",
+    "src/circom.rs": "e843589219cbd942cd640b0f8913e3f8e14ba0bfe4baf2223110252593aa6631",
+    "src/config.rs": "094053a49b07e540b179e94a1d2a8922dea6b0c7e74574e75ea86faaf72b8600",
+    "src/domain_separator.rs": "6d38e1ef5df72f65fe1841ac89416c2e4cb83d8bd32d418a44575c25b2d3420a",
+    "src/engine.rs": "50d412e6ce6aa3e141d0249a4609ff05e65a8be50da50ee1a3d7c2347e060365",
+    "src/error.rs": "1769640f3e66593798ad3bf831c8432f4155adbf8a37d2284b23fd611b1a13b5",
+    "src/fixtures.rs": "5c0ee2a1b5881039066f4c16927d1adf28f54dc89d053b5117fe903945e1d822",
+    "src/hashers.rs": "28d94a48185509830e7da9d7026ffeaf43dab6de0724cc45d42a738f691834ea",
+    "src/keccak_challenger.rs": "412e76bd60276583a8eb2f1ea1d5acf8faccf51b6db9f4c2f2fa89d252223154",
+    "src/leanvm.rs": "65eb98a65942fe7cb9ccf718d5787f8462d0e2ddcc8d78fdc0d9c862dbe4bfba",
+    "src/leanvm_full_zk.rs": "a54da82e86f866d42438b9bfeb7e1a33259badbf79233e04a0d5cdc4b46d5c28",
+    "src/lib.rs": "7747750ba1fc3c285ddbb14c48a2ecf73f2c2fa41bf4d98201cfa9018bf74db7",
+    "src/pcs.rs": "bfdc3b8ddfb7b2a79b7542155e5d5abc9dd41f95f31d56e24ff8c74ccda249a9",
+    "src/pcs_config.rs": "9ff134703c62ca2c1b09e318ced79dadafae661c73886ca83fd00a782cdd0418",
+    "src/plonky3_whir_pcs.rs": "3ed2046de7ee1d795d77d3a0d0c025214e729b16d6a377a699c18576cf7c68be",
+    "src/poly.rs": "665d1ac0fd876e14dfe827867d4b6f134eb71bb4e47f8a51dd20096ea7a71df5",
+    "src/poseidon.rs": "f9401e7ae73ed9ffe2adde369032f4b935db529471ef5805b91de983d0ab14f0",
+    "src/poseidon_trace.rs": "8376c1c72cf4f553ffd6475c45013e574ad9cf4279a57e2fe3aa311dd3eb5165",
+    "src/profiling.rs": "a79e3481d2adb40d74fdb5f3976360894d4287bb072a69606721e25f58883a56",
+    "src/proof_compression.rs": "1981b8d0c84d324fc36c425164973fd7d8b15c319cddd6d2d70c7d0ffac0a6c7",
+    "src/proof_compression_encoding.rs": "2eb9d7067853167be16999590b9984bd75f526113c699b9d9e7aa39742459cdb",
+    "src/proof_compression_hiding.rs": "b5df5b15d338365153599131e2232a40fa6c65970193398e24b690406dc9fde7",
+    "src/proof_compression_plain.rs": "00743e068d8b251f07d4a60017a4d51f98598567bd7cc72f7a5b8b2014873106",
+    "src/protocol.rs": "8360c864c8510ae3fa6a1d55121f55b9c06f054750ccbc096be5427620310324",
+    "src/r1cs.rs": "a835b4b09e8a0e6f0ee367190222519a589c06e756b03c3aa87ca4d857f71f90",
+    "src/security.rs": "187a2802d122c4fece4ede442ce466dbfd3c7a7902dbdbb0327698b304253c9e",
+    "src/spark.rs": "28ab1e3a5caafc553f6e9ba00ba7d47d542dcbd9196397b099ac1a747e188950",
+    "src/statement.rs": "0286cc92b1f0c6355c57792113e1538b1ee2a6683f3cdd3106997fcaf42b0ccd",
+    "src/sumcheck.rs": "6ceee388b2a5762d9724f8a4d7c8b7a99c1091fb6f1e5f66abb3261b812ef929",
+    "src/sumcheck_replay.rs": "67ae18ff5599e4fc09ddf213b599cd85aa66939290a71884258d974070b9d211",
+    "src/whir_params.rs": "ab189aaa9d75fe52989dbc11e7e000d435b130c9f5750f5fa1fc0f6011599612"
+  }
+}

@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 use core::marker::PhantomData;
 
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
@@ -15,7 +15,7 @@ use p3_sumcheck::{
 use p3_symmetric::{CryptographicHasher, Hash};
 use p3_whir::pcs::zk::{
     CommittedMaskGroup, CommittedMaskGroupProverData, CommittedRelation, HidingWhirProver,
-    HidingWhirVerifier, MaskGroupShape,
+    HidingWhirVerifier, MaskGroupProverData, MaskGroupShape,
 };
 use rand::{
     distr::{Distribution, StandardUniform},
@@ -24,13 +24,14 @@ use rand::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{ExtField, KeccakEngine, PoseidonChallenger, PoseidonEngine, F};
+use crate::engine::{ExtField, KeccakEngine, Poseidon1Engine, PoseidonEngine, F};
 use crate::error::InvalidConfigReason;
 use crate::plonky3_whir_pcs::{
-    build_poseidon_full_zk_pcs, observe_poseidon_relation_domain_separator, PoseidonCommitment,
-    PoseidonHidingPcs, PoseidonMmcs, PoseidonRelationProof,
+    build_poseidon_full_zk_pcs, observe_poseidon_relation_domain_separator, FullZkPoseidonEngine,
+    FullZkPoseidonPcs, PoseidonZkCommitmentFor, PoseidonZkHidingPcsFor, PoseidonZkMmcsFor,
+    PoseidonZkRelationProofFor,
 };
-use crate::poseidon::{PoseidonZkProvingKey, PoseidonZkVerifyingKey};
+use crate::poseidon::{PoseidonZkProvingKeyFor, PoseidonZkVerifyingKeyFor};
 use crate::profiling::profile_scope;
 use crate::r1cs::{DirectBindLayout, DirectMultiplyLayout};
 use crate::security::{
@@ -192,46 +193,70 @@ pub struct SpartanProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
-pub struct ZkSpartanProof<Ext: ExtField>
+#[serde(bound(
+    serialize = "E::EF: ExtField, SparkFixedOpeningProof<E, Plonky3WhirPcs>: Serialize, SparkReadOpeningProof<E, Plonky3WhirPcs>: Serialize, PoseidonZkRelationProofFor<E>: Serialize",
+    deserialize = "E::EF: ExtField, SparkFixedOpeningProof<E, Plonky3WhirPcs>: Deserialize<'de>, SparkReadOpeningProof<E, Plonky3WhirPcs>: Deserialize<'de>, PoseidonZkRelationProofFor<E>: Deserialize<'de>"
+))]
+pub struct ZkSpartanProofFor<E>
 where
-    StandardUniform: Distribution<Ext>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
-    pub application_mask_commitment: PoseidonCommitment,
-    pub outer_sumcheck: ZkOuterSumcheckProof<Ext>,
-    pub outer_claims: (Ext, Ext, Ext),
-    pub outer_mask_evals: Vec<Ext>,
-    pub inner_sumcheck: ZkSumcheckData<F, Ext>,
-    pub inner_sumcheck_mask_commitment: PoseidonCommitment,
-    pub matrix_closing: ZkMatrixClosingProof<Ext>,
-    pub pcs_proof: PoseidonRelationProof<Ext>,
+    pub application_mask_commitment: PoseidonZkCommitmentFor<E>,
+    pub outer_sumcheck: ZkOuterSumcheckProof<E::EF>,
+    pub outer_claims: (E::EF, E::EF, E::EF),
+    pub outer_mask_evals: Vec<E::EF>,
+    pub inner_sumcheck: ZkSumcheckData<F, E::EF>,
+    pub inner_sumcheck_mask_commitment: PoseidonZkCommitmentFor<E>,
+    pub matrix_closing: ZkMatrixClosingProofFor<E>,
+    pub pcs_proof: PoseidonZkRelationProofFor<E>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
-pub struct ZkSparkClosingProof<Ext: ExtField>
+#[serde(bound(
+    serialize = "E::EF: ExtField, SparkFixedOpeningProof<E, Plonky3WhirPcs>: Serialize, SparkReadOpeningProof<E, Plonky3WhirPcs>: Serialize",
+    deserialize = "E::EF: ExtField, SparkFixedOpeningProof<E, Plonky3WhirPcs>: Deserialize<'de>, SparkReadOpeningProof<E, Plonky3WhirPcs>: Deserialize<'de>"
+))]
+pub struct ZkSparkClosingProofFor<E>
 where
-    StandardUniform: Distribution<Ext>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
-    pub spark_products: SparkBatchedMemoryProductsProof<Ext>,
-    pub spark_fixed_openings: SparkFixedOpeningProof<PoseidonEngine<Ext>, Plonky3WhirPcs>,
-    pub spark_read_openings: SparkReadOpeningProof<PoseidonEngine<Ext>, Plonky3WhirPcs>,
+    pub spark_products: SparkBatchedMemoryProductsProof<E::EF>,
+    pub spark_fixed_openings: SparkFixedOpeningProof<E, Plonky3WhirPcs>,
+    pub spark_read_openings: SparkReadOpeningProof<E, Plonky3WhirPcs>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(bound(serialize = "Ext: ExtField", deserialize = "Ext: ExtField"))]
-pub enum ZkMatrixClosingProof<Ext: ExtField>
+#[serde(bound(
+    serialize = "E::EF: ExtField, ZkSparkClosingProofFor<E>: Serialize",
+    deserialize = "E::EF: ExtField, ZkSparkClosingProofFor<E>: Deserialize<'de>"
+))]
+pub enum ZkMatrixClosingProofFor<E>
 where
-    StandardUniform: Distribution<Ext>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
     DirectSparse,
-    Spark(ZkSparkClosingProof<Ext>),
+    Spark(ZkSparkClosingProofFor<E>),
 }
 
-impl<Ext> ZkMatrixClosingProof<Ext>
+impl<E> ZkMatrixClosingProofFor<E>
 where
-    Ext: ExtField,
-    StandardUniform: Distribution<Ext>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
     pub fn mode(&self) -> MatrixClosingMode {
         match self {
@@ -240,6 +265,13 @@ where
         }
     }
 }
+
+pub type ZkSpartanProof<Ext> = ZkSpartanProofFor<PoseidonEngine<Ext>>;
+pub type Poseidon1ZkSpartanProof<Ext> = ZkSpartanProofFor<Poseidon1Engine<Ext>>;
+pub type ZkSparkClosingProof<Ext> = ZkSparkClosingProofFor<PoseidonEngine<Ext>>;
+pub type Poseidon1ZkSparkClosingProof<Ext> = ZkSparkClosingProofFor<Poseidon1Engine<Ext>>;
+pub type ZkMatrixClosingProof<Ext> = ZkMatrixClosingProofFor<PoseidonEngine<Ext>>;
+pub type Poseidon1ZkMatrixClosingProof<Ext> = ZkMatrixClosingProofFor<Poseidon1Engine<Ext>>;
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
@@ -463,6 +495,8 @@ pub trait SpartanContextEngine: SpartanWhirEngine<F = F>
 where
     Self::EF: ExtField,
 {
+    const NO_ZK_PROTOCOL_ID: &'static [u8];
+
     fn challenger() -> Self::Challenger;
 
     fn observe_spartan_context(
@@ -476,6 +510,8 @@ impl<Ext> SpartanContextEngine for KeccakEngine<Ext>
 where
     Ext: ExtField,
 {
+    const NO_ZK_PROTOCOL_ID: &'static [u8] = crate::NO_ZK_PROTOCOL_ID;
+
     fn challenger() -> Self::Challenger {
         crate::engine::keccak_challenger()
     }
@@ -499,6 +535,8 @@ impl<Ext> SpartanContextEngine for PoseidonEngine<Ext>
 where
     Ext: ExtField,
 {
+    const NO_ZK_PROTOCOL_ID: &'static [u8] = crate::NO_ZK_PROTOCOL_ID;
+
     fn challenger() -> Self::Challenger {
         crate::engine::poseidon_challenger()
     }
@@ -520,13 +558,45 @@ where
     }
 }
 
+impl<Ext> SpartanContextEngine for Poseidon1Engine<Ext>
+where
+    Ext: ExtField,
+{
+    const NO_ZK_PROTOCOL_ID: &'static [u8] = crate::POSEIDON1_NO_ZK_PROTOCOL_ID;
+
+    fn challenger() -> Self::Challenger {
+        crate::engine::poseidon1_challenger()
+    }
+
+    fn observe_spartan_context(
+        challenger: &mut Self::Challenger,
+        domain_separator: &DomainSeparator,
+        public_inputs: &[F],
+    ) -> Result<(), SpartanWhirError> {
+        for byte in domain_separator.to_bytes() {
+            challenger.observe(F::from_u8(byte));
+        }
+        for &input in public_inputs {
+            challenger.observe(input);
+        }
+        Ok(())
+    }
+}
+
 pub struct SpartanProtocol<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<(E, Pcs)>,
 }
 
-pub struct PoseidonZkSpartanProtocol<Ext: ExtField> {
-    marker: PhantomData<Ext>,
+pub struct PoseidonZkSpartanProtocolFor<E: FullZkPoseidonEngine>
+where
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+{
+    marker: PhantomData<E>,
 }
+
+pub type PoseidonZkSpartanProtocol<Ext> = PoseidonZkSpartanProtocolFor<PoseidonEngine<Ext>>;
+pub type Poseidon1ZkSpartanProtocol<Ext> = PoseidonZkSpartanProtocolFor<Poseidon1Engine<Ext>>;
 
 pub(crate) fn validate_canonical_verifying_shape<F>(
     shape: &R1csShape<F>,
@@ -651,7 +721,8 @@ where
         return Err(SpartanWhirError::invalid_config());
     }
 
-    let expected_domain = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+    let expected_domain = DomainSeparator::new_with_protocol_id(
+        E::NO_ZK_PROTOCOL_ID,
         &vk.shape_canonical,
         &vk.security,
         &vk.whir_params,
@@ -933,7 +1004,8 @@ where
             MatrixClosingMode::DirectSparse => None,
             MatrixClosingMode::Spark => config.spark_whir_params.clone(),
         };
-        let domain_separator = DomainSeparator::new_with_matrix_closing_and_spark_whir_params(
+        let domain_separator = DomainSeparator::new_with_protocol_id(
+            E::NO_ZK_PROTOCOL_ID,
             &shape_canonical,
             &config.security,
             &config.whir_params,
@@ -1517,6 +1589,7 @@ where
             read_commitments,
             spark_tables,
             &product_claims,
+            false,
             challenger,
         )?;
 
@@ -1670,6 +1743,7 @@ where
             parsed_fixed_openings,
             parsed_read_openings,
             &product_claims,
+            false,
             challenger,
         )?;
         verify_spark_batched_memory_leaf_claims_with_openings(
@@ -1713,32 +1787,113 @@ where
     }
 }
 
-impl<Ext> PoseidonZkSpartanProtocol<Ext>
+impl<E> PoseidonZkSpartanProtocolFor<E>
 where
-    Ext: ExtField + Serialize + for<'de> Deserialize<'de>,
-    StandardUniform: Distribution<Ext> + Distribution<F>,
-    PoseidonChallenger: CanObserve<PoseidonCommitment>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField + Serialize + for<'de> Deserialize<'de>,
+    E::Challenger: CanObserve<PoseidonZkCommitmentFor<E>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + p3_challenger::GrindingChallenger<Witness = F>
+        + Clone
+        + Send,
+    StandardUniform: Distribution<E::EF> + Distribution<F>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
+    MaskGroupProverData<F, E::EF, PoseidonZkMmcsFor<E>>: Send,
 {
     pub fn prove(
-        pk: &PoseidonZkProvingKey<Ext>,
+        pk: &PoseidonZkProvingKeyFor<E>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
-        challenger: &mut PoseidonChallenger,
-    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError> {
+        challenger: &mut E::Challenger,
+    ) -> Result<
+        (
+            R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+            ZkSpartanProofFor<E>,
+        ),
+        SpartanWhirError,
+    > {
         let mut rng = rand::make_rng::<StdRng>();
         Self::prove_with_rng(pk, public_inputs, witness, challenger, &mut rng)
     }
 
     pub fn prove_with_rng<R>(
-        pk: &PoseidonZkProvingKey<Ext>,
+        pk: &PoseidonZkProvingKeyFor<E>,
         public_inputs: &[F],
         witness: &R1csWitness<F>,
-        challenger: &mut PoseidonChallenger,
+        challenger: &mut E::Challenger,
         rng: &mut R,
-    ) -> Result<(R1csInstance<F, PoseidonCommitment>, ZkSpartanProof<Ext>), SpartanWhirError>
+    ) -> Result<
+        (
+            R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+            ZkSpartanProofFor<E>,
+        ),
+        SpartanWhirError,
+    >
     where
         R: Rng + CryptoRng,
     {
+        Self::prove_with_rng_impl(pk, public_inputs, witness, challenger, rng, false, false)
+            .map(|(instance, proof, _)| (instance, proof))
+    }
+
+    /// Produce a compact transport proof with the same protocol transcript.
+    pub fn prove_compressed_with_rng<R>(
+        pk: &PoseidonZkProvingKeyFor<E>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut E::Challenger,
+        rng: &mut R,
+        options: crate::proof_compression::ProofCompressionOptions,
+    ) -> Result<
+        (
+            R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+            crate::proof_compression::CompressedZkProofFor<E>,
+        ),
+        SpartanWhirError,
+    >
+    where
+        R: Rng + CryptoRng,
+        E::PlainProof: crate::proof_compression::PlainProofRowAccess,
+    {
+        if pk.matrix_closing != MatrixClosingMode::Spark {
+            return Err(SpartanWhirError::ProofKindMismatch);
+        }
+        let (instance, proof, products) = Self::prove_with_rng_impl(
+            pk,
+            public_inputs,
+            witness,
+            challenger,
+            rng,
+            options.factored_rounds,
+            options.final_rows,
+        )?;
+        Ok((
+            instance,
+            crate::proof_compression::CompressedZkProofFor::from_proof(proof, options, products)?,
+        ))
+    }
+
+    fn prove_with_rng_impl<R>(
+        pk: &PoseidonZkProvingKeyFor<E>,
+        public_inputs: &[F],
+        witness: &R1csWitness<F>,
+        challenger: &mut E::Challenger,
+        rng: &mut R,
+        factor_products: bool,
+        final_rows: bool,
+    ) -> Result<
+        (
+            R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+            ZkSpartanProofFor<E>,
+            Option<crate::spark::CompactSparkBatchedMemoryProductsProof<E::EF>>,
+        ),
+        SpartanWhirError,
+    >
+    where
+        R: Rng + CryptoRng,
+    {
+        let mut compressed_products = None;
         if public_inputs.len() != pk.num_io {
             return Err(SpartanWhirError::InvalidPublicInputLength);
         }
@@ -1751,7 +1906,7 @@ where
         if num_outer_rounds == 0 {
             return Err(SpartanWhirError::invalid_config());
         }
-        observe_poseidon_zk_context(
+        observe_poseidon_zk_context::<E>(
             challenger,
             &pk.domain_separator,
             &pk.pcs_config,
@@ -1761,7 +1916,7 @@ where
         );
 
         let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
-            build_poseidon_full_zk_pcs::<Ext>(
+            build_poseidon_full_zk_pcs::<E>(
                 &pk.pcs_config,
                 num_outer_rounds,
                 num_inner_rounds,
@@ -1773,11 +1928,11 @@ where
 
         let inner_messages = {
             let _profile = profile_scope("zk_inner_mask_sample");
-            sample_inner_masks::<Ext, _>(num_outer_rounds, rng)
+            sample_inner_masks::<E::EF, _>(num_outer_rounds, rng)
         };
         let outer_messages = {
             let _profile = profile_scope("zk_outer_mask_sample");
-            sample_outer_masks::<Ext, _>(num_outer_rounds, rng)
+            sample_outer_masks::<E::EF, _>(num_outer_rounds, rng)
         };
         let application_messages = combine_application_mask_vectors(
             inner_messages.clone(),
@@ -1792,7 +1947,7 @@ where
         };
         let application_mask_commitment = application_group.commitment.clone();
 
-        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        observe_poseidon_relation_domain_separator::<E>(&pcs, &relation_shapes, challenger);
         let mut witness_padded = witness.w.clone();
         witness_padded.resize(pk.shape_canonical.num_vars, F::ZERO);
         let (witness_commitment, witness_prover_data) = {
@@ -1819,7 +1974,7 @@ where
         };
         let outer = {
             let _profile = profile_scope("zk_outer_sumcheck");
-            prove_outer_zk_base_first_unchecked::<F, Ext, _>(
+            prove_outer_zk_base_first_unchecked::<F, E::EF, _>(
                 &pk.shape_canonical,
                 az,
                 bz,
@@ -1838,8 +1993,8 @@ where
                 outer.masked_claims.2,
             ]);
             (
-                challenger.sample_algebra_element::<Ext>(),
-                challenger.sample_algebra_element::<Ext>(),
+                challenger.sample_algebra_element::<E::EF>(),
+                challenger.sample_algebra_element::<E::EF>(),
             )
         };
         let t_x = {
@@ -1853,7 +2008,7 @@ where
             let packed_weights = {
                 let _profile = profile_scope("zk_bind_row_vars_joint");
                 pk.shape_canonical
-                    .bind_row_vars_joint_packed_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+                    .bind_row_vars_joint_packed_with_layout_unchecked::<E::EF>(layout, &t_x, rho)?
             };
             let _profile = profile_scope("zk_inner_product_build");
             ProductPolynomial::new_base_packed(Poly::new(z_full), Poly::new(packed_weights))
@@ -1861,10 +2016,10 @@ where
             let weights = {
                 let _profile = profile_scope("zk_bind_row_vars_joint");
                 pk.shape_canonical
-                    .bind_row_vars_joint_with_layout_unchecked::<Ext>(layout, &t_x, rho)?
+                    .bind_row_vars_joint_with_layout_unchecked::<E::EF>(layout, &t_x, rho)?
             };
             let _profile = profile_scope("zk_inner_product_build");
-            unpacked_inner_product::<Ext>(z_full, weights)?
+            unpacked_inner_product::<E::EF>(z_full, weights)?
         };
 
         let (inner_covectors, outer_covectors, joint_target) = {
@@ -1887,7 +2042,7 @@ where
         let source_claim = joint_target - application_aux;
         let sumcheck_prover = SumcheckProver::new(product, source_claim);
         let extension_mmcs = ExtensionMmcs::new(pcs.mmcs.clone());
-        let encoding = pcs.config.sumcheck_mask.encoding::<Ext>();
+        let encoding = pcs.config.sumcheck_mask.encoding::<E::EF>();
         let mut inner_sumcheck = ZkSumcheckData::default();
         let handoff = {
             let _profile = profile_scope("zk_inner_sumcheck");
@@ -1921,7 +2076,7 @@ where
             };
             let weighted_matrix_eval = *weighted_matrix_eval;
 
-            let carry_scale = inner_epsilon * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+            let carry_scale = inner_epsilon * E::EF::TWO.exp_u64(num_inner_rounds as u64).inverse();
             scale_covectors(&mut application_group.covectors, carry_scale);
             let sumcheck_covectors = mask_residual_covectors_from_shape(
                 num_inner_rounds,
@@ -1949,7 +2104,7 @@ where
             )
         };
         let matrix_closing = match pk.matrix_closing {
-            MatrixClosingMode::DirectSparse => ZkMatrixClosingProof::DirectSparse,
+            MatrixClosingMode::DirectSparse => ZkMatrixClosingProofFor::DirectSparse,
             MatrixClosingMode::Spark => {
                 let spark_tables = pk
                     .spark_tables
@@ -1969,7 +2124,7 @@ where
                     .ok_or_else(SpartanWhirError::invalid_config)?;
                 let fixed_prover_data = {
                     let _profile = profile_scope("zk_spark_prepare_fixed_openings");
-                    prepare_spark_fixed_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    prepare_spark_fixed_openings::<E, E::EF, Plonky3WhirPcs>(
                         &spark_pcs_configs.fixed_value,
                         &spark_pcs_configs.fixed_audit,
                         fixed_prover_data,
@@ -1983,12 +2138,13 @@ where
                 };
                 let (read_prover_data, read_commitments) = {
                     let _profile = profile_scope("zk_spark_commit_read_tables");
-                    commit_spark_read_tables::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    commit_spark_read_tables::<E, E::EF, Plonky3WhirPcs>(
                         &spark_pcs_configs.read,
                         &read_tables,
                         challenger,
                     )?
                 };
+                let product_replay = factor_products.then(|| E::challenger_for_replay(challenger));
                 let (spark_products, product_claims) = {
                     let _profile = profile_scope("zk_spark_memory_products");
                     prove_spark_batched_memory_products_with_read_tables_and_leaf_claims(
@@ -1999,8 +2155,15 @@ where
                         challenger,
                     )?
                 };
+                if let Some(mut replay) = product_replay {
+                    compressed_products = Some(crate::spark::compress_spark_memory_products(
+                        &spark_products,
+                        &spark_tables.metadata(),
+                        &mut replay,
+                    )?);
+                }
                 let (spark_fixed_openings, spark_read_openings) =
-                    open_spark_table_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    open_spark_table_openings::<E, E::EF, Plonky3WhirPcs>(
                         spark_pcs_configs,
                         fixed_prover_data,
                         expected_fixed_commitments,
@@ -2008,13 +2171,14 @@ where
                         read_commitments,
                         spark_tables,
                         &product_claims,
+                        final_rows,
                         challenger,
                     )?;
                 let spark_matrix_eval = matrix_eval_rlc(product_claims.matrix_evals, rho);
                 if weighted_matrix_eval != inner_epsilon * spark_matrix_eval {
                     return Err(SpartanWhirError::SparkMatrixEvaluationMismatch);
                 }
-                ZkMatrixClosingProof::Spark(ZkSparkClosingProof {
+                ZkMatrixClosingProofFor::Spark(ZkSparkClosingProofFor {
                     spark_products,
                     spark_fixed_openings,
                     spark_read_openings,
@@ -2031,7 +2195,7 @@ where
         let mut relation = CommittedRelation::empty();
         relation.source.push_eq(
             Point::new(r_y.as_slice()[1..].to_vec()),
-            weighted_matrix_eval * (Ext::ONE - selector),
+            weighted_matrix_eval * (E::EF::ONE - selector),
         );
         relation.target = joint_residual - public_term;
         let pcs_proof = {
@@ -2049,7 +2213,7 @@ where
 
         Ok((
             instance,
-            ZkSpartanProof {
+            ZkSpartanProofFor {
                 application_mask_commitment,
                 outer_sumcheck: outer.proof,
                 outer_claims: outer.masked_claims,
@@ -2059,14 +2223,49 @@ where
                 matrix_closing,
                 pcs_proof,
             },
+            compressed_products,
         ))
     }
 
     pub fn verify(
-        vk: &PoseidonZkVerifyingKey<Ext>,
-        instance: &R1csInstance<F, PoseidonCommitment>,
-        proof: &ZkSpartanProof<Ext>,
-        challenger: &mut PoseidonChallenger,
+        vk: &PoseidonZkVerifyingKeyFor<E>,
+        instance: &R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+        proof: &ZkSpartanProofFor<E>,
+        challenger: &mut E::Challenger,
+    ) -> Result<(), SpartanWhirError> {
+        Self::verify_with_compression(vk, instance, proof, challenger, None, false, false)
+    }
+
+    /// Decode compressed field values and run all original verification checks.
+    pub fn verify_compressed(
+        vk: &PoseidonZkVerifyingKeyFor<E>,
+        instance: &R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+        mut proof: crate::proof_compression::CompressedZkProofFor<E>,
+        challenger: &mut E::Challenger,
+    ) -> Result<(), SpartanWhirError>
+    where
+        E::PlainProof: crate::proof_compression::PlainProofRowAccess,
+    {
+        proof.restore_static_rows()?;
+        Self::verify_with_compression(
+            vk,
+            instance,
+            &proof.proof,
+            challenger,
+            proof.products.as_ref(),
+            proof.options.fresh_rows,
+            proof.options.final_rows,
+        )
+    }
+
+    fn verify_with_compression(
+        vk: &PoseidonZkVerifyingKeyFor<E>,
+        instance: &R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+        proof: &ZkSpartanProofFor<E>,
+        challenger: &mut E::Challenger,
+        compact_products: Option<&crate::spark::CompactSparkBatchedMemoryProductsProof<E::EF>>,
+        restore_fresh: bool,
+        final_rows: bool,
     ) -> Result<(), SpartanWhirError> {
         let validated_spark_metadata = vk.validate()?;
         vk.ensure_spark_fixed_commitments_authenticated()?;
@@ -2079,7 +2278,7 @@ where
         let num_outer_rounds = vk.shape_canonical.num_cons.ilog2() as usize;
         let num_inner_rounds = vk.shape_canonical.num_vars.ilog2() as usize + 1;
         let (pcs, [inner_shape, outer_shape, inner_sumcheck_shape]) =
-            build_poseidon_full_zk_pcs::<Ext>(
+            build_poseidon_full_zk_pcs::<E>(
                 &vk.pcs_config,
                 num_outer_rounds,
                 num_inner_rounds,
@@ -2091,9 +2290,10 @@ where
             instance,
             proof,
             &pcs,
+            final_rows,
         )?;
         let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
-        observe_poseidon_zk_context(
+        observe_poseidon_zk_context::<E>(
             challenger,
             &vk.domain_separator,
             &vk.pcs_config,
@@ -2103,10 +2303,10 @@ where
         );
         let relation_shapes = [application_shape, inner_sumcheck_shape];
         challenger.observe(proof.application_mask_commitment.clone());
-        observe_poseidon_relation_domain_separator(&pcs, &relation_shapes, challenger);
+        observe_poseidon_relation_domain_separator::<E>(&pcs, &relation_shapes, challenger);
         challenger.observe(instance.witness_commitment.clone());
 
-        let r_x = verify_outer_zk::<F, Ext, _>(
+        let r_x = verify_outer_zk::<F, E::EF, _>(
             &proof.outer_sumcheck,
             proof.outer_claims,
             &proof.outer_mask_evals,
@@ -2119,8 +2319,8 @@ where
             proof.outer_claims.1,
             proof.outer_claims.2,
         ]);
-        let rho = challenger.sample_algebra_element::<Ext>();
-        let batching = challenger.sample_algebra_element::<Ext>();
+        let rho = challenger.sample_algebra_element::<E::EF>();
+        let batching = challenger.sample_algebra_element::<E::EF>();
         let (inner_covectors, outer_covectors, joint_target) = application_relation(
             num_outer_rounds,
             &r_x.0,
@@ -2129,7 +2329,10 @@ where
             rho,
             batching,
         );
-        let handoff = ZkVerifier::<F, Ext>::verify_claim::<ExtensionMmcs<F, Ext, PoseidonMmcs>, _>(
+        let handoff = ZkVerifier::<F, E::EF>::verify_claim::<
+            ExtensionMmcs<F, E::EF, PoseidonZkMmcsFor<E>>,
+            _,
+        >(
             &proof.inner_sumcheck,
             &proof.inner_sumcheck_mask_commitment,
             pcs.config.sumcheck_mask.message_len,
@@ -2139,7 +2342,7 @@ where
             challenger,
         )
         .map_err(|_| SpartanWhirError::SumcheckFailed)?;
-        let carry_scale = handoff.eps * Ext::TWO.exp_u64(num_inner_rounds as u64).inverse();
+        let carry_scale = handoff.eps * E::EF::TWO.exp_u64(num_inner_rounds as u64).inverse();
         let mut application_covectors = combine_application_mask_vectors(
             inner_covectors,
             outer_covectors,
@@ -2153,15 +2356,16 @@ where
         );
 
         let matrix_eval = match &proof.matrix_closing {
-            ZkMatrixClosingProof::DirectSparse => {
+            ZkMatrixClosingProofFor::DirectSparse => {
                 let t_x = EqPolynomial::evals_from_point_with_base::<F>(&r_x.0);
                 let t_y =
                     EqPolynomial::evals_from_point_with_base::<F>(handoff.randomness.as_slice());
-                let (eval_a, eval_b, eval_c) =
-                    vk.shape_canonical.evaluate_with_tables::<Ext>(&t_x, &t_y)?;
+                let (eval_a, eval_b, eval_c) = vk
+                    .shape_canonical
+                    .evaluate_with_tables::<E::EF>(&t_x, &t_y)?;
                 eval_a + rho * eval_b + rho * rho * eval_c
             }
-            ZkMatrixClosingProof::Spark(closing) => {
+            ZkMatrixClosingProofFor::Spark(closing) => {
                 let spark_metadata = validated_spark_metadata
                     .as_ref()
                     .ok_or_else(SpartanWhirError::invalid_config)?;
@@ -2173,12 +2377,12 @@ where
                     .spark_fixed_commitments
                     .as_ref()
                     .ok_or_else(SpartanWhirError::invalid_config)?;
-                validate_spark_fixed_commitments::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                validate_spark_fixed_commitments::<E, E::EF, Plonky3WhirPcs>(
                     &closing.spark_fixed_openings,
                     expected_fixed_commitments,
                 )?;
                 let (parsed_fixed_openings, parsed_read_openings) =
-                    parse_spark_table_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+                    parse_spark_table_openings::<E, E::EF, Plonky3WhirPcs>(
                         spark_pcs_configs,
                         spark_fixed_audit_is_embedded(
                             spark_metadata.value_domain_size,
@@ -2189,23 +2393,35 @@ where
                         &closing.spark_read_openings,
                         challenger,
                     )?;
+                let restored_products;
+                let product_proof = if let Some(compact) = compact_products {
+                    let mut replay = E::challenger_for_replay(challenger);
+                    restored_products = crate::spark::decompress_spark_memory_products(
+                        compact,
+                        spark_metadata,
+                        &mut replay,
+                    )?;
+                    &restored_products
+                } else {
+                    &closing.spark_products
+                };
                 let product_claims = verify_spark_batched_memory_product_claims_with_metadata(
                     spark_metadata,
-                    &closing.spark_products,
+                    product_proof,
                     challenger,
                 )?;
-                let read_opening_evals =
-                    finalize_spark_table_openings::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
-                        spark_pcs_configs,
-                        spark_metadata.row_memory_size,
-                        spark_metadata.col_memory_size,
-                        &closing.spark_fixed_openings,
-                        &closing.spark_read_openings,
-                        parsed_fixed_openings,
-                        parsed_read_openings,
-                        &product_claims,
-                        challenger,
-                    )?;
+                let read_opening_evals = finalize_spark_table_openings::<E, E::EF, Plonky3WhirPcs>(
+                    spark_pcs_configs,
+                    spark_metadata.row_memory_size,
+                    spark_metadata.col_memory_size,
+                    &closing.spark_fixed_openings,
+                    &closing.spark_read_openings,
+                    parsed_fixed_openings,
+                    parsed_read_openings,
+                    &product_claims,
+                    final_rows,
+                    challenger,
+                )?;
                 let r_y = MultilinearPoint(handoff.randomness.as_slice().to_vec());
                 verify_spark_batched_memory_leaf_claims_with_openings(
                     spark_metadata.row_memory_size,
@@ -2228,7 +2444,7 @@ where
         let mut relation = CommittedRelation::empty();
         relation.source.push_eq(
             Point::new(handoff.randomness.as_slice()[1..].to_vec()),
-            handoff.eps * matrix_eval * (Ext::ONE - selector),
+            handoff.eps * matrix_eval * (E::EF::ONE - selector),
         );
         relation.target =
             handoff.claimed_residual - handoff.eps * matrix_eval * selector * eval_public;
@@ -2244,10 +2460,26 @@ where
                 covectors: sumcheck_covectors,
             },
         ];
+        let restored_relation;
+        let relation_proof = if restore_fresh {
+            let mut restored = proof.pcs_proof.clone();
+            crate::proof_compression_hiding::restore_fresh_rows::<E>(
+                &pcs.config,
+                &pcs.mmcs,
+                &relation_shapes,
+                relation.target,
+                &mut restored,
+                challenger,
+            )?;
+            restored_relation = restored;
+            &restored_relation
+        } else {
+            &proof.pcs_proof
+        };
         let _profile = profile_scope("zk_pcs_relation_verify");
         HidingWhirVerifier::new(&pcs.config, &pcs.mmcs)
             .verify_relation(
-                &proof.pcs_proof,
+                relation_proof,
                 &instance.witness_commitment,
                 relation,
                 groups,
@@ -2257,27 +2489,34 @@ where
     }
 }
 
-fn validate_poseidon_zk_proof_commitments<Ext: ExtField>(
-    vk: &PoseidonZkVerifyingKey<Ext>,
+fn validate_poseidon_zk_proof_commitments<E>(
+    vk: &PoseidonZkVerifyingKeyFor<E>,
     spark_metadata: Option<&SparkTableMetadata>,
-    instance: &R1csInstance<F, PoseidonCommitment>,
-    proof: &ZkSpartanProof<Ext>,
-    pcs: &PoseidonHidingPcs<Ext>,
+    instance: &R1csInstance<F, PoseidonZkCommitmentFor<E>>,
+    proof: &ZkSpartanProofFor<E>,
+    pcs: &PoseidonZkHidingPcsFor<E>,
+    final_rows: bool,
 ) -> Result<(), SpartanWhirError>
 where
-    StandardUniform: Distribution<Ext>,
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: CanObserve<PoseidonZkCommitmentFor<E>>
+        + CanSampleUniformBits<F>
+        + FieldChallenger<F>
+        + p3_challenger::GrindingChallenger<Witness = F>
+        + Clone
+        + Send,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
-    use crate::plonky3_whir_pcs::{
-        validate_poseidon_commitment, validate_poseidon_plain_proof_shape_from_config,
-        validate_poseidon_relation_proof_shape,
-    };
+    use crate::plonky3_whir_pcs::validate_poseidon_relation_proof_shape;
 
-    validate_poseidon_commitment(&instance.witness_commitment)?;
-    validate_poseidon_commitment(&proof.application_mask_commitment)?;
-    validate_poseidon_commitment(&proof.inner_sumcheck_mask_commitment)?;
-    validate_poseidon_relation_proof_shape(&pcs.config, &proof.pcs_proof)?;
+    E::validate_commitment(&instance.witness_commitment)?;
+    E::validate_commitment(&proof.application_mask_commitment)?;
+    E::validate_commitment(&proof.inner_sumcheck_mask_commitment)?;
+    validate_poseidon_relation_proof_shape::<E>(&pcs.config, &proof.pcs_proof)?;
 
-    if let ZkMatrixClosingProof::Spark(closing) = &proof.matrix_closing {
+    if let ZkMatrixClosingProofFor::Spark(closing) = &proof.matrix_closing {
         let configs = vk
             .spark_pcs_configs
             .as_ref()
@@ -2291,49 +2530,58 @@ where
         if closing.spark_read_openings.groups.len() != configs.read.len() {
             return Err(SpartanWhirError::InvalidProofShape);
         }
-        validate_spark_fixed_opening_shape::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+        validate_spark_fixed_opening_shape::<E, E::EF, Plonky3WhirPcs>(
             &configs.fixed_value,
             &configs.fixed_audit,
             audit_embedded,
             &closing.spark_fixed_openings,
         )?;
-        validate_spark_read_opening_shape::<PoseidonEngine<Ext>, Ext, Plonky3WhirPcs>(
+        validate_spark_read_opening_shape::<E, E::EF, Plonky3WhirPcs>(
             &configs.read,
             &closing.spark_read_openings,
         )?;
 
-        validate_poseidon_commitment(&closing.spark_fixed_openings.value_commitment)?;
-        validate_poseidon_plain_proof_shape_from_config(
+        E::validate_commitment(&closing.spark_fixed_openings.value_commitment)?;
+        E::validate_compressed_plain_proof_shape(
             &configs.fixed_value,
             &closing.spark_fixed_openings.value_proof,
+            final_rows,
         )?;
         match (
             &closing.spark_fixed_openings.audit_commitment,
             &closing.spark_fixed_openings.audit_proof,
         ) {
             (Some(commitment), Some(audit_proof)) => {
-                validate_poseidon_commitment(commitment)?;
-                validate_poseidon_plain_proof_shape_from_config(&configs.fixed_audit, audit_proof)?;
+                E::validate_commitment(commitment)?;
+                E::validate_compressed_plain_proof_shape(
+                    &configs.fixed_audit,
+                    audit_proof,
+                    final_rows,
+                )?;
             }
             (None, None) => {}
             _ => return Err(SpartanWhirError::InvalidProofShape),
         }
         for (config, group) in configs.read.iter().zip(&closing.spark_read_openings.groups) {
-            validate_poseidon_commitment(&group.commitment)?;
-            validate_poseidon_plain_proof_shape_from_config(config, &group.proof)?;
+            E::validate_commitment(&group.commitment)?;
+            E::validate_compressed_plain_proof_shape(config, &group.proof, final_rows)?;
         }
     }
     Ok(())
 }
 
-fn observe_poseidon_zk_context(
-    challenger: &mut PoseidonChallenger,
+fn observe_poseidon_zk_context<E>(
+    challenger: &mut E::Challenger,
     domain_separator: &DomainSeparator,
     pcs_config: &ZkWhirPcsConfig,
     num_outer_rounds: usize,
     num_inner_rounds: usize,
     public_inputs: &[F],
-) {
+) where
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+{
     let _profile = profile_scope("zk_observe_context");
     for byte in domain_separator.to_bytes() {
         challenger.observe(F::from_u8(byte));
@@ -2997,6 +3245,7 @@ fn open_spark_fixed_tables<E, EF, Pcs>(
     commitments: SparkFixedCommitments<<Pcs as MlePcs<E>>::Commitment>,
     tables: &crate::SparkTables,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<SparkFixedOpeningProof<E, Pcs>, SpartanWhirError>
 where
@@ -3041,10 +3290,11 @@ where
         None
     };
     let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
-    let value_proof = <Pcs as MlePcs<E>>::open(
+    let value_proof = <Pcs as ProtocolPcs<E>>::open_compressed(
         fixed_value_config,
         prover_data.value,
         &value_statement,
+        final_rows,
         challenger,
     )?;
 
@@ -3065,8 +3315,13 @@ where
             product_claims,
         )?;
         let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
-        let audit_proof =
-            <Pcs as MlePcs<E>>::open(audit_config, audit_data, &audit_statement, challenger)?;
+        let audit_proof = <Pcs as ProtocolPcs<E>>::open_compressed(
+            audit_config,
+            audit_data,
+            &audit_statement,
+            final_rows,
+            challenger,
+        )?;
         (audit_evals, Some(audit_proof))
     };
 
@@ -3102,6 +3357,7 @@ fn open_spark_read_tables<E, EF, Pcs>(
     prover_data: SparkReadProverData<E, Pcs>,
     commitments: SparkReadCommitments<<Pcs as MlePcs<E>>::Commitment>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<SparkReadOpeningProof<E, Pcs>, SpartanWhirError>
 where
@@ -3147,12 +3403,13 @@ where
             .iter()
             .map(|request| points[request.logical_opening].clone())
             .collect::<Vec<_>>();
-        let (proof, evals) = Pcs::open_read_table(
+        let (proof, evals) = Pcs::open_read_table_compressed(
             config,
             data,
             group.column_count,
             &opening_columns,
             &opening_points,
+            final_rows,
             challenger,
         )?;
         opening_groups.push(SparkReadGroupOpeningProof {
@@ -3295,6 +3552,7 @@ fn finalize_spark_fixed_openings<E, EF, Pcs>(
     proof: &SparkFixedOpeningProof<E, Pcs>,
     parsed: ParsedSparkFixedOpenings<E, Pcs>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<(), SpartanWhirError>
 where
@@ -3332,11 +3590,12 @@ where
         )?);
     }
     let value_statement = point_eval_statement::<E, EF>(&value_claims)?;
-    <Pcs as ProtocolPcs<E>>::verify_finalize(
+    <Pcs as ProtocolPcs<E>>::verify_finalize_compressed(
         fixed_value_config,
         &parsed.value,
         &value_statement,
         &proof.value_proof,
+        final_rows,
         challenger,
     )?;
 
@@ -3352,7 +3611,7 @@ where
         &proof.evals,
     )?;
     let audit_statement = point_eval_statement::<E, EF>(&audit_claims)?;
-    <Pcs as ProtocolPcs<E>>::verify_finalize(
+    <Pcs as ProtocolPcs<E>>::verify_finalize_compressed(
         audit_config,
         parsed
             .audit
@@ -3363,6 +3622,7 @@ where
             .audit_proof
             .as_ref()
             .ok_or_else(SpartanWhirError::invalid_config)?,
+        final_rows,
         challenger,
     )
 }
@@ -3372,6 +3632,7 @@ fn finalize_spark_read_openings<E, EF, Pcs>(
     proof: &SparkReadOpeningProof<E, Pcs>,
     parsed: ParsedSparkReadOpenings<E, Pcs>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<SparkReadTableOpeningEvals<EF>, SpartanWhirError>
 where
@@ -3416,7 +3677,7 @@ where
             .iter()
             .map(|request| points[request.logical_opening].clone())
             .collect::<Vec<_>>();
-        Pcs::verify_finalize_read_table(
+        Pcs::verify_finalize_read_table_compressed(
             config,
             parsed_group,
             &opening.proof,
@@ -3424,6 +3685,7 @@ where
             &opening_columns,
             &opening_points,
             &opening.evals,
+            final_rows,
             challenger,
         )?;
     }
@@ -3444,6 +3706,7 @@ fn open_spark_table_openings<E, EF, Pcs>(
     read_commitments: SparkReadCommitments<<Pcs as MlePcs<E>>::Commitment>,
     tables: &crate::SparkTables,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<
     (
@@ -3478,6 +3741,7 @@ where
                 fixed_commitments,
                 tables,
                 product_claims,
+                final_rows,
                 &mut fixed_challenger,
             )?;
             let seal = seal_spark_opening_branch(&mut fixed_challenger);
@@ -3490,6 +3754,7 @@ where
                 read_prover_data,
                 read_commitments,
                 product_claims,
+                final_rows,
                 &mut read_challenger,
             )?;
             let seal = seal_spark_opening_branch(&mut read_challenger);
@@ -3541,6 +3806,7 @@ fn finalize_spark_table_openings<E, EF, Pcs>(
     parsed_fixed: ParsedSparkFixedOpenings<E, Pcs>,
     parsed_read: ParsedSparkReadOpenings<E, Pcs>,
     product_claims: &SparkBatchedMemoryProductsLeafClaims<EF>,
+    final_rows: bool,
     challenger: &mut E::Challenger,
 ) -> Result<SparkReadTableOpeningEvals<EF>, SpartanWhirError>
 where
@@ -3566,6 +3832,7 @@ where
                 fixed_proof,
                 parsed_fixed,
                 product_claims,
+                final_rows,
                 &mut fixed_challenger,
             )?;
             let seal = seal_spark_opening_branch(&mut fixed_challenger);
@@ -3577,6 +3844,7 @@ where
                 read_proof,
                 parsed_read,
                 product_claims,
+                final_rows,
                 &mut read_challenger,
             )?;
             let seal = seal_spark_opening_branch(&mut read_challenger);

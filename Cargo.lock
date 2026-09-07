@@ -1063,6 +1063,7 @@ dependencies = [
  "p3-util",
  "p3-whir",
  "rand",
+ "rayon",
  "serde",
  "serde_json",
  "sha2",

@@ -1,0 +1,15 @@
+{
+  "baseline": {
+    "bytes": 2742957,
+    "sha256": "a288869991efefb2142d9035746656dac0c7f30d529ca76f17558432543b153d",
+    "zlib_9_bytes": 2547514,
+    "lzma_6_bytes": 2551056
+  },
+  "refined_metadata": {
+    "bytes": 2247038,
+    "sha256": "4bc67040b8c10e022562afd9d184ccbfe1c0f7444c4ecb21055aba177ca3a512",
+    "zlib_9_bytes": 2244856,
+    "lzma_6_bytes": 2246596
+  },
+  "fixture_constant_nonzero_columns": {}
+}

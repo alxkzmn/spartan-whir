@@ -39,6 +39,9 @@ default = []
 # `into_par_iter` calls reachable from this crate). Without this feature,
 # `p3-maybe-rayon` falls back to a serial shim and grinding runs on one core.
 parallel = ["p3-maybe-rayon/parallel"]
+# Selects Poseidon1 in comparison benchmarks and fixture binaries. The library
+# exposes separate Poseidon1 and Poseidon2 full-ZK types in every build.
+poseidon1 = []
 
 [[bin]]
 name = "circom-adapter-check"
@@ -66,6 +69,7 @@ path = "examples/end_to_end.rs"
 
 [dev-dependencies]
 criterion = "0.8"
+rayon = "1.12"
 tracing = { version = "0.1.44", features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 trybuild = "1"
@@ -82,6 +86,11 @@ required-features = ["parallel"]
 [profile.release]
 codegen-units = 1
 lto = "fat"
+
+[[bench]]
+name = "spark_proof_compression"
+harness = false
+required-features = ["parallel", "poseidon1"]
 
 [profile.bench]
 codegen-units = 1

@@ -6,6 +6,8 @@ use crate::{R1csShape, SecurityConfig, SoundnessAssumption, SparkWhirParams, Whi
 
 pub const NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-no-zk-v0";
 pub const FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-full-zk-v0";
+pub const POSEIDON1_NO_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-poseidon1-no-zk-v0";
+pub const POSEIDON1_FULL_ZK_PROTOCOL_ID: &[u8] = b"spartan-whir-poseidon1-full-zk-v0";
 /// Version of the verifier-visible SPARK matrix-closing transcript contract.
 /// Version 3 uses tagged transcript branches for the fixed-table and read-table
 /// openings.
@@ -95,7 +97,7 @@ impl DomainSeparator {
         )
     }
 
-    fn new_with_protocol_id<F>(
+    pub(crate) fn new_with_protocol_id<F>(
         protocol_id: &[u8],
         shape: &R1csShape<F>,
         security: &SecurityConfig,

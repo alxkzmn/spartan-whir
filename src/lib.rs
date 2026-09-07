@@ -14,7 +14,12 @@ pub mod pcs_config;
 pub mod plonky3_whir_pcs;
 pub mod poly;
 pub mod poseidon;
+mod poseidon_trace;
 pub mod profiling;
+pub mod proof_compression;
+mod proof_compression_encoding;
+mod proof_compression_hiding;
+mod proof_compression_plain;
 pub mod protocol;
 pub mod r1cs;
 pub mod security;
@@ -34,14 +39,18 @@ pub use circom::{
 pub use config::SpartanWhirEngine;
 pub use domain_separator::{
     DomainSeparator, MatrixClosingMode, FULL_ZK_PROTOCOL_ID, NO_ZK_PROTOCOL_ID,
-    SPARK_MATRIX_CLOSING_VERSION,
+    POSEIDON1_FULL_ZK_PROTOCOL_ID, POSEIDON1_NO_ZK_PROTOCOL_ID, SPARK_MATRIX_CLOSING_VERSION,
 };
 pub use engine::{
-    keccak_challenger, poseidon_challenger, poseidon_merkle_compress, poseidon_merkle_hash,
+    keccak_challenger, poseidon1_challenger, poseidon1_merkle_compress, poseidon1_merkle_hash,
+    poseidon_challenger, poseidon_merkle_compress, poseidon_merkle_hash, poseidon_zk_challenger,
     KeccakChallenger, KeccakEngine, KeccakFieldHash, KeccakNodeCompress, KeccakOcticEngine,
-    KeccakQuarticEngine, KeccakQuinticEngine, OcticBinExtension, PoseidonChallenger,
-    PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress, PoseidonOcticEngine,
-    PoseidonQuarticEngine, PoseidonQuinticEngine, QuarticBinExtension, QuinticExtension,
+    KeccakQuarticEngine, KeccakQuinticEngine, OcticBinExtension, Plonky3PoseidonEngine,
+    Poseidon1Challenger, Poseidon1Engine, Poseidon1FieldHash, Poseidon1NodeCompress,
+    Poseidon1OcticEngine, Poseidon1Permutation, Poseidon1QuarticEngine, Poseidon1QuinticEngine,
+    PoseidonChallenger, PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress,
+    PoseidonOcticEngine, PoseidonQuarticEngine, PoseidonQuinticEngine, PoseidonZkChallenger,
+    QuarticBinExtension, QuinticExtension,
 };
 pub use error::{InvalidConfigReason, SecurityBoundComponent, SpartanWhirError};
 pub use fixtures::{
@@ -60,31 +69,42 @@ pub use pcs_config::{
     WhirPcsConfig, ZkWhirPcsConfig, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
 };
 pub use plonky3_whir_pcs::{
-    Plonky3HidingWhirPcs, Plonky3WhirPcs, Plonky3WhirProverData, PoseidonProvingKey,
+    FullZkPoseidonEngine, FullZkPoseidonPcs, Plonky3HidingWhirPcs, Plonky3WhirPcs,
+    Plonky3WhirProverData, Poseidon1Commitment, Poseidon1ProvingKey, Poseidon1SparkSpartanProof,
+    Poseidon1SpartanProof, Poseidon1SpartanProtocol, Poseidon1VerifyingKey,
+    Poseidon1WhirProverData, Poseidon1ZkCommitment, Poseidon1ZkRelationProof, PoseidonProvingKey,
     PoseidonSparkSpartanProof, PoseidonSpartanProof, PoseidonSpartanProtocol,
-    PoseidonSpartanSnarkConfig, PoseidonVerifyingKey,
+    PoseidonSpartanSnarkConfig, PoseidonVerifyingKey, PoseidonZkCommitment,
+    PoseidonZkCommitmentFor, PoseidonZkRelationProofFor,
 };
 pub use poly::{
     evaluate_mle_table, CubicRoundPoly, EqPolynomial, Evaluations, MultilinearPoint,
     QuadraticRoundPoly,
 };
 pub use poseidon::{
-    setup_poseidon, setup_poseidon_zk, PoseidonProof, PoseidonProofKind, PoseidonSetupConfig,
-    PoseidonZkProof, PoseidonZkProvingKey, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
+    setup_poseidon, setup_poseidon1_zk, setup_poseidon_zk, setup_poseidon_zk_for, Poseidon1ZkProof,
+    Poseidon1ZkProvingKey, Poseidon1ZkVerifyingKey, PoseidonProof, PoseidonProofKind,
+    PoseidonSetupConfig, PoseidonZkProof, PoseidonZkProofFor, PoseidonZkProvingKey,
+    PoseidonZkProvingKeyFor, PoseidonZkSetupConfig, PoseidonZkVerifyingKey,
+    PoseidonZkVerifyingKeyFor,
 };
 pub use poseidon::{
     LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
     PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,
 };
+pub use poseidon_trace::{PoseidonTranscriptEvent, TraceablePoseidonChallenger};
 pub use profiling::{
     trace_proof_size_report, NoopObserver, ProofSizeCounters, ProofSizeReport, ProofSizeSection,
     ProtocolObserver, ProtocolStage, SectionSize,
 };
 pub use protocol::{
-    read_table_group_column_counts, PoseidonZkSpartanProtocol, ProvingKey, SparkFixedCommitments,
-    SparkFixedOpeningProof, SparkPcsConfigs, SparkReadGroupOpeningProof, SparkReadOpeningProof,
-    SparkSpartanProof, SparkWhirParams, SpartanProof, SpartanProofKind, SpartanProtocol,
-    SpartanSnarkConfig, VerifyingKey, ZkMatrixClosingProof, ZkSparkClosingProof, ZkSpartanProof,
+    read_table_group_column_counts, Poseidon1ZkMatrixClosingProof, Poseidon1ZkSparkClosingProof,
+    Poseidon1ZkSpartanProof, Poseidon1ZkSpartanProtocol, PoseidonZkSpartanProtocol,
+    PoseidonZkSpartanProtocolFor, ProvingKey, SparkFixedCommitments, SparkFixedOpeningProof,
+    SparkPcsConfigs, SparkReadGroupOpeningProof, SparkReadOpeningProof, SparkSpartanProof,
+    SparkWhirParams, SpartanProof, SpartanProofKind, SpartanProtocol, SpartanSnarkConfig,
+    VerifyingKey, ZkMatrixClosingProof, ZkMatrixClosingProofFor, ZkSparkClosingProof,
+    ZkSparkClosingProofFor, ZkSpartanProof, ZkSpartanProofFor,
 };
 pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
 pub use security::{SecurityConfig, SoundnessAssumption, MAX_SECURITY_BITS, MIN_SECURITY_BITS};

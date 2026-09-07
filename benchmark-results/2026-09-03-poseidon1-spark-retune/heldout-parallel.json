@@ -1,0 +1,1247 @@
+{
+  "schema_version": 5,
+  "provenance": {
+    "schema_version": 1,
+    "code": {
+      "spartan_whir": {
+        "head": "411849a2826ad734b18c461c3c47fb45e0561166",
+        "branch": "optimize-spark",
+        "dirty": true,
+        "status_porcelain": " M Cargo.toml\n M README.md\n M benches/sha256_full_zk.rs\n M examples/sha256_bench.rs\n M scripts/poseidon_schedule_scorer.py\n M scripts/poseidon_spark_schedule_scorer.py\n M src/bin/poseidon-schedule-calibration.rs\n M src/bin/poseidon-schedule-candidates.rs\n M src/bin/poseidon-schedule-heldout.rs\n M src/bin/poseidon_schedule_support/mod.rs\n M src/domain_separator.rs\n M src/engine.rs\n M src/lib.rs\n M src/plonky3_whir_pcs.rs\n M src/poseidon.rs\n M src/protocol.rs\n M tests/circuits/build_sha256_optimized_fixture.sh\n M tests/poseidon_plonky3_whir_contract.rs\n M tests/python/test_poseidon_schedule_scorer.py\n M tests/python/test_poseidon_spark_schedule_scorer.py\n?? POSEIDON1_TRANSCRIPT_AUDIT.md\n?? benchmark-results/2026-09-02-poseidon-leanvm-full-zk-direct/README.md\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/README.md\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/change/estimates.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/benchmark.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/estimates.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/sample.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/benchmark.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/estimates.json\n?? benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/sample.json\n?? benchmark-results/2026-09-02-poseidon1-matrix-closing/README.md\n?? benchmark-results/2026-09-03-poseidon1-spark-retune/README.md\n?? benchmark-results/2026-09-03-poseidon1-spark-retune/calibration.json\n?? benchmark-results/2026-09-03-poseidon1-spark-retune/final-summary.json\n?? benchmark-results/2026-09-03-poseidon1-spark-retune/heldout-parallel.json\n?? benchmark-results/2026-09-03-poseidon1-spark-retune/heldout-verifier-1thread.json\n?? src/bin/leanvm-full-zk-fixture.rs\n?? src/bin/leanvm-full-zk-spark-fixture.rs\n?? src/bin/leanvm-m0-fixture.rs\n?? src/leanvm.rs\n?? src/leanvm_full_zk.rs\n?? src/poseidon_trace.rs\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_guest_constants.json\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_guest_input.words\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_manifest.json\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_statement.json\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_transcript_trace.json\n?? testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_verifying_key.json\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_application_mask_commitment.words\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_hiding_whir_base_claim.words\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_inner_sumcheck.words\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_outer_sumcheck.words\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_public_input.words\n?? testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_witness_commitment.words\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_guest_constants.json\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_guest_input.words\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_manifest.json\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_statement.json\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_transcript_trace.json\n?? testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_verifying_key.json\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_application_mask_commitment.words\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_hiding_whir_base_claim.words\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_inner_sumcheck.words\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_outer_sumcheck.words\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_public_input.words\n?? testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_witness_commitment.words\n?? testdata/leanvm-m0/README.md\n?? testdata/leanvm-m0/control_fixture_manifest.json\n?? testdata/leanvm-m0/control_guest_constants.json\n?? testdata/leanvm-m0/control_guest_input.words\n?? testdata/leanvm-m0/control_statement.json\n?? testdata/leanvm-m0/control_transcript_trace.json\n?? testdata/leanvm-m0/mutations/changed_inner_sumcheck.words\n?? testdata/leanvm-m0/mutations/changed_outer_claim.words\n?? testdata/leanvm-m0/mutations/changed_outer_sumcheck.words\n?? testdata/leanvm-m0/mutations/changed_public_input.words\n?? testdata/leanvm-m0/mutations/changed_whir_opening.words\n?? testdata/leanvm-m0/mutations/changed_witness_commitment.words\n?? testdata/leanvm-m0/mutations/changed_witness_evaluation.words\n?? testdata/leanvm-m0/mutations/trailing_word.words\n?? testdata/leanvm-m0/mutations/wrong_version.words\n?? testdata/leanvm-m0/protocol_manifest.json\n?? tests/leanvm_full_zk_codec.rs\n?? tests/leanvm_m0.rs\n?? tests/poseidon1_profile.rs\n?? tests/poseidon_full_zk_profiles.rs",
+        "tracked_diff_hash": "8ffb572f7cc8ea2225c09f304637580bbadc2127",
+        "untracked_files": [
+          {
+            "path": "POSEIDON1_TRANSCRIPT_AUDIT.md",
+            "blob_hash": "2008076a84ddb02d902b711de665c4931d401815"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon-leanvm-full-zk-direct/README.md",
+            "blob_hash": "abefa45a6838c539f18a5c6e43a8f8b4b5a1a582"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/README.md",
+            "blob_hash": "502ad729e23caedf106aa2411c45c36adff6642d"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/change/estimates.json",
+            "blob_hash": "0c9e3f14cbfdb65ffd0d1f26cd937a19702f1a04"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/benchmark.json",
+            "blob_hash": "804220d39cbc35ae123e6913f935af6b3129f214"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/estimates.json",
+            "blob_hash": "18ded521d5c3dc979cb47a8d385552c96bfd3efa"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon1/sample.json",
+            "blob_hash": "1faacb01d5bba6dc61e1054973c40d8bdc1ee57d"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/benchmark.json",
+            "blob_hash": "804220d39cbc35ae123e6913f935af6b3129f214"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/estimates.json",
+            "blob_hash": "82fee6adde34fab15d8bd89d9addcb7f0dec9f16"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-full-zk-direct/criterion/poseidon2/sample.json",
+            "blob_hash": "93bd74ad440862a53150d0a4d52df1ae4a625aee"
+          },
+          {
+            "path": "benchmark-results/2026-09-02-poseidon1-matrix-closing/README.md",
+            "blob_hash": "1d4bfeeba23f3833b1666e191bb1108ec6fd711c"
+          },
+          {
+            "path": "benchmark-results/2026-09-03-poseidon1-spark-retune/README.md",
+            "blob_hash": "76f7dcd2d86612d8f9f58e203bba1f831e41f15c"
+          },
+          {
+            "path": "benchmark-results/2026-09-03-poseidon1-spark-retune/calibration.json",
+            "blob_hash": "c935c2b9e38056a48c3457c3a44e9bc0f2c5dca2"
+          },
+          {
+            "path": "benchmark-results/2026-09-03-poseidon1-spark-retune/final-summary.json",
+            "blob_hash": "751054110e4238807f90220fb3e300dfce89ab4e"
+          },
+          {
+            "path": "benchmark-results/2026-09-03-poseidon1-spark-retune/heldout-parallel.json",
+            "blob_hash": "66dee4fd82176496e562f68cc5bda8f4f3486e73"
+          },
+          {
+            "path": "benchmark-results/2026-09-03-poseidon1-spark-retune/heldout-verifier-1thread.json",
+            "blob_hash": "6dc126c5a585f2485de9857beb1e5e2c1d54cf3f"
+          },
+          {
+            "path": "src/bin/leanvm-full-zk-fixture.rs",
+            "blob_hash": "9499c49674885f33dd77f34b7a0f256c7579fcc8"
+          },
+          {
+            "path": "src/bin/leanvm-full-zk-spark-fixture.rs",
+            "blob_hash": "fc5d413469211720198760fcfe59d666742ec0c1"
+          },
+          {
+            "path": "src/bin/leanvm-m0-fixture.rs",
+            "blob_hash": "df46af74ed4ee07a6bcef2881adc18d96663afdc"
+          },
+          {
+            "path": "src/leanvm.rs",
+            "blob_hash": "ece13a226bcdd10bfc9b184fe07f872b6b80b472"
+          },
+          {
+            "path": "src/leanvm_full_zk.rs",
+            "blob_hash": "80a0bd4b2329d258b13d13d482fdf441ea43aa85"
+          },
+          {
+            "path": "src/poseidon_trace.rs",
+            "blob_hash": "d741e3375d6f70bd07d9f3067f7af572bdb05b1d"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_guest_constants.json",
+            "blob_hash": "a77d164753e99cef4bff8630623d0d18d5249feb"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_guest_input.words",
+            "blob_hash": "11c21be9e9ffcb57bb08bbf25717ac70413e6724"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_manifest.json",
+            "blob_hash": "12325f3adcfe9980a34e30620e5aa60275635dd1"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_statement.json",
+            "blob_hash": "e23d14a634c0da11311a2faebb2c37e6e2b3d5ba"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_transcript_trace.json",
+            "blob_hash": "0b33e142583d0aa464e072795ce556e58a55a0bc"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/full_zk_direct_verifying_key.json",
+            "blob_hash": "0ffe6f27627470465ed530bb9c52b72257d7b00f"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_application_mask_commitment.words",
+            "blob_hash": "b54580e4f8d066976ae767b3eb256aeea827c92e"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_hiding_whir_base_claim.words",
+            "blob_hash": "559217d4e2827409348b9571b35686c2ecd60044"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_inner_sumcheck.words",
+            "blob_hash": "c130a299a11ae3276db354ba69517b463e41dd8e"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_outer_sumcheck.words",
+            "blob_hash": "6c1cd4f476d1f67f774017ac6f927c16acc5886a"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_public_input.words",
+            "blob_hash": "b0c50bf9c536b2551df12895fc6238e59a713f1a"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon1/mutations/changed_witness_commitment.words",
+            "blob_hash": "cbf6ba96e35f98c1b5a0f7a031ba2b5e657aec1b"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_guest_constants.json",
+            "blob_hash": "49b7a2e3b7b9aa6ceebb538b4819b081f32172f3"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_guest_input.words",
+            "blob_hash": "02886302c384f310099f00f7e50f41c4cea2723e"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_manifest.json",
+            "blob_hash": "08cad65fa538e186a4b119c5f9ff0057b635e5e1"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_statement.json",
+            "blob_hash": "a8445fd18b6f8aa9e812d50dd8c7c9e12e5067d7"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_transcript_trace.json",
+            "blob_hash": "4848bdc7cc04fdfccedea9f3d4b4e9c4617cdcaa"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/full_zk_direct_verifying_key.json",
+            "blob_hash": "f048f24dfa9c10327a316b27858d0a7f886da3cd"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_application_mask_commitment.words",
+            "blob_hash": "f7044f5f7b172800ec9830d5078125b3339814d6"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_hiding_whir_base_claim.words",
+            "blob_hash": "387c3e9ca69740aec2162aadf7539f1f18049058"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_inner_sumcheck.words",
+            "blob_hash": "0d7ade2f5be36bfd969c4e2f353caf2148b1eff7"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_outer_sumcheck.words",
+            "blob_hash": "f20f42df1820381afb138ef17e6e9acbb842723c"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_public_input.words",
+            "blob_hash": "fb7eae7d5f5a9ec1a0f18964f323ddfc82c21e42"
+          },
+          {
+            "path": "testdata/leanvm-full-zk-direct-poseidon2/mutations/changed_witness_commitment.words",
+            "blob_hash": "de97de6b802a3dfebc6aba5325f35c342b500e4f"
+          },
+          {
+            "path": "testdata/leanvm-m0/README.md",
+            "blob_hash": "bb8f6a88b62dbae9ef9f25429755eca800434a82"
+          },
+          {
+            "path": "testdata/leanvm-m0/control_fixture_manifest.json",
+            "blob_hash": "a7327f1875ceaf23cdae28077a40e577ee946cfd"
+          },
+          {
+            "path": "testdata/leanvm-m0/control_guest_constants.json",
+            "blob_hash": "4dd1d76df762d5246b5b0427c8d19b61ba8c0c36"
+          },
+          {
+            "path": "testdata/leanvm-m0/control_guest_input.words",
+            "blob_hash": "14a99874ac787667185d07bcf09aeade1c6fc532"
+          },
+          {
+            "path": "testdata/leanvm-m0/control_statement.json",
+            "blob_hash": "775180f7c645951fe7088c334a721c94ba3d5ce5"
+          },
+          {
+            "path": "testdata/leanvm-m0/control_transcript_trace.json",
+            "blob_hash": "8bbfbc112967111477a180c14a9385d70a8da57f"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_inner_sumcheck.words",
+            "blob_hash": "74b6ff2115d3059ae4d6a9e900cb91010802d17c"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_outer_claim.words",
+            "blob_hash": "9741bfb9a8c1680cadbb42b4240852de1b8ac82e"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_outer_sumcheck.words",
+            "blob_hash": "0f7ff978edd86a1489e4cdb893db0783eeb7c198"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_public_input.words",
+            "blob_hash": "3c1a5936b824ad6ca843ed29d0a8a39486a6feaa"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_whir_opening.words",
+            "blob_hash": "55b3e10ba57d617c8c9e731a4258d32563cd7f01"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_witness_commitment.words",
+            "blob_hash": "5cf2cd9bfe86ffa18ca44fb763a566c2c803f6a2"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/changed_witness_evaluation.words",
+            "blob_hash": "bf0d07bae84f6946679987c7d47bbc23b84b99b8"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/trailing_word.words",
+            "blob_hash": "a1d40298a7eb28453c56263843b98043167871f6"
+          },
+          {
+            "path": "testdata/leanvm-m0/mutations/wrong_version.words",
+            "blob_hash": "4f39baa41ef370b278516e0208bfdcbf15fe5c3d"
+          },
+          {
+            "path": "testdata/leanvm-m0/protocol_manifest.json",
+            "blob_hash": "aa4f3d396bfea6dc64f515dd29cd79008e8df70a"
+          },
+          {
+            "path": "tests/leanvm_full_zk_codec.rs",
+            "blob_hash": "a45e7c49380e82505c4914242f72c4ea95c22814"
+          },
+          {
+            "path": "tests/leanvm_m0.rs",
+            "blob_hash": "dea244fe91292fce74c91c21882e14c27e2c48eb"
+          },
+          {
+            "path": "tests/poseidon1_profile.rs",
+            "blob_hash": "0bca7ee7933db8a0baf8d98d38bee056bb457ff5"
+          },
+          {
+            "path": "tests/poseidon_full_zk_profiles.rs",
+            "blob_hash": "5d4ccb5913b10bf66311c97641f8dd05276a2d17"
+          }
+        ]
+      },
+      "plonky3": {
+        "head": "f64ae15da3807388b1a4e0a89a4fde8fdcdff515",
+        "branch": "optimizations",
+        "dirty": true,
+        "status_porcelain": "?? .DS_Store\n?? batch-stark/.DS_Store\n?? examples/.DS_Store\n?? fri/.DS_Store\n?? goldilocks/.DS_Store\n?? lookup/.DS_Store\n?? merkle-tree/.DS_Store\n?? multi-stark/.DS_Store\n?? multilinear-util/.DS_Store\n?? poseidon2-air/.DS_Store\n?? sha256-air/.DS_Store\n?? stir/.DS_Store\n?? sumcheck/.DS_Store\n?? uni-stark/.DS_Store\n?? whir/.DS_Store\n?? zk-codes/.DS_Store",
+        "tracked_diff_hash": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "untracked_files": [
+          {
+            "path": ".DS_Store",
+            "blob_hash": "487f7f312bd00b13c170ee146092618f166ac88a"
+          },
+          {
+            "path": "batch-stark/.DS_Store",
+            "blob_hash": "5d5ae17ebfe8eb609ceaa63736cb2c9199836fb9"
+          },
+          {
+            "path": "examples/.DS_Store",
+            "blob_hash": "fc05c0fb22f558561a08db480a9f62a5a44ea16c"
+          },
+          {
+            "path": "fri/.DS_Store",
+            "blob_hash": "369b3635767b01f2733e7c70ae3b2e5961052f1b"
+          },
+          {
+            "path": "goldilocks/.DS_Store",
+            "blob_hash": "de2cd9d4cdaf5a12251c435071ae6eccb02ad185"
+          },
+          {
+            "path": "lookup/.DS_Store",
+            "blob_hash": "ab04bc34debb46c4bfdde0aedcb53ac3b6d64dd8"
+          },
+          {
+            "path": "merkle-tree/.DS_Store",
+            "blob_hash": "2058000a098ad8271aeb72da22d44b7d21471cc2"
+          },
+          {
+            "path": "multi-stark/.DS_Store",
+            "blob_hash": "1b941b17e36bd16d9743c6d6d7046bba790492a4"
+          },
+          {
+            "path": "multilinear-util/.DS_Store",
+            "blob_hash": "eb3c8e150bdf0ab79d29e93282fd429c744b83e7"
+          },
+          {
+            "path": "poseidon2-air/.DS_Store",
+            "blob_hash": "f942d513b8d8d64b90680e7fbeb700fd06baec7c"
+          },
+          {
+            "path": "sha256-air/.DS_Store",
+            "blob_hash": "804567e530190b062d540e2fb8834aa4ae5d3887"
+          },
+          {
+            "path": "stir/.DS_Store",
+            "blob_hash": "dd8cdd89d4a40e09359572c9982d5da206dfcf41"
+          },
+          {
+            "path": "sumcheck/.DS_Store",
+            "blob_hash": "9b8abb20e30f1ee465aa6b05fd7763f31323ba4e"
+          },
+          {
+            "path": "uni-stark/.DS_Store",
+            "blob_hash": "e2f246f1f4f6ad3c2880bd6b6fb70ae74b4fdfbf"
+          },
+          {
+            "path": "whir/.DS_Store",
+            "blob_hash": "a2de1f36248c3365844eca40027f52eddd3f589d"
+          },
+          {
+            "path": "zk-codes/.DS_Store",
+            "blob_hash": "a1ab5cfe7d14def4680b9625cf798ad5b41f0495"
+          }
+        ]
+      }
+    },
+    "build": {
+      "rustc_version": "rustc 1.96.0-nightly (d9563937f 2026-03-03)\nbinary: rustc\ncommit-hash: d9563937fa3b030c5845811113505070109414d2\ncommit-date: 2026-03-03\nhost: aarch64-apple-darwin\nrelease: 1.96.0-nightly\nLLVM version: 22.1.0",
+      "profile": "release",
+      "features": "parallel,poseidon1",
+      "rustflags": "-C target-cpu=native -C debuginfo=0",
+      "target_cpu_native": true
+    }
+  },
+  "workload_identity": {
+    "label": "sha256_2048b",
+    "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627",
+    "constraint_work": 605424
+  },
+  "measurement_kind": "poseidon_schedule_full_proof_heldout",
+  "units": "seconds",
+  "source_report": "./spark-full-zk-combined-v5.json",
+  "r1cs": "target/sha256-optimized-cache/sha256_2048b/sha256_2048b.r1cs",
+  "wtns": null,
+  "linked_witness_library": "target/sha256-optimized-cache/sha256_2048b/libsha256_2048b_witness.dylib",
+  "linked_circuit_data": "target/sha256-optimized-cache/sha256_2048b/sha256_2048b_cpp/sha256_2048b.dat",
+  "linked_input": "target/poseidon-schedule/sha256_2048b_input.bin",
+  "linked_run_name": "sha256_2048b",
+  "repeats": 3,
+  "warmups": 1,
+  "row_source_requested": "measurement_shortlist",
+  "row_source_resolved": "measurement_shortlist",
+  "max_rows": 6,
+  "include_strata": false,
+  "extension": "quintic",
+  "explicit_labels": null,
+  "reference_labels": [
+    "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+  ],
+  "required_labels": [
+    "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+  ],
+  "selected_row_count": 6,
+  "proof_mode": "full-zk",
+  "hash_profile": "poseidon1",
+  "rayon_threads": 12,
+  "verifier_measurement": "native wall time; use RAYON_NUM_THREADS=1 as the sequential recursive-verifier proxy",
+  "interleaved_repeats": true,
+  "randomize_linked_input_bits": true,
+  "rows": [
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.4354482075848347,
+        "read": 4.260656846690355,
+        "witness": 0.1108942904036613
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.021591433787247975,
+        "read": 0.042567626807042014,
+        "witness": 0.019037712267950903
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.005921389,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        1.000562,
+        1.011853917
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        0.0,
+        0.0
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 4542738,
+      "heldout_proof_size_median_bytes": 4540210,
+      "heldout_proof_size_min_bytes": 4539634,
+      "heldout_prove_seconds": 1.00534825,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.0,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.000562,
+        1.00534825,
+        1.011853917
+      ],
+      "heldout_verify_mean_seconds": 0.08400179166666666,
+      "heldout_verify_median_ci_seconds": [
+        0.083948542,
+        0.084099208
+      ],
+      "heldout_verify_samples_seconds": [
+        0.083948542,
+        0.083957625,
+        0.084099208
+      ],
+      "heldout_verify_seconds": 0.083957625,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.00534825,
+      "projected_schedule_seconds": 6.806999344678851,
+      "projected_seconds": 6.806999344678851,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 5863036,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 7
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 7
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 6,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 7,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.08319677286224089,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    },
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.438996285044474,
+        "read": 4.265443356789116,
+        "witness": 0.11111460821062744
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.010193532361891428,
+        "read": 0.019663944638259885,
+        "witness": 0.01896191435758103
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.0125782223333333,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        1.009172792,
+        1.016569792
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        0.00013654737870627542,
+        0.015998800674021263
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 2742029,
+      "heldout_proof_size_median_bytes": 2741805,
+      "heldout_proof_size_min_bytes": 2741261,
+      "heldout_prove_seconds": 1.011992083,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.006608489147914787,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.016569792,
+        1.009172792,
+        1.011992083
+      ],
+      "heldout_verify_mean_seconds": 0.060269513999999996,
+      "heldout_verify_median_ci_seconds": [
+        0.059994625,
+        0.060771834
+      ],
+      "heldout_verify_samples_seconds": [
+        0.059994625,
+        0.060771834,
+        0.060042083
+      ],
+      "heldout_verify_seconds": 0.060042083,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.011992083,
+      "projected_schedule_seconds": 6.815554250044218,
+      "projected_seconds": 6.815554250044218,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 4101500,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 7,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 7,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.04881939135773235,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    },
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.438996285044474,
+        "read": 4.265443356789116,
+        "witness": 0.1108942904036613
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.010193532361891428,
+        "read": 0.019663944638259885,
+        "witness": 0.019037712267950903
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.0161435416666666,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        1.0072065,
+        1.022142042
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        0.001848364484644982,
+        0.018509680559525732
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 2744917,
+      "heldout_proof_size_median_bytes": 2741845,
+      "heldout_proof_size_min_bytes": 2741013,
+      "heldout_prove_seconds": 1.019082083,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.013660771777341818,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.019082083,
+        1.0072065,
+        1.022142042
+      ],
+      "heldout_verify_mean_seconds": 0.060234847,
+      "heldout_verify_median_ci_seconds": [
+        0.059992208,
+        0.060392625
+      ],
+      "heldout_verify_samples_seconds": [
+        0.059992208,
+        0.060319708,
+        0.060392625
+      ],
+      "heldout_verify_seconds": 0.060319708,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow6_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.019082083,
+      "projected_schedule_seconds": 6.815333932237252,
+      "projected_seconds": 6.815333932237252,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 4107252,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 6,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 7,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.04889518926810221,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    },
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow6_ff8_rest3_lir1_rsv8_round_log_inv_rates_2-4"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.438996285044474,
+        "read": 4.265443356789116,
+        "witness": 0.1108942904036613
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.010193532361891428,
+        "read": 0.019663944638259885,
+        "witness": 0.019037712267950903
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.0301043060000001,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        1.016421709,
+        1.045729292
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        0.011014550430659353,
+        0.04514192223970137
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 2747349,
+      "heldout_proof_size_median_bytes": 2743029,
+      "heldout_proof_size_min_bytes": 2742677,
+      "heldout_prove_seconds": 1.028161917,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.022692302891063054,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.045729292,
+        1.016421709,
+        1.028161917
+      ],
+      "heldout_verify_mean_seconds": 0.06025662466666667,
+      "heldout_verify_median_ci_seconds": [
+        0.060167791,
+        0.0603775
+      ],
+      "heldout_verify_samples_seconds": [
+        0.060224583,
+        0.060167791,
+        0.0603775
+      ],
+      "heldout_verify_seconds": 0.060224583,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow6_ff8_rest3_lir1_rsv8_round_log_inv_rates_2-4__fv=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.028161917,
+      "projected_schedule_seconds": 6.815333932237252,
+      "projected_seconds": 6.815333932237252,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 4107252,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 6,
+          "round_log_inv_rates": [
+            2,
+            4
+          ],
+          "rs_domain_initial_reduction_factor": 8,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.04889518926810221,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    },
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.4354482075848347,
+        "read": 4.265443356789116,
+        "witness": 0.11111460821062744
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.021591433787247975,
+        "read": 0.019663944638259885,
+        "witness": 0.01896191435758103
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.0124005693333336,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        1.004277,
+        1.020311125
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        -0.0010655511659763972,
+        0.01204481381463629
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 3338328,
+      "heldout_proof_size_median_bytes": 3337176,
+      "heldout_proof_size_min_bytes": 3334328,
+      "heldout_prove_seconds": 1.012613583,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.007226682893216374,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.012613583,
+        1.004277,
+        1.020311125
+      ],
+      "heldout_verify_mean_seconds": 0.061114819666666674,
+      "heldout_verify_median_ci_seconds": [
+        0.060928458,
+        0.061209792
+      ],
+      "heldout_verify_samples_seconds": [
+        0.061209792,
+        0.060928458,
+        0.061206209
+      ],
+      "heldout_verify_seconds": 0.061206209,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest7_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.012613583,
+      "projected_schedule_seconds": 6.812006172584578,
+      "projected_seconds": 6.812006172584578,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 4685404,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 7
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 7,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 7,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.06021729278308889,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    },
+    {
+      "component_labels": {
+        "fixed_audit": "quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived",
+        "fixed_value": "quintic_cfsr_pow9_ff8_rest6_lir1_rsv8_round_log_inv_rates_derived",
+        "read": [
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+          "quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived"
+        ],
+        "witness": "quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived"
+      },
+      "component_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 2.4355269212335475,
+        "read": 4.265443356789116,
+        "witness": 0.11111460821062744
+      },
+      "component_verifier_scores": {
+        "fixed_audit": 0.0,
+        "fixed_value": 0.014751027905101138,
+        "read": 0.019663944638259885,
+        "witness": 0.01896191435758103
+      },
+      "constraint_work": 605424,
+      "extension": "quintic",
+      "fixed_audit_embedded": true,
+      "heldout_case_label": "sha256_2048b",
+      "heldout_fastest_row_index": 0,
+      "heldout_interleaved": true,
+      "heldout_mean_seconds": 1.0058014583333332,
+      "heldout_median_ci_confidence": 0.95,
+      "heldout_median_ci_seconds": [
+        0.999860375,
+        1.011550125
+      ],
+      "heldout_paired_ci_confidence": 0.95,
+      "heldout_paired_relative_median_ci": [
+        -0.0118530370822294,
+        0.006168882275370935
+      ],
+      "heldout_proof_mode": "full-zk",
+      "heldout_proof_size_max_bytes": 2983576,
+      "heldout_proof_size_median_bytes": 2980856,
+      "heldout_proof_size_min_bytes": 2979608,
+      "heldout_prove_seconds": 1.005993875,
+      "heldout_randomized_linked_input_bits": true,
+      "heldout_relative_median_difference": 0.0006421904051656657,
+      "heldout_repeats": 3,
+      "heldout_samples_seconds": [
+        1.005993875,
+        1.011550125,
+        0.999860375
+      ],
+      "heldout_verify_mean_seconds": 0.060079555666666666,
+      "heldout_verify_median_ci_seconds": [
+        0.059927875,
+        0.060186417
+      ],
+      "heldout_verify_samples_seconds": [
+        0.059927875,
+        0.060186417,
+        0.060124375
+      ],
+      "heldout_verify_seconds": 0.060124375,
+      "heldout_warmups": 1,
+      "label": "spark_w=quintic_cfsr_pow7_ff8_rest3_lir1_rsv7_round_log_inv_rates_derived__fv=quintic_cfsr_pow9_ff8_rest6_lir1_rsv8_round_log_inv_rates_derived__fa=quintic_constant_pow6_ff8_lir1_rsv8_round_log_inv_rates_derived__r=quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived__quintic_cfsr_pow9_ff8_rest4_lir1_rsv8_round_log_inv_rates_derived",
+      "matrix_closing": "Spark",
+      "measured_seconds": 1.005993875,
+      "projected_schedule_seconds": 6.812084886233291,
+      "projected_seconds": 6.812084886233291,
+      "proof_mode": "full-zk",
+      "proof_size_bytes_estimate": 4329628,
+      "setup_config": {
+        "ell_zk": 3,
+        "mask_log_inv_rate": 3,
+        "matrix_closing": "Spark",
+        "security": {
+          "merkle_security_bits": 116,
+          "security_level_bits": 116,
+          "soundness_assumption": "JohnsonBound"
+        },
+        "spark_whir_params": {
+          "fixed_audit": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "Constant": 8
+            },
+            "pow_bits": 6,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "fixed_value": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 6
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          },
+          "read": {
+            "folding_factor": 8,
+            "folding_schedule": {
+              "ConstantFromSecondRound": {
+                "first": 8,
+                "rest": 4
+              }
+            },
+            "pow_bits": 9,
+            "round_log_inv_rates": [],
+            "rs_domain_initial_reduction_factor": 8,
+            "starting_log_inv_rate": 1
+          }
+        },
+        "whir_params": {
+          "folding_factor": 8,
+          "folding_schedule": {
+            "ConstantFromSecondRound": {
+              "first": 8,
+              "rest": 3
+            }
+          },
+          "pow_bits": 7,
+          "round_log_inv_rates": [],
+          "rs_domain_initial_reduction_factor": 7,
+          "starting_log_inv_rate": 1
+        }
+      },
+      "valid": true,
+      "verifier_projected_seconds": 0.053376886900942055,
+      "witness_work": 593120,
+      "workload_identity": {
+        "constraint_work": 605424,
+        "label": "sha256_2048b",
+        "r1cs_sha256": "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627"
+      }
+    }
+  ]
+}
