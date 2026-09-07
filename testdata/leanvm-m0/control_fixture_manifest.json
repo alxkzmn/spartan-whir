@@ -1,0 +1,169 @@
+{
+  "canonical_shape": {
+    "constraints": 2,
+    "public_inputs": 1,
+    "variables": 4
+  },
+  "field": {
+    "base": "KoalaBear",
+    "extension": "X^5 + X^2 - 1",
+    "extension_coordinate_order": [
+      "1",
+      "X",
+      "X^2",
+      "X^3",
+      "X^4"
+    ],
+    "modulus": 2130706433
+  },
+  "guest_constants": {
+    "bytes": 11629,
+    "file": "control_guest_constants.json",
+    "sha256": "412d8d77bae5a9fe7112fb5dee6e0bf68aac89c6ce5ec5a215779d63ee19304e"
+  },
+  "guest_input": {
+    "bytes": 2024,
+    "file": "control_guest_input.words",
+    "sha256": "5a4229078cbb49ee5a1e893da8290f1607ce072925b850874ae6dd4f82cfa803"
+  },
+  "guest_input_version": 1,
+  "guest_input_word_limit": 1048576,
+  "guest_input_words": 506,
+  "implementation_source_ids": {
+    "Cargo.lock": "ad3ae13738d09443b16298ff218fafb941a701415f0758569e6b7679cfe6d898",
+    "src/bin/leanvm-m0-fixture.rs": "f7161a0c864e6b4d695f843c45875d27dbf0975372260a09c108e7e4d94a6c82",
+    "src/engine.rs": "50d412e6ce6aa3e141d0249a4609ff05e65a8be50da50ee1a3d7c2347e060365",
+    "src/leanvm.rs": "65eb98a65942fe7cb9ccf718d5787f8462d0e2ddcc8d78fdc0d9c862dbe4bfba",
+    "src/lib.rs": "0d358782eca4098eb16ec53cbc84be2fafd5386bcb5dfa5af5ecb7e64f8ecda6",
+    "src/poseidon_trace.rs": "a350e8dd73a7d67f4865ded48d1f004b996b27c90be2e0864b8f895ed45a6a35"
+  },
+  "manifest_version": 1,
+  "matrix_closing": "direct_sparse",
+  "mutations": [
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_public_input.words",
+        "sha256": "23f08ec22209c9a2eabfeb5dbac78e29db81de1e10d902ec9a5836680effdbd3"
+      },
+      "expected_result": "public inputs do not match expected statement",
+      "target": "application public input"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_witness_commitment.words",
+        "sha256": "2cf7fb192a628f995675df95e30d73280ba95204d5df38348a0508e307cde4d9"
+      },
+      "expected_result": "sumcheck verification failed",
+      "target": "witness commitment"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_outer_sumcheck.words",
+        "sha256": "95d8edd7e09b91c7a288bed70fbc8e2025578cd256593ed3aac5cc89ab180557"
+      },
+      "expected_result": "sumcheck verification failed",
+      "target": "outer sumcheck"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_outer_claim.words",
+        "sha256": "ed16ef38d793af4aeed626bb6989fdb2ab59a7dd6977cef39885e7d2d5902b5e"
+      },
+      "expected_result": "sumcheck verification failed",
+      "target": "outer claims"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_inner_sumcheck.words",
+        "sha256": "0d34ba8ec317c404fb539f1b9e6841ad6aaafbebd6535e38844919f1bb72f3b8"
+      },
+      "expected_result": "sumcheck verification failed",
+      "target": "inner sumcheck"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_witness_evaluation.words",
+        "sha256": "aa5a32e50a9956b126247eea4e7c7ab256f45b1f44a7b6be1d8265e05aac53cd"
+      },
+      "expected_result": "sumcheck verification failed",
+      "target": "witness evaluation"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/changed_whir_opening.words",
+        "sha256": "8a0f77e21dd8b883fb8652556cad19233d830665cfba217ee9965f163d1e3509"
+      },
+      "expected_result": "WHIR verification failed",
+      "target": "WHIR opening"
+    },
+    {
+      "artifact": {
+        "bytes": 2024,
+        "file": "mutations/wrong_version.words",
+        "sha256": "3a121d83078794b2b4605175bc70c8990cc7a394adb572d5c5eea94e139ebfce"
+      },
+      "expected_result": "invalid blob header",
+      "target": "encoding version"
+    },
+    {
+      "artifact": {
+        "bytes": 2028,
+        "file": "mutations/trailing_word.words",
+        "sha256": "df2d73b48f457830e4c441dcb26c9eb727d17d3c2999845209075e32c1b41909"
+      },
+      "expected_result": "trailing bytes",
+      "target": "exact proof consumption"
+    }
+  ],
+  "privacy_mode": "no_zk",
+  "profile_id": "spartan-whir-poseidon2-quintic-no-zk-direct-control-v1",
+  "profile_number": 1,
+  "security": {
+    "merkle_security_bits": 80,
+    "security_level_bits": 80,
+    "soundness_assumption": "CapacityBound"
+  },
+  "source_revisions": {
+    "leanvm_branch_head": "98cb2ad4bdc52618674c0f8f91f715a75349ff6f",
+    "leanvm_upstream_base": "98cb2ad4bdc52618674c0f8f91f715a75349ff6f",
+    "plonky3": "f64ae15da3807388b1a4e0a89a4fde8fdcdff515",
+    "plonky3_source": "spartan-whir/Cargo.lock",
+    "sol_spartan_whir": "9120b4c4928bc14882205f98de6c336f6054193f",
+    "spartan_whir": "f82eb92e44dc8f4de796ddbad07b1ad3added506"
+  },
+  "statement": {
+    "bytes": 641,
+    "file": "control_statement.json",
+    "sha256": "2cc289567636825577eeb675a67473086f5abc6fdfea571230be1f8e322d708a"
+  },
+  "synthetic_r1cs": {
+    "a_terms_per_constraint": 2,
+    "b_terms_per_constraint": 2,
+    "num_constraints": 2,
+    "num_io": 1,
+    "seed": 212334980463230,
+    "target_log2_witness_poly": 2
+  },
+  "transcript_events": 177,
+  "transcript_trace": {
+    "bytes": 15177,
+    "file": "control_transcript_trace.json",
+    "sha256": "95ed1a689b123580e6d8e080a69b005d8a14cc53a3f35c30dbbeefbcac615f2f"
+  },
+  "verifying_key_id": "cd3abedf399cce31558658cccc9179683e55e190aa610505993214d5fbd06006",
+  "whir_params": {
+    "folding_factor": 1,
+    "folding_schedule": null,
+    "pow_bits": 0,
+    "round_log_inv_rates": [],
+    "rs_domain_initial_reduction_factor": 1,
+    "starting_log_inv_rate": 6
+  }
+}

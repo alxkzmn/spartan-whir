@@ -1,0 +1,1675 @@
+{
+  "scope": "Selected inner WHIR schedule and existing SHA-256 fixture; optimized direct LeanVM guest",
+  "baseline": {
+    "bytecode_bytes": 33554432,
+    "bytecode_hash": [
+      468001515,
+      1588921273,
+      1372046721,
+      2065949958,
+      152559229,
+      813306233,
+      359609555,
+      175469136
+    ],
+    "bytecode_log_size": 19,
+    "canonical_proof_words": 682698,
+    "compile_ms": 2685.137584,
+    "compiled_instruction_count": 429942,
+    "compiler_limit_reached": false,
+    "compiler_peak_rss_bytes": 1060913152,
+    "effective_threads": 12,
+    "execution": {
+      "cycles": 33485006,
+      "extension_operation_calls": 1622974,
+      "memory_cells": 36861485,
+      "memory_usage_percent": 93.02588324914203,
+      "padded_memory_cells": 67108864,
+      "peak_rss_bytes": 6315212800,
+      "poseidon1_precompile_calls": 100106,
+      "profiling_report": null,
+      "runtime_memory_cells": 36861448,
+      "tables": [
+        {
+          "log_n_rows": 25,
+          "name": "execution",
+          "non_padded_rows": 33485006,
+          "padded_rows": 33554432
+        },
+        {
+          "log_n_rows": 21,
+          "name": "extension_op",
+          "non_padded_rows": 1622974,
+          "padded_rows": 2097152
+        },
+        {
+          "log_n_rows": 17,
+          "name": "poseidon16",
+          "non_padded_rows": 100106,
+          "padded_rows": 131072
+        }
+      ]
+    },
+    "input_bytes": 4194304,
+    "optimizations": "",
+    "padded_instruction_count": 524288,
+    "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1",
+    "rejected_mutations": [
+      {
+        "error": "LeanVM execution failed: memory already set at 1107949: prev=1334408670, new=1645173181",
+        "name": "changed_public_input"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 1449124: prev=389190181, new=441800796",
+        "name": "changed_application_mask_commitment"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 1727395: prev=1877116906, new=538687034",
+        "name": "changed_spark_product_sumcheck"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 4504195: prev=1, new=0",
+        "name": "changed_spark_fixed_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 10119993: prev=1, new=0",
+        "name": "changed_spark_read_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 29011679: prev=1369921781, new=783961455",
+        "name": "changed_hiding_whir_relation"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 20803562: prev=1, new=0",
+        "name": "changed_relation_sumcheck"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 20835203: prev=1, new=0",
+        "name": "changed_code_switch_commitment"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 312: prev=852981496, new=289236723",
+        "name": "changed_code_switch_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 29011679: prev=783961455, new=994642532",
+        "name": "changed_mask_reveal"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 321: prev=65861212, new=1014133974",
+        "name": "changed_mask_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 467979: prev=437070826, new=1084005097",
+        "name": "changed_source_opening"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 2 != 1",
+        "name": "wrong_version"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 1 != 2",
+        "name": "wrong_hash_profile"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 0 != 1",
+        "name": "wrong_matrix_closing"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 682699 != 682698",
+        "name": "trailing_word"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 682697 != 682698",
+        "name": "wrong_total_words"
+      }
+    ]
+  },
+  "optimized": {
+    "bytecode_bytes": 33554432,
+    "bytecode_hash": [
+      1029770546,
+      1584722274,
+      608207288,
+      1467741143,
+      1281664116,
+      1545404947,
+      1354989489,
+      95990560
+    ],
+    "bytecode_log_size": 19,
+    "canonical_proof_words": 583322,
+    "compile_ms": 2669.467708,
+    "compiled_instruction_count": 427150,
+    "compiler_limit_reached": false,
+    "compiler_peak_rss_bytes": 1008009216,
+    "effective_threads": 12,
+    "execution": {
+      "cycles": 28394906,
+      "extension_operation_calls": 1590309,
+      "memory_cells": 31757474,
+      "memory_usage_percent": 91.42160991771576,
+      "padded_memory_cells": 33554432,
+      "peak_rss_bytes": 5385437184,
+      "poseidon1_precompile_calls": 100106,
+      "profiling_report": null,
+      "runtime_memory_cells": 31757437,
+      "tables": [
+        {
+          "log_n_rows": 25,
+          "name": "execution",
+          "non_padded_rows": 28394906,
+          "padded_rows": 33554432
+        },
+        {
+          "log_n_rows": 21,
+          "name": "extension_op",
+          "non_padded_rows": 1590309,
+          "padded_rows": 2097152
+        },
+        {
+          "log_n_rows": 17,
+          "name": "poseidon16",
+          "non_padded_rows": 100106,
+          "padded_rows": 131072
+        }
+      ]
+    },
+    "input_bytes": 2333288,
+    "optimizations": "recommended",
+    "padded_instruction_count": 524288,
+    "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1",
+    "rejected_mutations": [
+      {
+        "error": "LeanVM execution failed: memory already set at 742071: prev=1334408670, new=1645173181",
+        "name": "changed_public_input"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 1083246: prev=389190181, new=441800796",
+        "name": "changed_application_mask_commitment"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 1361220: prev=1877116906, new=538687034",
+        "name": "changed_spark_product_sumcheck"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 4106970: prev=1, new=0",
+        "name": "changed_spark_fixed_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 8810151: prev=1, new=0",
+        "name": "changed_spark_read_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 25727552: prev=1369921781, new=783961455",
+        "name": "changed_hiding_whir_relation"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 17863706: prev=1, new=0",
+        "name": "changed_relation_sumcheck"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 17895347: prev=1, new=0",
+        "name": "changed_code_switch_commitment"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 312: prev=852981496, new=289236723",
+        "name": "changed_code_switch_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 25727552: prev=783961455, new=994642532",
+        "name": "changed_mask_reveal"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 321: prev=65861212, new=1014133974",
+        "name": "changed_mask_opening"
+      },
+      {
+        "error": "LeanVM execution failed: memory already set at 467979: prev=437070826, new=1084005097",
+        "name": "changed_source_opening"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 2 != 1",
+        "name": "wrong_version"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 1 != 2",
+        "name": "wrong_hash_profile"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 0 != 1",
+        "name": "wrong_matrix_closing"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 682699 != 682698",
+        "name": "trailing_word"
+      },
+      {
+        "error": "LeanVM execution failed: not equal: 682697 != 682698",
+        "name": "wrong_total_words"
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "candidate": "fresh_relation",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -260500,
+      "extension_row_delta": 10420,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          757006540,
+          1491993452,
+          1745791071,
+          56177876,
+          1461886076,
+          257679738,
+          2113182701,
+          1492440216
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2542.276125,
+        "compiled_instruction_count": 424109,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 989626368,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 33224506,
+          "extension_operation_calls": 1633394,
+          "memory_cells": 36629708,
+          "memory_usage_percent": 93.01712697245634,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 6394740736,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 36629671,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 33224506,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1633394,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "fresh_relation",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "horner_cubic",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -1764,
+      "extension_row_delta": -1323,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1074967183,
+          647947273,
+          456346382,
+          1612609522,
+          640116224,
+          437605538,
+          1552991121,
+          458461004
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2545.830291,
+        "compiled_instruction_count": 424309,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 966049792,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 33483242,
+          "extension_operation_calls": 1621651,
+          "memory_cells": 36854429,
+          "memory_usage_percent": 93.02454801294033,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 5641781248,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 36854392,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 33483242,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1621651,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "horner_cubic",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "eq_precompile",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -18604,
+      "extension_row_delta": -882,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1515366766,
+          1822607592,
+          1351693863,
+          225964045,
+          711757080,
+          2001270720,
+          931642169,
+          1314293827
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2545.3995000000004,
+        "compiled_instruction_count": 419823,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1033256960,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 33466402,
+          "extension_operation_calls": 1622092,
+          "memory_cells": 36837753,
+          "memory_usage_percent": 93.02139031118429,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 6369869824,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 36837716,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 33466402,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1622092,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "eq_precompile",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "factor_eq_endpoints",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -43,
+      "extension_row_delta": -129,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1669869881,
+          1018710764,
+          1348527750,
+          1654612452,
+          903690999,
+          1085535864,
+          1691354160,
+          1718659388
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2550.348042,
+        "compiled_instruction_count": 424266,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1015103488,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 33484963,
+          "extension_operation_calls": 1622845,
+          "memory_cells": 36860926,
+          "memory_usage_percent": 93.02577748589387,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 6324027392,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 36860889,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 33484963,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1622845,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "factor_eq_endpoints",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "merkle_query_bits",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -3115375,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          453722900,
+          1916220368,
+          1700097705,
+          78336126,
+          1113022214,
+          2067820474,
+          1027592036,
+          308975215
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2527.177416,
+        "compiled_instruction_count": 425987,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1010712576,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 30369631,
+          "extension_operation_calls": 1622974,
+          "memory_cells": 34202616,
+          "memory_usage_percent": 91.43666671578572,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 6196019200,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 34202579,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 30369631,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1622974,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "merkle_query_bits",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "paired_merkle",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -1075100,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          157871123,
+          732497003,
+          97135368,
+          52795288,
+          2126190208,
+          891177395,
+          1833040798,
+          1123240286
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2572.9631670000003,
+        "compiled_instruction_count": 426408,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1000226816,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 32409906,
+          "extension_operation_calls": 1622974,
+          "memory_cells": 35672336,
+          "memory_usage_percent": 93.43394836828179,
+          "padded_memory_cells": 67108864,
+          "peak_rss_bytes": 6211731456,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 35672299,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 32409906,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1622974,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "paired_merkle",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "combined-six",
+      "parent": "baseline",
+      "canonical_input_bytes": 2730792,
+      "input_bytes_removed": 0,
+      "cycle_delta": -4107607,
+      "extension_row_delta": 8086,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1095441395,
+          1545673698,
+          197526751,
+          433183852,
+          819349637,
+          1866624525,
+          1874050529,
+          367919050
+        ],
+        "bytecode_log_size": 19,
+        "compile_ms": 2639.072584,
+        "compiled_instruction_count": 423357,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 971210752,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 29377399,
+          "extension_operation_calls": 1631060,
+          "memory_cells": 33039062,
+          "memory_usage_percent": 92.04967138594915,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5790154752,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 33039025,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 29377399,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1631060,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 4194304,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "fresh_rows",
+      "parent": "combined-six",
+      "canonical_input_bytes": 2522392,
+      "input_bytes_removed": 208400,
+      "cycle_delta": 19512,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1751606561,
+          1045686389,
+          1166186973,
+          1472596845,
+          463527547,
+          281135435,
+          1680942135,
+          1784347366
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 630598,
+        "compile_ms": 2681.28175,
+        "compiled_instruction_count": 423341,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1019150336,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 29396911,
+          "extension_operation_calls": 1631060,
+          "memory_cells": 32691126,
+          "memory_usage_percent": 91.96513451387389,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5376851968,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 32691089,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 29396911,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1631060,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2522392,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "query_product",
+      "parent": "fresh_rows",
+      "canonical_input_bytes": 2522392,
+      "input_bytes_removed": 0,
+      "cycle_delta": -595994,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          2046324571,
+          1073234836,
+          896210228,
+          1431452111,
+          4054296,
+          1222406908,
+          1595149819,
+          968598536
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 630598,
+        "compile_ms": 2567.994291,
+        "compiled_instruction_count": 423285,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1012908032,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28800917,
+          "extension_operation_calls": 1631060,
+          "memory_cells": 32090743,
+          "memory_usage_percent": 91.82848773554417,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5925158912,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 32090706,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28800917,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1631060,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2522392,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows,query_product",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "radix_prefix",
+      "parent": "fresh_rows",
+      "canonical_input_bytes": 2522392,
+      "input_bytes_removed": 0,
+      "cycle_delta": -417174,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1166302841,
+          1438296419,
+          1453471583,
+          1498627123,
+          1173158038,
+          1656238978,
+          276347439,
+          1947698443
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 630598,
+        "compile_ms": 2552.1360830000003,
+        "compiled_instruction_count": 421050,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1018527744,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28979737,
+          "extension_operation_calls": 1631060,
+          "memory_cells": 32332428,
+          "memory_usage_percent": 91.69513653598796,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5934678016,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 32332391,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28979737,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1631060,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2522392,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows,radix_prefix",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "combined-nine",
+      "parent": "fresh_rows",
+      "canonical_input_bytes": 2522392,
+      "input_bytes_removed": 0,
+      "cycle_delta": -1013168,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1455023691,
+          197008169,
+          168110154,
+          835852136,
+          1158314604,
+          1077405919,
+          2044372261,
+          1877398303
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 630598,
+        "compile_ms": 2546.1537500000004,
+        "compiled_instruction_count": 420994,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1025458176,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28383743,
+          "extension_operation_calls": 1631060,
+          "memory_cells": 31732045,
+          "memory_usage_percent": 91.55183663706515,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5869387776,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 31732008,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28383743,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1631060,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2522392,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows,query_product,radix_prefix",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "structured_rows",
+      "parent": "combined-nine",
+      "canonical_input_bytes": 2348344,
+      "input_bytes_removed": 174048,
+      "cycle_delta": 14175,
+      "extension_row_delta": -40751,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1563871575,
+          1603515838,
+          1023970864,
+          951843668,
+          165689319,
+          1347165611,
+          601073274,
+          863569130
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 587086,
+        "compile_ms": 2567.1118330000004,
+        "compiled_instruction_count": 427174,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1039368192,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28397918,
+          "extension_operation_calls": 1590309,
+          "memory_cells": 31759444,
+          "memory_usage_percent": 91.42211053820716,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5910757376,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 31759407,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28397918,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1590309,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2348344,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows,query_product,radix_prefix,structured_rows",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "row_counts",
+      "parent": "structured_rows",
+      "canonical_input_bytes": 2333548,
+      "input_bytes_removed": 14796,
+      "cycle_delta": -3012,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1029770546,
+          1584722274,
+          608207288,
+          1467741143,
+          1281664116,
+          1545404947,
+          1354989489,
+          95990560
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 583387,
+        "compile_ms": 2720.5930829999998,
+        "compiled_instruction_count": 427150,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1032257536,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28394906,
+          "extension_operation_calls": 1590309,
+          "memory_cells": 31757474,
+          "memory_usage_percent": 91.42160991771576,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5924913152,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 31757437,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28394906,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1590309,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2333548,
+        "optimizations": "fresh_relation,fresh_rows,structured_rows,query_product,radix_prefix,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,row_counts",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "derived_fields",
+      "parent": "structured_rows",
+      "canonical_input_bytes": 2348084,
+      "input_bytes_removed": 260,
+      "cycle_delta": 0,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1563871575,
+          1603515838,
+          1023970864,
+          951843668,
+          165689319,
+          1347165611,
+          601073274,
+          863569130
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 587021,
+        "compile_ms": 2534.1542910000003,
+        "compiled_instruction_count": 427174,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1045594112,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28397918,
+          "extension_operation_calls": 1590309,
+          "memory_cells": 31759444,
+          "memory_usage_percent": 91.42211053820716,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5910151168,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 31759407,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28397918,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1590309,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2348084,
+        "optimizations": "fresh_relation,horner_cubic,eq_precompile,factor_eq_endpoints,merkle_query_bits,paired_merkle,fresh_rows,query_product,radix_prefix,structured_rows,derived_fields",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    },
+    {
+      "candidate": "combined-twelve",
+      "parent": "structured_rows",
+      "canonical_input_bytes": 2333288,
+      "input_bytes_removed": 15056,
+      "cycle_delta": -3012,
+      "extension_row_delta": 0,
+      "measurement": {
+        "bytecode_bytes": 33554432,
+        "bytecode_hash": [
+          1029770546,
+          1584722274,
+          608207288,
+          1467741143,
+          1281664116,
+          1545404947,
+          1354989489,
+          95990560
+        ],
+        "bytecode_log_size": 19,
+        "canonical_proof_words": 583322,
+        "compile_ms": 2689.9668329999995,
+        "compiled_instruction_count": 427150,
+        "compiler_limit_reached": false,
+        "compiler_peak_rss_bytes": 1040875520,
+        "effective_threads": 12,
+        "execution": {
+          "cycles": 28394906,
+          "extension_operation_calls": 1590309,
+          "memory_cells": 31757474,
+          "memory_usage_percent": 91.42160991771576,
+          "padded_memory_cells": 33554432,
+          "peak_rss_bytes": 5908709376,
+          "poseidon1_precompile_calls": 100106,
+          "profiling_report": null,
+          "runtime_memory_cells": 31757437,
+          "tables": [
+            {
+              "log_n_rows": 25,
+              "name": "execution",
+              "non_padded_rows": 28394906,
+              "padded_rows": 33554432
+            },
+            {
+              "log_n_rows": 21,
+              "name": "extension_op",
+              "non_padded_rows": 1590309,
+              "padded_rows": 2097152
+            },
+            {
+              "log_n_rows": 17,
+              "name": "poseidon16",
+              "non_padded_rows": 100106,
+              "padded_rows": 131072
+            }
+          ]
+        },
+        "input_bytes": 2333288,
+        "optimizations": "recommended",
+        "padded_instruction_count": 524288,
+        "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+      }
+    }
+  ],
+  "recursion_checks": {
+    "baseline": {
+      "application_root": [
+        879548431,
+        1671654491,
+        169851638,
+        996401061,
+        1140657106,
+        336550721,
+        518120713,
+        1581761660
+      ],
+      "child_proof_bytes": 743989,
+      "child_proving_ms": 30712.695708,
+      "children": "the same valid lifted production proof supplied in both ordered child slots",
+      "lifted_proof_bytes": 447120,
+      "lifted_proof_shape": {
+        "log_inv_rate": 1,
+        "log_memory": 20,
+        "table_log_heights": {
+          "execution": 18,
+          "extension_op": 18,
+          "poseidon16": 15
+        }
+      },
+      "lifted_proving_ms": 1430.187292,
+      "native_verification": "passed",
+      "node_proof_bytes": 611702,
+      "node_proof_shape": {
+        "log_inv_rate": 1,
+        "log_memory": 20,
+        "table_log_heights": {
+          "execution": 18,
+          "extension_op": 19,
+          "poseidon16": 16
+        }
+      },
+      "node_proving_ms": 1510.368333,
+      "optimized": false,
+      "peak_rss_bytes": 22372696064,
+      "profile": "spartan-whir-poseidon1-full-zk-spark-binary-node-v1",
+      "public_claim_mutations": "lifted application digest and binary application root rejected"
+    },
+    "optimized": {
+      "application_root": [
+        879548431,
+        1671654491,
+        169851638,
+        996401061,
+        1140657106,
+        336550721,
+        518120713,
+        1581761660
+      ],
+      "child_proof_bytes": 718613,
+      "child_proving_ms": 26608.584667,
+      "children": "the same valid lifted production proof supplied in both ordered child slots",
+      "lifted_proof_bytes": 449746,
+      "lifted_proof_shape": {
+        "log_inv_rate": 1,
+        "log_memory": 20,
+        "table_log_heights": {
+          "execution": 18,
+          "extension_op": 18,
+          "poseidon16": 15
+        }
+      },
+      "lifted_proving_ms": 917.73775,
+      "native_verification": "passed",
+      "node_proof_bytes": 609480,
+      "node_proof_shape": {
+        "log_inv_rate": 1,
+        "log_memory": 20,
+        "table_log_heights": {
+          "execution": 18,
+          "extension_op": 19,
+          "poseidon16": 16
+        }
+      },
+      "node_proving_ms": 1330.126792,
+      "optimized": true,
+      "peak_rss_bytes": 21656092672,
+      "profile": "spartan-whir-poseidon1-full-zk-spark-binary-node-v1",
+      "public_claim_mutations": "lifted application digest and binary application root rejected"
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "start_bytes": 2730792,
+      "end_bytes": 2348344,
+      "reduction_percent": 14.005021253907291,
+      "completed": true
+    },
+    {
+      "round": 2,
+      "start_bytes": 2348344,
+      "end_bytes": 2333288,
+      "reduction_percent": 0.6411326449617283,
+      "completed": true
+    }
+  ],
+  "stopping_condition": "Every candidate in the final round was tried; their combined input reduction is below 1%.",
+  "criterion": {
+    "spark_guest_input_encoding/optimized": {
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 414755.57092198415,
+            "upper_bound": 421239.72134822403
+          },
+          "point_estimate": 417824.7794780082,
+          "standard_error": 1668.539142155033
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 412626.4468367889,
+            "upper_bound": 419169.6842105263
+          },
+          "point_estimate": 416069.1982734614,
+          "standard_error": 1589.0382797914215
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 6053.231003388976,
+            "upper_bound": 12097.835872808517
+          },
+          "point_estimate": 9542.838630388185,
+          "standard_error": 1496.86910187533
+        },
+        "slope": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 417544.32782248623,
+            "upper_bound": 427372.0327270313
+          },
+          "point_estimate": 422350.5948563897,
+          "standard_error": 2518.4493650101854
+        },
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 8238.08485472744,
+            "upper_bound": 15065.031486236909
+          },
+          "point_estimate": 11974.558053948289,
+          "standard_error": 1742.0562269806312
+        }
+      },
+      "sample": {
+        "sampling_mode": "Linear",
+        "iters": [
+          19.0,
+          38.0,
+          57.0,
+          76.0,
+          95.0,
+          114.0,
+          133.0,
+          152.0,
+          171.0,
+          190.0,
+          209.0,
+          228.0,
+          247.0,
+          266.0,
+          285.0,
+          304.0,
+          323.0,
+          342.0,
+          361.0,
+          380.0,
+          399.0,
+          418.0,
+          437.0,
+          456.0,
+          475.0,
+          494.0,
+          513.0,
+          532.0,
+          551.0,
+          570.0,
+          589.0,
+          608.0,
+          627.0,
+          646.0,
+          665.0,
+          684.0,
+          703.0,
+          722.0,
+          741.0,
+          760.0,
+          779.0,
+          798.0,
+          817.0,
+          836.0,
+          855.0,
+          874.0,
+          893.0,
+          912.0,
+          931.0,
+          950.0
+        ],
+        "times": [
+          7656708.0,
+          15377881.0,
+          23184545.0,
+          30876916.0,
+          40562458.0,
+          48402834.0,
+          53483257.0,
+          65172040.0,
+          70482833.0,
+          78415575.0,
+          85895211.0,
+          92058392.0,
+          104487072.0,
+          109059034.0,
+          116277210.0,
+          124780430.0,
+          134183500.0,
+          140086911.0,
+          147466538.0,
+          155422291.0,
+          165921327.0,
+          172664340.0,
+          183853250.0,
+          191141376.0,
+          196392957.0,
+          202213079.0,
+          213559577.0,
+          223375413.0,
+          229959083.0,
+          260981203.0,
+          244113902.0,
+          255793964.0,
+          255263371.0,
+          269353046.0,
+          278973962.0,
+          284934558.0,
+          297481860.0,
+          299457356.0,
+          323153445.0,
+          320133005.0,
+          329115008.0,
+          323288279.0,
+          364272448.0,
+          368317497.0,
+          368406630.0,
+          394280089.0,
+          372606363.0,
+          383015331.0,
+          381194025.0,
+          397255035.0
+        ]
+      },
+      "benchmark": {
+        "group_id": "spark_guest_input_encoding",
+        "function_id": "optimized",
+        "value_str": null,
+        "throughput": null,
+        "full_id": "spark_guest_input_encoding/optimized",
+        "directory_name": "spark_guest_input_encoding/optimized",
+        "title": "spark_guest_input_encoding/optimized"
+      }
+    },
+    "spark_guest_execution_proof/baseline": {
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 25484100004.2,
+            "upper_bound": 25612471775.1
+          },
+          "point_estimate": 25547933170.8,
+          "standard_error": 32802856.528127845
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 25469092104.0,
+            "upper_bound": 25615646916.5
+          },
+          "point_estimate": 25549507708.0,
+          "standard_error": 39897628.99047523
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 16666060.49451828,
+            "upper_bound": 185375899.5560199
+          },
+          "point_estimate": 79513658.70375037,
+          "standard_error": 43243155.72910694
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 53323959.213683926,
+            "upper_bound": 144707145.64222854
+          },
+          "point_estimate": 109516445.0651631,
+          "standard_error": 23024652.383682452
+        }
+      },
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "times": [
+          25519854750.0,
+          25497372542.0,
+          25604635000.0,
+          25599160333.0,
+          25579160666.0,
+          25511881666.0,
+          25361389500.0,
+          25632133500.0,
+          25426302542.0,
+          25747441209.0
+        ]
+      },
+      "benchmark": {
+        "group_id": "spark_guest_execution_proof",
+        "function_id": "baseline",
+        "value_str": null,
+        "throughput": null,
+        "full_id": "spark_guest_execution_proof/baseline",
+        "directory_name": "spark_guest_execution_proof/baseline",
+        "title": "spark_guest_execution_proof/baseline"
+      }
+    },
+    "spark_guest_execution_proof/optimized": {
+      "estimates": {
+        "mean": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23901062991.8,
+            "upper_bound": 24930380045.6
+          },
+          "point_estimate": 24394129787.5,
+          "standard_error": 262166633.98859882
+        },
+        "median": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 23607284521.0,
+            "upper_bound": 25025082250.0
+          },
+          "point_estimate": 24403978750.0,
+          "standard_error": 347635134.849245
+        },
+        "median_abs_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 196560973.27284515,
+            "upper_bound": 1442525728.5679488
+          },
+          "point_estimate": 866017686.5626127,
+          "standard_error": 322607585.6865807
+        },
+        "slope": null,
+        "std_dev": {
+          "confidence_interval": {
+            "confidence_level": 0.95,
+            "lower_bound": 480819419.56493986,
+            "upper_bound": 1105541667.7292695
+          },
+          "point_estimate": 868841997.4584296,
+          "standard_error": 161877079.05397612
+        }
+      },
+      "sample": {
+        "sampling_mode": "Flat",
+        "iters": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "times": [
+          24279022542.0,
+          23860510875.0,
+          23221752625.0,
+          23354058167.0,
+          23856840375.0,
+          24528934958.0,
+          25974943791.0,
+          24544179667.0,
+          25025082250.0,
+          25295972625.0
+        ]
+      },
+      "benchmark": {
+        "group_id": "spark_guest_execution_proof",
+        "function_id": "optimized",
+        "value_str": null,
+        "throughput": null,
+        "full_id": "spark_guest_execution_proof/optimized",
+        "directory_name": "spark_guest_execution_proof/optimized",
+        "title": "spark_guest_execution_proof/optimized"
+      }
+    }
+  },
+  "regression_tests": {
+    "leanvm-tests.log": {
+      "passed": 5,
+      "failed": false
+    },
+    "leanvm-helper-tests.log": {
+      "passed": 2,
+      "failed": false
+    }
+  },
+  "outer_proof_examples": {
+    "baseline": 743989,
+    "optimized": 718613
+  },
+  "outer_proof_example_scope": "One verified sample per variant; proof-of-work can change later outer proof sizes.",
+  "implementation_source_ids": {
+    ".cargo/config.toml": "7a3476999e448da70cc847a05ca85bd79fea0c29ec24a04aa7250ffcd2186771",
+    "Cargo.lock": "c4fdfe0f20356dae3ccd2bc244c61e36b398a440520bba64bdc46c0acf31e4c9",
+    "crates/backend/sumcheck/src/product_computation.rs": "6638a94f862252969766f2ee1f9d0915434aa1ca0ce6f83a293727ec57e3c80b",
+    "crates/backend/system-info/src/lib.rs": "928de24511559aecaf87c34fae55fdcc58c277703e549b33a36f3be450f07d21",
+    "crates/lean_prover/Cargo.toml": "e6ffed812e32aea7505c5f6592d841805e2dfc68b0618b33b57f1e53c751a9b1",
+    "crates/lean_prover/python-verifier/verifier.py": "3ecc8d827ee0014eef460d4776fa9d1cbda3de4e6a32c736a8b6c5318d474b0c",
+    "crates/lean_prover/src/lib.rs": "9de047645c654bee52c101ba97217006e498edc99ed7109798d9901d975bda54",
+    "crates/lean_prover/src/prove_execution.rs": "8834b5decb63babe36bd0a49440bb76a1ce22c3b0622097ac5d909219f2558ae",
+    "crates/lean_vm/src/core/constants.rs": "a1cb37a8df3b7ef1db1b563c77e73f2bffeece84202df7a36e8b1c52271e80d0",
+    "crates/spartan_whir_guest/Cargo.toml": "3762ab2b839bc02395346e9456ac4459e4a64c655ca32b10b41c32a5adc503d2",
+    "crates/spartan_whir_guest/benches/spark_guest_optimization.rs": "3b78827d009f1af85e1ba1be02b6d60b6b7d1c00dbb64db98c33bf34ed78141a",
+    "crates/spartan_whir_guest/src/bin/leanvm-binary-node.rs": "1561c6ac34fb01553c514e699bdd42ce93cbd0669ab9648f5a52eef2e142381d",
+    "crates/spartan_whir_guest/src/bin/leanvm-full-zk-spark-poseidon1.rs": "a32178a705151b32ab03f8ccc0d5b112a3adf5eef8b865ff9508e6bc1812b368",
+    "crates/spartan_whir_guest/src/lib.rs": "ae9709caf5ad4dd6ea18f863941b173a3031efb228bf10c00a3da68535f4a60e",
+    "crates/spartan_whir_guest/tests/binary_recursion.rs": "95e60e151694d1c992bb050d3f0416100af35059b6c902d6ed9c558a9817f285",
+    "crates/spartan_whir_guest/tests/guest_optimizations.rs": "ed2a043fd3b42e2cd3c4edd93dea68a313c7714af00ad2750cac3654d8689606",
+    "crates/spartan_whir_guest/tests/optimized_full_zk_spark.rs": "f627f22043c3dc30487de734900bd0673fbe5a7d2b0d4e203c5c443c9d899740",
+    "crates/spartan_whir_guest/zkdsl_implem/extension.py": "e62fe7ac1885fdf6e0b96c4608e9e0ef77416c1d6ae5fdc53d47b3b4a67d5e31",
+    "crates/spartan_whir_guest/zkdsl_implem/full_zk_common.py": "4b3e194b37824376d5a08eb75b13b11ebd3ebc74464c8b424266334ec7531f12",
+    "crates/spartan_whir_guest/zkdsl_implem/full_zk_production_common.py": "2fff26eaa409b35d3ac34cb80357d82b8d35568da01be8aa22085583d0c11567",
+    "crates/spartan_whir_guest/zkdsl_implem/full_zk_spark_poseidon1.py": "140eebe7adc12dc300ff165e33d69b95fa33a98e1dbc11626f676f3a3911885e",
+    "crates/spartan_whir_guest/zkdsl_implem/hiding_whir_spark_poseidon1.py": "1563d473441e1f3dd2073537f9f269862b217fa10c9899bd9614d4dcc029c9f8",
+    "crates/spartan_whir_guest/zkdsl_implem/plain_whir_poseidon1.py": "33c7f258d83b5403df17df5a4ecd51870adff1502da87c2d43c3856d72ace4c7",
+    "crates/spartan_whir_guest/zkdsl_implem/poseidon1.py": "ffdab157cdfee31c7397e56429c5d670c183c4f97af11d9cb3034f78554c118d",
+    "crates/spartan_whir_guest/zkdsl_implem/spark_poseidon1.py": "70d95d2c00fb8bf7da33f82a9b085f45cc14e609d41e2c1f3cf619004c7ab1fd",
+    "crates/spartan_whir_guest/zkdsl_implem/transcript_poseidon1.py": "5bba098ce318b9d3eaf505744b349ae986730930a47127e0e52c9a4ea681a03a",
+    "crates/sub_protocols/Cargo.toml": "452be9e01562f05903f8c031d8aa680dd3249b2b15a5df3354b55ab964eba200",
+    "crates/sub_protocols/src/air_sumcheck.rs": "d0d9c4a9f74cb3bc09f1fc32a2cac18602f3bdfefb25724e99dc07c7640c8958",
+    "crates/sub_protocols/src/logup.rs": "1242e3f58c8ca77893167112848c01c120d09f51f19b8c941d613135b68bf41b",
+    "crates/sub_protocols/src/quotient_gkr/layers.rs": "b9f1ab39330b888ff8c9eec306bd1f03ac2913527eb2fb8b7254289173a65f30",
+    "crates/sub_protocols/src/quotient_gkr/mod.rs": "d9ad336903601decb1ad6574f15f957d4c6ccfd236361a8894e288ca2fc49450",
+    "crates/sub_protocols/src/quotient_gkr/sumcheck_utils.rs": "dc1e8f6fd9f14b2279d3570908be78593412bffef32127bb546b4b752b1ed937",
+    "crates/sub_protocols/src/stacked_pcs.rs": "a6334d8b4f96364f0799189823f9506b649cef9eb95d014f9144ca20486e1836",
+    "crates/whir/src/commit.rs": "bec581a83cd8fcec084d814908a7d300bf549dd94a47ed66bc1fe4863e82a10f",
+    "crates/whir/src/open.rs": "f6c8639235eac58ed453221a0b4f579ec49e04a7df8efe7131de63cb65eb736a"
+  },
+  "leanvm_head": "98cb2ad4bdc52618674c0f8f91f715a75349ff6f",
+  "leanvm_branch": "codex/leanvm-spartan-whir",
+  "rustc": "rustc 1.96.0-nightly (d9563937f 2026-03-03)",
+  "effective_threads": 12,
+  "flags": "-C target-cpu=native (leanVM/.cargo/config.toml)",
+  "command": "RAYON_NUM_THREADS=12 cargo bench -p spartan_whir_guest --bench spark_guest_optimization --offline"
+}

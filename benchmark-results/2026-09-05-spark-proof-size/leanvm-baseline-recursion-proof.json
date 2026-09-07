@@ -1,0 +1,42 @@
+{
+  "application_root": [
+    879548431,
+    1671654491,
+    169851638,
+    996401061,
+    1140657106,
+    336550721,
+    518120713,
+    1581761660
+  ],
+  "child_proof_bytes": 743989,
+  "child_proving_ms": 30712.695708,
+  "children": "the same valid lifted production proof supplied in both ordered child slots",
+  "lifted_proof_bytes": 447120,
+  "lifted_proof_shape": {
+    "log_inv_rate": 1,
+    "log_memory": 20,
+    "table_log_heights": {
+      "execution": 18,
+      "extension_op": 18,
+      "poseidon16": 15
+    }
+  },
+  "lifted_proving_ms": 1430.187292,
+  "native_verification": "passed",
+  "node_proof_bytes": 611702,
+  "node_proof_shape": {
+    "log_inv_rate": 1,
+    "log_memory": 20,
+    "table_log_heights": {
+      "execution": 18,
+      "extension_op": 19,
+      "poseidon16": 16
+    }
+  },
+  "node_proving_ms": 1510.368333,
+  "optimized": false,
+  "peak_rss_bytes": 22372696064,
+  "profile": "spartan-whir-poseidon1-full-zk-spark-binary-node-v1",
+  "public_claim_mutations": "lifted application digest and binary application root rejected"
+}

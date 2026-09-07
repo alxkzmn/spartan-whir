@@ -1,0 +1,134 @@
+{
+  "artifacts": {
+    "guest_constants": {
+      "bytes": 6212,
+      "file": "full_zk_direct_guest_constants.json",
+      "sha256": "44f790cdedb78ceb3f02f2c883d0f42dd42d26a59220824f5ae11f21686cda5b"
+    },
+    "guest_input": {
+      "bytes": 53716,
+      "file": "full_zk_direct_guest_input.words",
+      "sha256": "f8faa6c9fee33bd971e5eb6034bf12f0094f3e0decafabe8922eb08fd2d9dea3"
+    },
+    "mutations": [
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_public_input.words",
+        "sha256": "59bc6a8e1c711f4768e6ef76ec62f0f5a5904e8951ff049f6ba019bed5c27ca7"
+      },
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_witness_commitment.words",
+        "sha256": "9ad6dbbe41efef8b4f3ee6ddfb654b59e8d67281523c31d1ecc24a6b8fde1063"
+      },
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_application_mask_commitment.words",
+        "sha256": "357ef781d8761c6011455507c3252c766f79f742e3bbd3ea851ca27e1cfa7ad2"
+      },
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_outer_sumcheck.words",
+        "sha256": "d2db16a91d18a5e44815b35f9f3480d314a52e46f495427cb3c7e68d45a05f9d"
+      },
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_inner_sumcheck.words",
+        "sha256": "5cf6f8a0fd549ab998fe4153858b6786a93db4694024f5d30b4e5a61a0fafc90"
+      },
+      {
+        "bytes": 53716,
+        "file": "mutations/changed_hiding_whir_base_claim.words",
+        "sha256": "b6b7b5b4e60d0e91279bc79fd46eafff0d8308b1a6105b6041be8043f4c175f2"
+      }
+    ],
+    "statement": {
+      "bytes": 285,
+      "file": "full_zk_direct_statement.json",
+      "sha256": "92cc6c291d3364cb09837106732bf13fb442cac074ce460807eeb21212639432"
+    },
+    "transcript_trace": {
+      "bytes": 33661,
+      "file": "full_zk_direct_transcript_trace.json",
+      "sha256": "843bc270eb7e87bf74e319600930b188727420bcc062e81f1bbc57f37d95b4ac"
+    },
+    "verifying_key": {
+      "bytes": 4017,
+      "file": "full_zk_direct_verifying_key.json",
+      "sha256": "6257d2513d2e1e5c2cbf4047fea6796cdb49597b5e9ddd5932318b5096d45d1b"
+    }
+  },
+  "extension_degree": 5,
+  "fixture": {
+    "a_terms_per_constraint": 2,
+    "b_terms_per_constraint": 2,
+    "num_constraints": 4,
+    "num_io": 1,
+    "seed": 131549106474,
+    "target_log2_witness_poly": 3
+  },
+  "fixture_seed": 131549106474,
+  "guest_words": 13429,
+  "hash_profile": "poseidon1-width16",
+  "implementation_source_ids": {
+    "Cargo.lock": "ad3ae13738d09443b16298ff218fafb941a701415f0758569e6b7679cfe6d898",
+    "src/bin/leanvm-full-zk-fixture.rs": "60d381218feb72eb44120a959c41d4647f83aad583cd54b4fd294f1b321cad1d",
+    "src/domain_separator.rs": "6d38e1ef5df72f65fe1841ac89416c2e4cb83d8bd32d418a44575c25b2d3420a",
+    "src/engine.rs": "50d412e6ce6aa3e141d0249a4609ff05e65a8be50da50ee1a3d7c2347e060365",
+    "src/leanvm_full_zk.rs": "21aef4e8d1144ba5766f71c0b117b0a2e2bc8013a626de65ee11280637424895",
+    "src/plonky3_whir_pcs.rs": "524c5ecc814cfd282c4b55d936ab30922a46e2bd17dee28e852f91ae4d0c3eda",
+    "src/poseidon.rs": "f9401e7ae73ed9ffe2adde369032f4b935db529471ef5805b91de983d0ab14f0",
+    "src/poseidon_trace.rs": "a350e8dd73a7d67f4865ded48d1f004b996b27c90be2e0864b8f895ed45a6a35",
+    "src/protocol.rs": "bd22fb5ce8f2c1d909a01b19304ee169ce6c3d5cfc426c9cd10b387134b60c9e"
+  },
+  "matrix_closing": "direct_sparse",
+  "proof_seed": 1031080120782,
+  "proof_shape": {
+    "base_case_blinded_masks": 13,
+    "base_case_blinded_message": 4,
+    "base_case_blinded_randomness": 18,
+    "base_case_mask_openings": 3,
+    "inner_round_widths": [
+      2,
+      2,
+      2,
+      2
+    ],
+    "inner_rounds": 4,
+    "outer_mask_evals": 2,
+    "outer_round_widths": [
+      7,
+      7
+    ],
+    "outer_rounds": 2,
+    "relation_ood_answers": [],
+    "relation_rounds": 0,
+    "relation_sumchecks": 1
+  },
+  "schema": "leanvm-full-zk-direct-fixture-v1",
+  "setup": {
+    "ell_zk": 3,
+    "mask_log_inv_rate": 3,
+    "matrix_closing": "DirectSparse",
+    "security": {
+      "merkle_security_bits": 80,
+      "security_level_bits": 80,
+      "soundness_assumption": "CapacityBound"
+    },
+    "spark_whir_params": null,
+    "whir_params": {
+      "folding_factor": 1,
+      "folding_schedule": null,
+      "pow_bits": 0,
+      "round_log_inv_rates": [],
+      "rs_domain_initial_reduction_factor": 1,
+      "starting_log_inv_rate": 8
+    }
+  },
+  "source_revisions": {
+    "plonky3": "f64ae15da3807388b1a4e0a89a4fde8fdcdff515",
+    "plonky3_source": "spartan-whir/Cargo.lock",
+    "spartan_whir": "f82eb92e44dc8f4de796ddbad07b1ad3added506"
+  },
+  "transcript_events": 358
+}

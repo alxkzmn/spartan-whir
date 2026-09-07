@@ -1,0 +1,52 @@
+{
+  "bytecode_bytes": 33554432,
+  "bytecode_hash": [
+    1029837421,
+    1341148120,
+    691546331,
+    261592802,
+    1374499229,
+    1181121684,
+    850759154,
+    277945311
+  ],
+  "bytecode_log_size": 19,
+  "compile_ms": 2772.2045,
+  "compiled_instruction_count": 424109,
+  "compiler_limit_reached": false,
+  "compiler_peak_rss_bytes": 1004290048,
+  "effective_threads": 12,
+  "execution": {
+    "cycles": 33485006,
+    "extension_operation_calls": 1622974,
+    "memory_cells": 36861485,
+    "memory_usage_percent": 93.02588324914203,
+    "padded_memory_cells": 67108864,
+    "peak_rss_bytes": 6355140608,
+    "poseidon1_precompile_calls": 100106,
+    "runtime_memory_cells": 36861448,
+    "tables": [
+      {
+        "log_n_rows": 25,
+        "name": "execution",
+        "non_padded_rows": 33485006,
+        "padded_rows": 33554432
+      },
+      {
+        "log_n_rows": 21,
+        "name": "extension_op",
+        "non_padded_rows": 1622974,
+        "padded_rows": 2097152
+      },
+      {
+        "log_n_rows": 17,
+        "name": "poseidon16",
+        "non_padded_rows": 100106,
+        "padded_rows": 131072
+      }
+    ]
+  },
+  "input_bytes": 4194304,
+  "padded_instruction_count": 524288,
+  "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+}

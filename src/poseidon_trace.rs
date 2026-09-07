@@ -54,6 +54,12 @@ pub enum PoseidonTranscriptEvent {
     },
 }
 
+/// Trace controls shared by the supported Poseidon transcript profiles.
+pub trait PoseidonTranscriptTrace: Sized {
+    fn with_trace(self) -> Self;
+    fn transcript_trace(&self) -> Vec<PoseidonTranscriptEvent>;
+}
+
 /// The normal Poseidon2 challenger with optional operation tracing.
 ///
 /// Tracing does not participate in challenger state. Clones share the same
@@ -122,6 +128,19 @@ where
                 .expect("transcript trace lock poisoned")
                 .push(event);
         }
+    }
+}
+
+impl<P> PoseidonTranscriptTrace for TraceablePoseidonChallenger<P>
+where
+    P: CryptographicPermutation<[F; 16]>,
+{
+    fn with_trace(self) -> Self {
+        TraceablePoseidonChallenger::with_trace(self)
+    }
+
+    fn transcript_trace(&self) -> Vec<PoseidonTranscriptEvent> {
+        TraceablePoseidonChallenger::transcript_trace(self)
     }
 }
 

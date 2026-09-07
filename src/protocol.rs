@@ -307,6 +307,38 @@ pub struct SparkFixedOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     marker: PhantomData<E>,
 }
 
+impl<E, Pcs> SparkFixedOpeningProof<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+{
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts(
+        value_num_variables: usize,
+        value_column_bits: usize,
+        audit_num_variables: usize,
+        audit_column_bits: usize,
+        value_commitment: Pcs::Commitment,
+        audit_commitment: Option<Pcs::Commitment>,
+        evals: SparkFixedTableOpeningEvals<E::EF>,
+        value_proof: Pcs::Proof,
+        audit_proof: Option<Pcs::Proof>,
+    ) -> Self {
+        Self {
+            value_num_variables,
+            value_column_bits,
+            audit_num_variables,
+            audit_column_bits,
+            value_commitment,
+            audit_commitment,
+            evals,
+            value_proof,
+            audit_proof,
+            marker: PhantomData,
+        }
+    }
+}
+
 impl<E, Pcs> Clone for SparkFixedOpeningProof<E, Pcs>
 where
     E: SpartanWhirEngine,
@@ -353,6 +385,31 @@ pub struct SparkReadGroupOpeningProof<E: SpartanWhirEngine, Pcs: MlePcs<E>> {
     pub evals: Vec<Vec<E::EF>>,
     pub proof: Pcs::Proof,
     marker: PhantomData<E>,
+}
+
+impl<E, Pcs> SparkReadGroupOpeningProof<E, Pcs>
+where
+    E: SpartanWhirEngine,
+    Pcs: MlePcs<E>,
+{
+    pub(crate) fn from_parts(
+        num_variables: usize,
+        column_start: usize,
+        column_count: usize,
+        commitment: Pcs::Commitment,
+        evals: Vec<Vec<E::EF>>,
+        proof: Pcs::Proof,
+    ) -> Self {
+        Self {
+            num_variables,
+            column_start,
+            column_count,
+            commitment,
+            evals,
+            proof,
+            marker: PhantomData,
+        }
+    }
 }
 
 impl<E, Pcs> Clone for SparkReadOpeningProof<E, Pcs>

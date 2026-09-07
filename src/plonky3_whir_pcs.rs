@@ -52,10 +52,11 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use crate::profiling::profile_scope;
 use crate::{
     engine::{
-        poseidon1_merkle_compress, poseidon1_merkle_hash, poseidon_merkle_compress,
-        poseidon_merkle_hash, ExtField, Plonky3PoseidonEngine, Poseidon1Challenger,
-        Poseidon1Engine, Poseidon1FieldHash, Poseidon1NodeCompress, PoseidonChallenger,
-        PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress, QuinticExtension, F,
+        poseidon1_challenger, poseidon1_merkle_compress, poseidon1_merkle_hash,
+        poseidon_merkle_compress, poseidon_merkle_hash, ExtField, Plonky3PoseidonEngine,
+        Poseidon1Challenger, Poseidon1Engine, Poseidon1FieldHash, Poseidon1NodeCompress,
+        PoseidonChallenger, PoseidonEngine, PoseidonFieldHash, PoseidonNodeCompress,
+        QuinticExtension, F,
     },
     CommittedPolynomialView, Evaluations, InvalidConfigReason, MatrixClosingMode, MlePcs, NoZkPcs,
     PcsStatement, ProtocolPcs, SealedNoZkPcs, SoundnessAssumption, SparkReadPcs, SpartanProtocol,
@@ -191,8 +192,20 @@ where
         + Sync;
 
     const FULL_ZK_PROTOCOL_ID: &'static [u8];
+    const HASH_PROFILE_TAG: u32;
+    const FULL_ZK_STATEMENT_DIGEST_ID: &'static str;
 
     fn full_zk_mmcs() -> Self::ZkMmcs;
+
+    fn plain_whir_guest_config_parts(
+        config: &WhirPcsConfig,
+    ) -> Result<
+        (
+            Plonky3PlainWhirConfig<Self::EF, F, Self::Challenger>,
+            Vec<u32>,
+        ),
+        SpartanWhirError,
+    >;
 
     /// Clone transcript state for proof reconstruction without recording replay.
     fn challenger_for_replay(challenger: &Self::Challenger) -> Self::Challenger;
@@ -277,6 +290,21 @@ where
     type ZkMmcs = PoseidonMmcs;
 
     const FULL_ZK_PROTOCOL_ID: &'static [u8] = crate::FULL_ZK_PROTOCOL_ID;
+    const HASH_PROFILE_TAG: u32 = 1;
+    const FULL_ZK_STATEMENT_DIGEST_ID: &'static str =
+        "poseidon2-width-16-length-prefixed-statement-v1";
+
+    fn plain_whir_guest_config_parts(
+        config: &WhirPcsConfig,
+    ) -> Result<
+        (
+            Plonky3PlainWhirConfig<Self::EF, F, Self::Challenger>,
+            Vec<u32>,
+        ),
+        SpartanWhirError,
+    > {
+        poseidon_plain_whir_guest_config_parts(config)
+    }
 
     fn challenger_for_replay(challenger: &Self::Challenger) -> Self::Challenger {
         challenger.clone().without_trace()
@@ -322,6 +350,21 @@ where
     type ZkMmcs = Poseidon1Mmcs;
 
     const FULL_ZK_PROTOCOL_ID: &'static [u8] = crate::POSEIDON1_FULL_ZK_PROTOCOL_ID;
+    const HASH_PROFILE_TAG: u32 = 2;
+    const FULL_ZK_STATEMENT_DIGEST_ID: &'static str =
+        "poseidon1-width-16-length-prefixed-statement-v1";
+
+    fn plain_whir_guest_config_parts(
+        config: &WhirPcsConfig,
+    ) -> Result<
+        (
+            Plonky3PlainWhirConfig<Self::EF, F, Self::Challenger>,
+            Vec<u32>,
+        ),
+        SpartanWhirError,
+    > {
+        poseidon1_plain_whir_guest_config_parts(config)
+    }
 
     fn challenger_for_replay(challenger: &Self::Challenger) -> Self::Challenger {
         challenger.clone().without_trace()
@@ -2951,6 +2994,46 @@ fn observe_poseidon1_plain_domain_separator<Ext>(
     let mut domain_separator = WhirDomainSeparator::new(Vec::new());
     pcs.add_domain_separator::<8>(&mut domain_separator);
     domain_separator.observe_domain_separator(challenger);
+}
+
+pub(crate) fn poseidon_plain_whir_guest_config_parts<Ext>(
+    config: &WhirPcsConfig,
+) -> Result<(PoseidonPlainWhirConfig<Ext>, Vec<u32>), SpartanWhirError>
+where
+    Ext: ExtField + TwoAdicField,
+{
+    let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+    let mut challenger = crate::engine::poseidon_challenger().with_trace();
+    observe_poseidon_plain_domain_separator(&pcs, &mut challenger);
+    let domain_separator = challenger
+        .transcript_trace()
+        .into_iter()
+        .find_map(|event| match event {
+            crate::PoseidonTranscriptEvent::Observe { values } => Some(values),
+            _ => None,
+        })
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    Ok((pcs.config.clone(), domain_separator))
+}
+
+pub(crate) fn poseidon1_plain_whir_guest_config_parts<Ext>(
+    config: &WhirPcsConfig,
+) -> Result<(Poseidon1PlainWhirConfig<Ext>, Vec<u32>), SpartanWhirError>
+where
+    Ext: ExtField + TwoAdicField,
+{
+    let pcs = build_poseidon1_plain_pcs::<Ext>(config)?;
+    let mut challenger = poseidon1_challenger().with_trace();
+    observe_poseidon1_plain_domain_separator(&pcs, &mut challenger);
+    let domain_separator = challenger
+        .transcript_trace()
+        .into_iter()
+        .find_map(|event| match event {
+            crate::PoseidonTranscriptEvent::Observe { values } => Some(values),
+            _ => None,
+        })
+        .ok_or_else(SpartanWhirError::invalid_config)?;
+    Ok((pcs.config.clone(), domain_separator))
 }
 
 fn parse_plain_initial_commitment<Ext>(

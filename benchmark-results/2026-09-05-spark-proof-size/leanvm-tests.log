@@ -1,0 +1,24 @@
+   Compiling spartan_whir_guest v0.1.0
+    Finished `release` profile [optimized] target(s) in 7.23s
+     Running tests/binary_recursion.rs (target/release/deps/binary_recursion-f7afc685127e63e3)
+
+running 2 tests
+test optimized_lift_and_binary_node_match_the_fixed_profile ... ok
+test production_lift_and_binary_node_match_the_fixed_profile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.98s
+
+     Running tests/full_zk_spark_poseidon1.rs (target/release/deps/full_zk_spark_poseidon1-37fab79b7a30c0b7)
+
+running 1 test
+test production_fixture_and_mutations_validate_in_leanvm ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.86s
+
+     Running tests/optimized_full_zk_spark.rs (target/release/deps/optimized_full_zk_spark-4eccf7b632db4f77)
+
+running 2 tests
+test arithmetic_only_options_preserve_the_original_input_layout ... ok
+test optimized_guest_matches_profile_and_rejects_mutations ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.69s

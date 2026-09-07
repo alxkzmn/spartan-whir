@@ -1,0 +1,54 @@
+{
+  "bytecode_bytes": 33554432,
+  "bytecode_hash": [
+    757006540,
+    1491993452,
+    1745791071,
+    56177876,
+    1461886076,
+    257679738,
+    2113182701,
+    1492440216
+  ],
+  "bytecode_log_size": 19,
+  "compile_ms": 2542.276125,
+  "compiled_instruction_count": 424109,
+  "compiler_limit_reached": false,
+  "compiler_peak_rss_bytes": 989626368,
+  "effective_threads": 12,
+  "execution": {
+    "cycles": 33224506,
+    "extension_operation_calls": 1633394,
+    "memory_cells": 36629708,
+    "memory_usage_percent": 93.01712697245634,
+    "padded_memory_cells": 67108864,
+    "peak_rss_bytes": 6394740736,
+    "poseidon1_precompile_calls": 100106,
+    "profiling_report": null,
+    "runtime_memory_cells": 36629671,
+    "tables": [
+      {
+        "log_n_rows": 25,
+        "name": "execution",
+        "non_padded_rows": 33224506,
+        "padded_rows": 33554432
+      },
+      {
+        "log_n_rows": 21,
+        "name": "extension_op",
+        "non_padded_rows": 1633394,
+        "padded_rows": 2097152
+      },
+      {
+        "log_n_rows": 17,
+        "name": "poseidon16",
+        "non_padded_rows": 100106,
+        "padded_rows": 131072
+      }
+    ]
+  },
+  "input_bytes": 4194304,
+  "optimizations": "fresh_relation",
+  "padded_instruction_count": 524288,
+  "profile": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1"
+}

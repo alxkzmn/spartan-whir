@@ -1,12 +1,16 @@
 # SPARK proof size with the selected 2048-byte SHA-256 schedule
 
+#### LeanVM verifier result
+
+The optimized LeanVM guest reduces canonical input from **2,730,792 to 2,333,288 bytes** (14.556%), execution from **33,485,006 to 28,394,906 cycles** (15.201%), and padded memory from **`2^26` to `2^25` cells**. Its second complete round saves another **0.641%** while removing 3,012 further guest cycles. The schedule and public statement are fixed. See [guest implementation, candidate measurements and stopping condition](leanvm.md).
+
 #### Native transport result
 
 The implemented full-ZK Poseidon1 quintic SPARK transport proof shrinks from a median **2,741,789 bytes to 2,245,906.5 bytes**, an **18.086% reduction** on four matched valid 2048-byte SHA-256 inputs. The first complete optimization round saves 18.070%; the second saves another **451 bytes, or 0.0201% of its starting proof**. Every shortlisted category was revisited before applying the 1% stopping condition.
 
-Use `prove_compressed_with_rng`, `CompressedZkProofFor::to_bytes` / `from_bytes`, and `verify_compressed`. The opt-in APIs support full-ZK SPARK with both Poseidon1 and Poseidon2. The decoder reconstructs omitted values and runs all original verification checks. Schedules, polynomials, commitments, public claims and transcript operations are preserved. The ordinary Rust proof format retains its existing encoding.
+Use `prove_compressed_with_rng`, `CompressedZkProofFor::to_bytes` / `from_bytes`, and `verify_compressed`. The opt-in APIs support full-ZK SPARK with both Poseidon1 and Poseidon2. The decoder reconstructs omitted values and runs all original verification checks. Schedules, polynomials, commitments, public claims and transcript operations are preserved. The ordinary Rust proof format retains its existing encoding. The optimized LeanVM guest has a separate compact input format.
 
-The measured transport format is larger than 2 MiB. Native decoding and verification costs below belong to this transport codec.
+The measured transport format is larger than 2 MiB. LeanVM uses the separate direct reconstruction described in [leanvm.md](leanvm.md). Native decoding and verification costs below belong to this transport codec.
 
 #### Measured size by candidate
 
@@ -147,7 +151,7 @@ The reconstruction helpers retain all commitments and authentication proofs. The
 
 Factored SPARK rounds reconstruct the cubic observations before the original sumcheck verifier samples challenges. Final-row reconstruction observes the final polynomial before deriving query indices and chooses a nonzero folding weight, including Boolean challenge cases. The custom codec validates framing and allocation bounds; original field deserialization and cryptographic verification remain required.
 
-The native transport APIs are full-ZK SPARK only. Fixed-oracle caching is not implemented. Fixture payload counts and native transport measurements use separate encodings and seeds.
+The native transport APIs are full-ZK SPARK only. Fixed-oracle caching is not implemented. The optimized LeanVM guest consumes its own compact word representation; the ordinary guest keeps the padded input. Fixture payload counts and native transport measurements use separate encodings and seeds.
 
 #### Validation and benchmark method
 

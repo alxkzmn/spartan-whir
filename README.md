@@ -123,6 +123,20 @@ It rebuilds derived proving-key caches after loading the proving key.
 
 ## SNARK Instantiations
 
+#### Recursive verification in LeanVM
+
+The fixtures under [`testdata/leanvm-m0`](testdata/leanvm-m0) define the input and statement boundary for recursively verifying Spartan-WHIR proofs in [LeanVM](https://github.com/leanEthereum/leanVM). The verifier guest decodes a Spartan-WHIR proof from private witness words, verifies it inside the VM, recomputes the application statement digest, and exposes that digest as the public input of the LeanVM execution proof. The execution proof attests that the fixed guest accepted the child Spartan-WHIR proof for the bound application statement.
+
+The control fixture fixes the no-ZK Poseidon2, quintic, DirectSparse correctness profile, a canonical field-word guest encoding, the eight-element statement digest, a verifier transcript trace, and single-value rejection fixtures. The protocol manifest in that directory also records the matched full-ZK DirectSparse and SPARK candidate configurations.
+
+Regenerate it with `cargo run --bin leanvm-m0-fixture -- ...` using the exact source revisions described in the fixture README. Run `cargo test --test leanvm_m0` to check deterministic reproduction and native verification.
+
+The `leanvm_full_zk` module provides engine-typed DirectSparse and SPARK guest encoders, decoders, statement digests, and fixed verifier-configuration extraction. Call `encode_full_zk_direct_guest_words::<E>` with `decode_full_zk_direct_guest_words::<E>`, or `encode_full_zk_spark_guest_words::<E>` with `decode_full_zk_spark_guest_words::<E>`. The engine type fixes the Poseidon profile in the header and statement digest, and each decoder requires exact input consumption before returning the ordinary structured proof used by native verification.
+
+The checked synthetic full-ZK DirectSparse fixtures are [`testdata/leanvm-full-zk-direct-poseidon1`](testdata/leanvm-full-zk-direct-poseidon1) and [`testdata/leanvm-full-zk-direct-poseidon2`](testdata/leanvm-full-zk-direct-poseidon2). Generate them with `cargo run --bin leanvm-full-zk-fixture -- <output-directory> <spartan-whir-commit>` and add `--features poseidon1` for the Poseidon1 fixture. Their manifests record the Spartan-WHIR and Plonky3 revisions, implementation-source hashes, artifact hashes, deterministic seeds, verifier constants, transcript trace, and rejection inputs. `cargo test --test leanvm_full_zk_codec` reproduces the selected binary profile byte for byte, checks both manifests, and exercises both engine-typed codecs in every build.
+
+Generate the selected Poseidon1 SPARK application fixture with `cargo run --features poseidon1 --bin leanvm-full-zk-spark-fixture -- <output-directory> <spartan-whir-commit> <leanvm-upstream-base> <leanvm-branch-head> <sol-spartan-whir-commit>`. The generator writes the padded guest input, verifier constants, statement, layout, transcript trace, and mutation patches; its manifest records the supplied revisions and implementation-source hashes.
+
 `PoseidonEngine<Ext>` is the client-side SNARK instantiation. It uses the
 KoalaBear Poseidon2 permutation shape used by Plonky3 WHIR. Circuits are written
 over KoalaBear.

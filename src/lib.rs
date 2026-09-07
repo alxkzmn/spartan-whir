@@ -9,6 +9,8 @@ pub mod error;
 pub mod fixtures;
 pub mod hashers;
 mod keccak_challenger;
+pub mod leanvm;
+pub mod leanvm_full_zk;
 pub mod pcs;
 pub mod pcs_config;
 pub mod plonky3_whir_pcs;
@@ -63,6 +65,25 @@ pub use hashers::{
     KECCAK_DIGEST_ELEMS,
 };
 pub use keccak_challenger::{CanonicalKeccakChallenger32, KeccakByteChallenger};
+pub use leanvm::{
+    control_statement_digest, control_statement_digest_preimage, control_verifying_key_id,
+    decode_control_guest_input, encode_control_guest_input, verify_control_with_trace,
+    LEANVM_CONTROL_PROFILE_ID, LEANVM_CONTROL_PROFILE_NUMBER, LEANVM_CONTROL_STATEMENT_DIGEST_ID,
+    LEANVM_CONTROL_STATEMENT_SCHEMA_ID, LEANVM_GUEST_INPUT_VERSION, MAX_CONTROL_GUEST_WORDS,
+};
+pub use leanvm_full_zk::{
+    decode_full_zk_direct_guest_words, decode_full_zk_spark_guest_words,
+    encode_full_zk_direct_guest_words, encode_full_zk_spark_guest_words,
+    full_zk_direct_guest_verifier_config, full_zk_spark_guest_verifier_config,
+    full_zk_statement_digest, full_zk_statement_digest_id, full_zk_statement_digest_preimage,
+    pad_full_zk_guest_words, FullZkGuestCanonicalShape, FullZkGuestCodecError,
+    FullZkGuestCommitment, FullZkGuestFixedCommitments, FullZkGuestHashProfile,
+    FullZkGuestMaskCodeShape, FullZkGuestMaskGroupShape, FullZkGuestMatrix, FullZkGuestMatrixEntry,
+    FullZkGuestRoundConfig, FullZkGuestSourceCode, FullZkGuestVerifierConfig,
+    FullZkPlainWhirGuestVerifierConfig, FullZkSparkGuestVerifierConfig, FULL_ZK_GUEST_MAGIC,
+    FULL_ZK_GUEST_VERSION, FULL_ZK_STATEMENT_DOMAIN, FULL_ZK_STATEMENT_SCHEMA_ID,
+    MAX_FULL_ZK_GUEST_WORDS,
+};
 pub(crate) use pcs::SealedNoZkPcs;
 pub use pcs::{CommittedPolynomialView, MlePcs, NoZkPcs, ProtocolPcs, SparkReadPcs};
 pub use pcs_config::{
@@ -92,7 +113,9 @@ pub use poseidon::{
     LinkedWitnessFreeCircuitFn, LinkedWitnessGeneratorFn, LinkedWitnessLoadCircuitFn,
     PoseidonWitnessGenerator, PoseidonWitnessGeneratorError, LINKED_WITNESS_GENERATOR_OK,
 };
-pub use poseidon_trace::{PoseidonTranscriptEvent, TraceablePoseidonChallenger};
+pub use poseidon_trace::{
+    PoseidonTranscriptEvent, PoseidonTranscriptTrace, TraceablePoseidonChallenger,
+};
 pub use profiling::{
     trace_proof_size_report, NoopObserver, ProofSizeCounters, ProofSizeReport, ProofSizeSection,
     ProtocolObserver, ProtocolStage, SectionSize,

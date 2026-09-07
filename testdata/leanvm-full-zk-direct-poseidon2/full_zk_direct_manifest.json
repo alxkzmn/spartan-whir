@@ -1,0 +1,134 @@
+{
+  "artifacts": {
+    "guest_constants": {
+      "bytes": 6124,
+      "file": "full_zk_direct_guest_constants.json",
+      "sha256": "f332977e2221ec6db0b24bd29f137820e0a91db9abc0218dea40b6694a7fe3a5"
+    },
+    "guest_input": {
+      "bytes": 53460,
+      "file": "full_zk_direct_guest_input.words",
+      "sha256": "f8203559070d83a4ec34be0e7d4b5fbaf86c3d63fb44dc340ea13db959a000ce"
+    },
+    "mutations": [
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_public_input.words",
+        "sha256": "1808a145e936b9943ea21b0992e91daad8efe82df2ff3579290188223c98808d"
+      },
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_witness_commitment.words",
+        "sha256": "ae1dade95ce45661261bf3fb341263fcc5a4f9e45f6b5876f95d1881a75a22f9"
+      },
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_application_mask_commitment.words",
+        "sha256": "2abae7651f658021d6de88ac42e806f588a1850082d0c75dbbcef469b6e1b4af"
+      },
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_outer_sumcheck.words",
+        "sha256": "0d086420d866a2bb767e4c91633536363ea4954958740dda54a6f35e773ce283"
+      },
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_inner_sumcheck.words",
+        "sha256": "d7bc178965617f9611be9e1a7b8cf5f008f01392157f55a168b1699747426502"
+      },
+      {
+        "bytes": 53460,
+        "file": "mutations/changed_hiding_whir_base_claim.words",
+        "sha256": "0af58d78b5c06c6f956ce6cdcb5ea495a2eed82f4e00c12658f4e2772dd80754"
+      }
+    ],
+    "statement": {
+      "bytes": 285,
+      "file": "full_zk_direct_statement.json",
+      "sha256": "636809db864edc9d039dc1a70e15bcfe8a3c9a3599a723200eb56612dc1dbb8d"
+    },
+    "transcript_trace": {
+      "bytes": 33497,
+      "file": "full_zk_direct_transcript_trace.json",
+      "sha256": "fa2c787aceff6e2cde57051dd142b295825f377947d40ece735d8a8a93712a8f"
+    },
+    "verifying_key": {
+      "bytes": 3909,
+      "file": "full_zk_direct_verifying_key.json",
+      "sha256": "c1c311571933f9406cdbd9766de61a6eeddf46f17ad4bddb1961a0726ff96d22"
+    }
+  },
+  "extension_degree": 5,
+  "fixture": {
+    "a_terms_per_constraint": 2,
+    "b_terms_per_constraint": 2,
+    "num_constraints": 4,
+    "num_io": 1,
+    "seed": 131549106474,
+    "target_log2_witness_poly": 3
+  },
+  "fixture_seed": 131549106474,
+  "guest_words": 13365,
+  "hash_profile": "poseidon2-width16-width24",
+  "implementation_source_ids": {
+    "Cargo.lock": "ad3ae13738d09443b16298ff218fafb941a701415f0758569e6b7679cfe6d898",
+    "src/bin/leanvm-full-zk-fixture.rs": "60d381218feb72eb44120a959c41d4647f83aad583cd54b4fd294f1b321cad1d",
+    "src/domain_separator.rs": "6d38e1ef5df72f65fe1841ac89416c2e4cb83d8bd32d418a44575c25b2d3420a",
+    "src/engine.rs": "50d412e6ce6aa3e141d0249a4609ff05e65a8be50da50ee1a3d7c2347e060365",
+    "src/leanvm_full_zk.rs": "21aef4e8d1144ba5766f71c0b117b0a2e2bc8013a626de65ee11280637424895",
+    "src/plonky3_whir_pcs.rs": "524c5ecc814cfd282c4b55d936ab30922a46e2bd17dee28e852f91ae4d0c3eda",
+    "src/poseidon.rs": "f9401e7ae73ed9ffe2adde369032f4b935db529471ef5805b91de983d0ab14f0",
+    "src/poseidon_trace.rs": "a350e8dd73a7d67f4865ded48d1f004b996b27c90be2e0864b8f895ed45a6a35",
+    "src/protocol.rs": "bd22fb5ce8f2c1d909a01b19304ee169ce6c3d5cfc426c9cd10b387134b60c9e"
+  },
+  "matrix_closing": "direct_sparse",
+  "proof_seed": 1031080120782,
+  "proof_shape": {
+    "base_case_blinded_masks": 13,
+    "base_case_blinded_message": 4,
+    "base_case_blinded_randomness": 18,
+    "base_case_mask_openings": 3,
+    "inner_round_widths": [
+      2,
+      2,
+      2,
+      2
+    ],
+    "inner_rounds": 4,
+    "outer_mask_evals": 2,
+    "outer_round_widths": [
+      7,
+      7
+    ],
+    "outer_rounds": 2,
+    "relation_ood_answers": [],
+    "relation_rounds": 0,
+    "relation_sumchecks": 1
+  },
+  "schema": "leanvm-full-zk-direct-fixture-v1",
+  "setup": {
+    "ell_zk": 3,
+    "mask_log_inv_rate": 3,
+    "matrix_closing": "DirectSparse",
+    "security": {
+      "merkle_security_bits": 80,
+      "security_level_bits": 80,
+      "soundness_assumption": "CapacityBound"
+    },
+    "spark_whir_params": null,
+    "whir_params": {
+      "folding_factor": 1,
+      "folding_schedule": null,
+      "pow_bits": 0,
+      "round_log_inv_rates": [],
+      "rs_domain_initial_reduction_factor": 1,
+      "starting_log_inv_rate": 8
+    }
+  },
+  "source_revisions": {
+    "plonky3": "f64ae15da3807388b1a4e0a89a4fde8fdcdff515",
+    "plonky3_source": "spartan-whir/Cargo.lock",
+    "spartan_whir": "f82eb92e44dc8f4de796ddbad07b1ad3added506"
+  },
+  "transcript_events": 353
+}
