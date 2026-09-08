@@ -2,6 +2,54 @@
   {
     "operation": "observe",
     "values": [
+      33
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
       115
     ]
   },
@@ -194,7 +242,7 @@
   {
     "operation": "observe",
     "values": [
-      48
+      49
     ]
   },
   {
@@ -345,6 +393,198 @@
     "operation": "observe",
     "values": [
       0
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      137
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      184
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      218
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      143
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      115
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      244
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      10
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      97
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      244
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      100
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      225
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      234
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      97
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      177
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      191
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      27
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      58
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      180
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      89
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      81
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      69
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      212
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      214
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      238
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      42
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      164
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      20
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      67
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      224
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      55
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      218
+    ]
+  },
+  {
+    "operation": "observe",
+    "values": [
+      11
     ]
   },
   {
@@ -881,91 +1121,91 @@
   {
     "operation": "sample",
     "values": [
-      1450930039
+      520302347
     ]
   },
   {
     "operation": "sample",
     "values": [
-      238110557
+      226449547
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1370973639
+      712965027
     ]
   },
   {
     "operation": "sample",
     "values": [
-      2049662267
+      620584160
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1276583901
+      440808978
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1676521280
+      828805285
     ]
   },
   {
     "operation": "sample",
     "values": [
-      785227072
+      1461081379
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1341512452
+      619435808
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1061810343
+      1387507997
     ]
   },
   {
     "operation": "sample",
     "values": [
-      424793084
+      1011742971
     ]
   },
   {
     "operation": "sample",
     "values": [
-      2003161386
+      1665556137
     ]
   },
   {
     "operation": "sample",
     "values": [
-      472557291
+      1273747101
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1236884768
+      569839809
     ]
   },
   {
     "operation": "sample",
     "values": [
-      2011015744
+      1815406619
     ]
   },
   {
     "operation": "sample",
     "values": [
-      554097643
+      1055003578
     ]
   },
   {
@@ -981,311 +1221,311 @@
   {
     "operation": "observe",
     "values": [
-      1780917680,
-      1032175536,
-      978780766,
-      593997250,
-      1484128535
+      846975647,
+      62812976,
+      750060412,
+      192486163,
+      442906642
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1803956137,
-      950527676,
-      1727397096,
-      1732006250,
-      1463306715
+      839181815,
+      694340504,
+      336127633,
+      1215785207,
+      456819319
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1585401155,
-      1187417241,
-      903199439,
-      725016681,
-      1051463306
+      118842995,
+      40403909,
+      2098150488,
+      50130884,
+      1551352982
     ]
   },
   {
     "operation": "observe",
     "values": [
-      891436371,
-      1598410861,
-      1468910849,
-      671999921,
-      1725878456
+      341037977,
+      47900227,
+      195342102,
+      1112887641,
+      1721039027
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1082499978,
-      1803023993,
-      1912268537,
-      3726230,
-      925592313
+      1752210975,
+      949275388,
+      1580468751,
+      705715893,
+      113759628
     ]
   },
   {
     "operation": "observe",
     "values": [
-      703060611,
-      1198990952,
-      799958666,
-      468236162,
-      1039997936
+      1527816928,
+      1045283274,
+      66879573,
+      1715327988,
+      1455754957
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1637096686
+      692343516
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1550257838
+      1424820048
     ]
   },
   {
     "operation": "sample",
     "values": [
-      602761414
+      1822588165
     ]
   },
   {
     "operation": "sample",
     "values": [
-      715961068
+      728898119
     ]
   },
   {
     "operation": "sample",
     "values": [
-      975009610
+      1931315202
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1201025633,
-      1511978954,
-      861090196,
-      1619587890,
-      2002124611
+      743658582,
+      1059576012,
+      132877998,
+      1456929850,
+      1731684076
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1616502085,
-      694169670,
-      265457408,
-      1371586001,
-      583775785
+      1434411439,
+      1377283763,
+      1437647367,
+      1464813697,
+      434323204
     ]
   },
   {
     "operation": "observe",
     "values": [
-      249599305,
-      1443778717,
-      766366732,
-      900309936,
-      1456342747
+      1457242068,
+      1401122850,
+      406133645,
+      565837786,
+      52491973
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1539264969,
-      746714552,
-      731660830,
-      148450143,
-      1828273127
+      1722296420,
+      990870593,
+      1741539569,
+      221294947,
+      1653323385
     ]
   },
   {
     "operation": "observe",
     "values": [
-      813778489,
-      1055779726,
-      2128104042,
-      1513482771,
-      1826495103
+      411889821,
+      1473208778,
+      1881154389,
+      1349654944,
+      1430970416
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1009926863,
-      701123215,
-      36851621,
-      788491843,
-      1435685172
+      289276480,
+      1443625292,
+      1022689861,
+      684697080,
+      1593061710
     ]
   },
   {
     "operation": "observe",
     "values": [
-      350904464,
-      2129103042,
-      577873899,
-      708812360,
-      1457967888
+      162178786,
+      593923862,
+      1575149908,
+      353633092,
+      116797760
     ]
   },
   {
     "operation": "sample",
     "values": [
-      438634643
+      1914634858
     ]
   },
   {
     "operation": "sample",
     "values": [
-      327598918
+      34530479
     ]
   },
   {
     "operation": "sample",
     "values": [
-      95158037
+      1964544951
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1336457669
+      831699814
     ]
   },
   {
     "operation": "sample",
     "values": [
-      520422628
+      901991462
     ]
   },
   {
     "operation": "observe",
     "values": [
-      321771271,
-      80512912,
-      688555811,
-      2061809876,
-      1235640341
+      1537374164,
+      1265183792,
+      2124928675,
+      927645680,
+      2109323374
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1052846446,
-      282403364,
-      385905585,
-      484539962,
-      121804147
+      1941272866,
+      2118066701,
+      381290477,
+      1135313882,
+      340053465
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1127857942,
-      1465794157,
-      1441532475,
-      1927274349,
-      1553086627
+      717772415,
+      1124192962,
+      1053899488,
+      346461563,
+      884698626
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1485504242,
-      156799498,
-      1812851319,
-      1606535870,
-      1781038897
+      203740369,
+      1253403560,
+      453282072,
+      1421580101,
+      24691586
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1021810948,
-      1498447991,
-      552729597,
-      1231981334,
-      1986625531
+      1437643734,
+      814553849,
+      1067863062,
+      1466832498,
+      226733570
     ]
   },
   {
     "operation": "sample",
     "values": [
-      286173457
+      623861200
     ]
   },
   {
     "operation": "sample",
     "values": [
-      198184349
+      162862609
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1634176884
+      515963115
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1349207856
+      819520265
     ]
   },
   {
     "operation": "sample",
     "values": [
-      711138806
+      402598318
     ]
   },
   {
     "operation": "sample",
     "values": [
-      908289796
+      1747349560
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1772961523
+      1078446812
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1765033559
+      1691301438
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1573301193
+      594413345
     ]
   },
   {
     "operation": "sample",
     "values": [
-      300118907
+      897148481
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1685246347,
-      433138070,
-      478057939,
-      101923814,
-      1085539412
+      1075816049,
+      188077448,
+      1797101072,
+      1740387980,
+      823449150
     ]
   },
   {
@@ -1315,241 +1555,241 @@
   {
     "operation": "sample",
     "values": [
-      1174254115
+      1259947125
     ]
   },
   {
     "operation": "sample",
     "values": [
-      490057787
+      1980403012
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1955458330
+      980174630
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1157019424
+      1125700253
     ]
   },
   {
     "operation": "sample",
     "values": [
-      216661474
+      885307432
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1896629333,
-      278580200,
-      1854151069,
-      1326228741,
-      1867568739
+      1844873988,
+      962237494,
+      1812799106,
+      400997348,
+      654485657
     ]
   },
   {
     "operation": "observe",
     "values": [
-      2059475387,
-      1956468632,
-      616835563,
-      673351561,
-      1235611064
+      223027141,
+      1650013938,
+      1654483130,
+      1081544848,
+      961913550
     ]
   },
   {
     "operation": "sample",
     "values": [
-      988278076
+      2069262647
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1058668269
+      1459243567
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1031741074
+      422458498
     ]
   },
   {
     "operation": "sample",
     "values": [
-      2101189970
+      610324155
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1498759124
+      1635796278
     ]
   },
   {
     "operation": "observe",
     "values": [
-      999908574,
-      715366753,
-      804333564,
-      1788578314,
-      637288117
+      2059544169,
+      1314339608,
+      1108391857,
+      686823246,
+      1934145693
     ]
   },
   {
     "operation": "observe",
     "values": [
-      2125091451,
-      405751163,
-      379606284,
-      1736058136,
-      416344991
+      359656331,
+      1748463465,
+      872925466,
+      2125051219,
+      469255612
     ]
   },
   {
     "operation": "sample",
     "values": [
-      914187902
+      428414038
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1841863609
+      118971193
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1654256468
+      1229832139
     ]
   },
   {
     "operation": "sample",
     "values": [
-      823665390
+      1430464590
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1803967979
+      1251747626
     ]
   },
   {
     "operation": "observe",
     "values": [
-      358109445,
-      1131726331,
-      907202793,
-      1663641564,
-      180643958
+      1083006131,
+      440511072,
+      536080888,
+      1801588310,
+      782438789
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1368969485,
-      151540019,
-      66731277,
-      2072894077,
-      1894145325
+      796480923,
+      529682942,
+      344705452,
+      1307203374,
+      1125622172
     ]
   },
   {
     "operation": "sample",
     "values": [
-      95783398
+      380541694
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1118372180
+      1086572266
     ]
   },
   {
     "operation": "sample",
     "values": [
-      673941472
+      1386828321
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1783525719
+      2037393488
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1798058154
+      1661101017
     ]
   },
   {
     "operation": "observe",
     "values": [
-      736198334,
-      316437919,
-      87934495,
-      272315241,
-      1205003706
+      748956451,
+      791273725,
+      1105755332,
+      523519525,
+      573616811
     ]
   },
   {
     "operation": "observe",
     "values": [
-      1986763121,
-      351414135,
-      113209294,
-      1322757247,
-      633946355
+      1307705284,
+      1346646687,
+      352216010,
+      737892366,
+      2097482209
     ]
   },
   {
     "operation": "sample",
     "values": [
-      395373163
+      1399683095
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1443717995
+      2091099062
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1531147922
+      1746394554
     ]
   },
   {
     "operation": "sample",
     "values": [
-      350316395
+      14586874
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1382686915
+      711425877
     ]
   },
   {
     "operation": "observe",
     "values": [
-      853974185,
-      139850979,
-      642893165,
-      2023555380,
-      51916770
+      1563608308,
+      1014881200,
+      2110504830,
+      1654442857,
+      1133843555
     ]
   },
   {
@@ -1579,81 +1819,81 @@
   {
     "operation": "sample",
     "values": [
-      1035912945
+      350587664
     ]
   },
   {
     "operation": "sample",
     "values": [
-      310115100
+      1914105250
     ]
   },
   {
     "operation": "sample",
     "values": [
-      972401773
+      1853913682
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1570583063
+      1133557486
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1402716102
+      1866452548
     ]
   },
   {
     "operation": "observe",
     "values": [
-      725847381,
-      566681841,
-      1429599478,
-      1560800797,
-      651367317
+      667065381,
+      430863131,
+      491825467,
+      1512265988,
+      1153143725
     ]
   },
   {
     "operation": "observe",
     "values": [
-      849203289,
-      332830954,
-      834437517,
-      428462866,
-      1116269610
+      755699221,
+      1983103450,
+      1588648679,
+      1727288641,
+      1474957142
     ]
   },
   {
     "operation": "sample",
     "values": [
-      167271939
+      966231590
     ]
   },
   {
     "operation": "sample",
     "values": [
-      384496164
+      1528761727
     ]
   },
   {
     "operation": "sample",
     "values": [
-      709820124
+      1918026488
     ]
   },
   {
     "operation": "sample",
     "values": [
-      230129829
+      289139527
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1549762739
+      230038193
     ]
   },
   {
@@ -1715,110 +1955,110 @@
   {
     "operation": "observe",
     "values": [
-      432391358,
-      157781307,
-      1812279661,
-      1072938660,
-      452680225
+      64322241,
+      238691675,
+      1491381423,
+      69970294,
+      1378799629
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1040915257
+      1049185934
     ]
   },
   {
     "operation": "sample",
     "values": [
-      1211316410
+      351869775
     ]
   },
   {
     "operation": "sample",
     "values": [
-      140676455
+      1931479818
     ]
   },
   {
     "operation": "sample",
     "values": [
-      599376595
+      1399310475
     ]
   },
   {
     "operation": "sample",
     "values": [
-      646328836
+      1121396324
     ]
   },
   {
     "operation": "observe_commitment",
     "roots": 1,
     "values": [
-      1413093154,
-      38899986,
-      1480224945,
-      1163161393,
-      96076543,
-      1915423134,
-      1250273330,
-      1784896747
+      1674631546,
+      226528883,
+      1989671253,
+      515362536,
+      1773269282,
+      263520717,
+      2047341765,
+      1976889323
     ]
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 877
+    "value": 368
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 472
+    "value": 66
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 265
+    "value": 913
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 69
+    "value": 401
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 470
+    "value": 462
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 998
+    "value": 956
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 929
+    "value": 904
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 334
+    "value": 202
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 988
+    "value": 318
   },
   {
     "operation": "sample_uniform_bits",
@@ -1830,433 +2070,61 @@
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 393
+    "value": 516
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 585
+    "value": 172
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 409
+    "value": 172
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 57
+    "value": 189
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 592
+    "value": 818
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 494
+    "value": 471
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 353
+    "value": 39
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 10,
     "resample": true,
-    "value": 143
+    "value": 329
   },
   {
     "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 453
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 88
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 352
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 498
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 13
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 425
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 191
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 324
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 494
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 464
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 15
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 309
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 432
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 449
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 138
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 303
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 251
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 349
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 62
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 166
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 144
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 246
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 316
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 234
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 334
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 393
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 184
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 32
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 40
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 112
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 55
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 293
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 87
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 461
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 271
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 85
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 75
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 481
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 194
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 311
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 54
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 435
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 407
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 114
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 438
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 275
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 174
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 309
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 237
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 194
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 318
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 231
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 246
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 256
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 8
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 63
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 410
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 60
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 150
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 501
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 102
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
-    "resample": true,
-    "value": 447
-  },
-  {
-    "operation": "sample_uniform_bits",
-    "bits": 9,
+    "bits": 10,
     "resample": true,
-    "value": 375
+    "value": 183
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 422
+    "value": 65
   },
   {
     "operation": "sample_uniform_bits",
@@ -2268,49 +2136,187 @@
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 200
+    "value": 187
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 188
+    "value": 226
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 212
+    "value": 86
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 57
+    "value": 330
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 311
+    "value": 441
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 488
+    "value": 91
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 159
+    "value": 263
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 299
+    "value": 100
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 480
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 6
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 145
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 254
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 359
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 436
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 419
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 40
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 314
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 416
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 403
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 440
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 194
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 491
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 372
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 51
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 251
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 112
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 388
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 355
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 139
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 123
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 59
   },
   {
     "operation": "sample_uniform_bits",
@@ -2322,67 +2328,139 @@
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 375
+    "value": 372
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 295
+    "value": 195
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 186
+    "value": 364
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 131
+    "value": 371
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 249
+    "value": 5
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 446
+    "value": 185
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 315
+    "value": 386
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 210
+    "value": 215
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 87
+    "value": 158
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 500
+    "value": 203
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 490
+    "value": 166
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 498
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 71
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 135
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 384
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 57
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 244
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 205
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 69
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 467
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 200
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 250
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 175
   },
   {
     "operation": "sample_uniform_bits",
@@ -2394,7 +2472,55 @@
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 34
+    "value": 473
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 107
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 401
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 345
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 126
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 55
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 370
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 366
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 253
   },
   {
     "operation": "sample_uniform_bits",
@@ -2406,24 +2532,132 @@
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 406
+    "value": 45
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 96
+    "value": 252
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 473
+    "value": 101
   },
   {
     "operation": "sample_uniform_bits",
     "bits": 9,
     "resample": true,
-    "value": 288
+    "value": 157
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 318
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 479
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 291
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 33
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 180
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 414
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 11
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 47
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 196
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 60
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 355
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 263
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 219
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 26
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 470
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 39
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 212
+  },
+  {
+    "operation": "sample_uniform_bits",
+    "bits": 9,
+    "resample": true,
+    "value": 185
   }
 ]

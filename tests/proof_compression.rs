@@ -10,7 +10,7 @@ use spartan_whir::{
 };
 
 macro_rules! profile_test {
-    ($name:ident, $setup:path, $challenger:path, $protocol:ident, $engine:ident) => {
+    ($name:ident, $setup:path, $challenger:path, $protocol:ident, $engine:ident, $batching:expr) => {
         #[test]
         fn $name() {
             let fixture = generate_satisfiable_fixture(&SyntheticR1csConfig {
@@ -35,8 +35,10 @@ macro_rules! profile_test {
                 ell_zk: 3,
                 mask_log_inv_rate: 3,
             };
-            use $setup as setup;
-            let (pk, vk) = setup::<QuinticExtension>(fixture.shape, config).unwrap();
+            let (pk, vk) = spartan_whir::poseidon::setup_poseidon_zk_with_fresh_mask_batching::<
+                spartan_whir::$engine<QuinticExtension>,
+            >(fixture.shape, config, $batching)
+            .unwrap();
             for seed in [181, 293] {
                 let mut rng = StdRng::seed_from_u64(seed);
                 let mut prover = $challenger().with_trace();
@@ -166,12 +168,23 @@ profile_test!(
     spartan_whir::setup_poseidon1_zk,
     spartan_whir::poseidon1_challenger,
     Poseidon1ZkSpartanProtocol,
-    Poseidon1Engine
+    Poseidon1Engine,
+    spartan_whir::pcs_config::FreshMaskBatching::Separate
 );
 profile_test!(
     poseidon2_compression_preserves_full_transcript,
     spartan_whir::setup_poseidon_zk,
     spartan_whir::poseidon_zk_challenger,
     PoseidonZkSpartanProtocol,
-    PoseidonEngine
+    PoseidonEngine,
+    spartan_whir::pcs_config::FreshMaskBatching::Separate
+);
+
+profile_test!(
+    poseidon1_grouped_compression_preserves_full_transcript,
+    spartan_whir::setup_poseidon1_zk,
+    spartan_whir::poseidon1_challenger,
+    Poseidon1ZkSpartanProtocol,
+    Poseidon1Engine,
+    spartan_whir::pcs_config::FreshMaskBatching::SameHeight
 );

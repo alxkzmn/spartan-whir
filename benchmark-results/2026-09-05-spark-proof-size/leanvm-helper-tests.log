@@ -1,9 +1,0 @@
-   Compiling spartan_whir_guest v0.1.0
-    Finished `release` profile [optimized] target(s) in 5.55s
-     Running tests/guest_optimizations.rs (target/release/deps/guest_optimizations-9f6a86e39c4ad4bd)
-
-running 2 tests
-test cached_merkle_bits_and_shared_traversal_match_binary_trees ... ok
-test query_sampling_optimizations_preserve_positions_and_transcript ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.86s

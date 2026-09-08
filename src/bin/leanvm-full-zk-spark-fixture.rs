@@ -2,7 +2,7 @@
 mod sha256_fixture;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     env,
     error::Error,
     fs::{self, File},
@@ -32,16 +32,15 @@ use spartan_whir::{
 
 #[cfg(feature = "poseidon1")]
 use spartan_whir::{
-    poseidon1_challenger as poseidon_zk_challenger, setup_poseidon1_zk as setup_poseidon_zk,
-    Poseidon1QuinticEngine as GuestEngine, Poseidon1ZkCommitment as ZkCommitment,
-    Poseidon1ZkMatrixClosingProof as ZkMatrixClosingProof,
+    poseidon1_challenger as poseidon_zk_challenger, Poseidon1QuinticEngine as GuestEngine,
+    Poseidon1ZkCommitment as ZkCommitment, Poseidon1ZkMatrixClosingProof as ZkMatrixClosingProof,
     Poseidon1ZkSpartanProof as ZkSpartanProof,
     Poseidon1ZkSpartanProtocol as PoseidonZkSpartanProtocol,
     Poseidon1ZkVerifyingKey as PoseidonZkVerifyingKey,
 };
 #[cfg(not(feature = "poseidon1"))]
 use spartan_whir::{
-    poseidon_zk_challenger, setup_poseidon_zk, PoseidonQuinticEngine as GuestEngine,
+    poseidon_zk_challenger, PoseidonQuinticEngine as GuestEngine,
     PoseidonZkCommitment as ZkCommitment, PoseidonZkSpartanProtocol, PoseidonZkVerifyingKey,
     ZkMatrixClosingProof, ZkSpartanProof,
 };
@@ -70,16 +69,6 @@ struct GuestLayout {
     entries: BTreeMap<String, WordRange>,
 }
 
-#[derive(Serialize)]
-struct SourceRevisions {
-    spartan_whir: String,
-    leanvm_upstream_base: String,
-    leanvm_branch_head: String,
-    sol_spartan_whir: String,
-    plonky3: String,
-    plonky3_source: &'static str,
-}
-
 fn main() {
     if let Err(error) = run() {
         eprintln!("error: {error}");
@@ -97,14 +86,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let mut args = env::args_os().skip(1);
     let output = args.next().map(PathBuf::from).unwrap_or_else(|| usage());
-    let source_revisions = SourceRevisions {
-        spartan_whir: required_arg(&mut args, "spartan-whir commit")?,
-        leanvm_upstream_base: required_arg(&mut args, "LeanVM upstream base commit")?,
-        leanvm_branch_head: required_arg(&mut args, "LeanVM branch HEAD")?,
-        sol_spartan_whir: required_arg(&mut args, "sol-spartan-whir commit")?,
-        plonky3: locked_plonky3_revision()?,
-        plonky3_source: "spartan-whir/Cargo.lock",
-    };
     if args.next().is_some() {
         usage();
     }
@@ -119,8 +100,34 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let config = production_spark_config(&fixture.shape)?;
     let setup_started = Instant::now();
-    let (pk, vk) = setup_poseidon_zk::<QuinticExtension>(fixture.shape.clone(), config.clone())
-        .map_err(protocol_error)?;
+    let batching = match env::var("SPARK_FRESH_MASK_BATCHING")
+        .as_deref()
+        .unwrap_or("separate")
+    {
+        "separate" => spartan_whir::pcs_config::FreshMaskBatching::Separate,
+        "same_height" => spartan_whir::pcs_config::FreshMaskBatching::SameHeight,
+        _ => {
+            return Err(io::Error::other(
+                "SPARK_FRESH_MASK_BATCHING must be separate or same_height",
+            )
+            .into())
+        }
+    };
+    let packing = match env::var("SPARK_MASK_PACKING").as_deref().unwrap_or("off") {
+        "off" => spartan_whir::pcs_config::MaskPacking::Off,
+        "application" => spartan_whir::pcs_config::MaskPacking::Application,
+        "all" => spartan_whir::pcs_config::MaskPacking::All,
+        "application_free_basis" => spartan_whir::pcs_config::MaskPacking::ApplicationFreeBasis,
+        "all_free_basis" => spartan_whir::pcs_config::MaskPacking::AllFreeBasis,
+        _ => return Err(io::Error::other("unknown SPARK_MASK_PACKING").into()),
+    };
+    let (pk, vk) = spartan_whir::poseidon::setup_poseidon_zk_with_mask_packing::<GuestEngine>(
+        fixture.shape.clone(),
+        config.clone(),
+        batching,
+        packing,
+    )
+    .map_err(protocol_error)?;
     let setup_elapsed = setup_started.elapsed();
 
     let witness_started = Instant::now();
@@ -180,8 +187,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         "full_zk_spark_guest_constants.json",
         &verifier_config,
     )?;
-    let config_bytes = serde_json::to_vec(&verifier_config)?;
-    let guest_config_id = format!("{:x}", Sha256::digest(&config_bytes));
 
     let trace = verifier_challenger.transcript_trace();
     let trace_artifact = write_json(&output, "full_zk_spark_transcript_trace.json", &trace)?;
@@ -210,7 +215,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         }),
     )?;
 
-    let bincode_proof_bytes = bincode::serialize(&proof)?.len();
     let manifest = json!({
         "schema": "leanvm-full-zk-spark-fixture-v1",
         "application": "sha256-2048-byte-optimized-v1",
@@ -222,17 +226,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         "message_bytes": MESSAGE_BYTES,
         "sample_index": SAMPLE_INDEX,
         "proof_seed": PROOF_SEED,
-        "source_revisions": source_revisions,
-        "implementation_source_ids": {
-            "Cargo.lock": source_sha256(include_bytes!("../../Cargo.lock")),
-            "src/bin/leanvm-full-zk-spark-fixture.rs": source_sha256(include_bytes!("leanvm-full-zk-spark-fixture.rs")),
-            "src/domain_separator.rs": source_sha256(include_bytes!("../domain_separator.rs")),
-            "src/engine.rs": source_sha256(include_bytes!("../engine.rs")),
-            "src/leanvm_full_zk.rs": source_sha256(include_bytes!("../leanvm_full_zk.rs")),
-            "src/plonky3_whir_pcs.rs": source_sha256(include_bytes!("../plonky3_whir_pcs.rs")),
-            "src/poseidon.rs": source_sha256(include_bytes!("../poseidon.rs")),
-            "src/protocol.rs": source_sha256(include_bytes!("../protocol.rs")),
-        },
         "setup": config,
         "canonical_shape": {
             "constraints": verifier_config.common.canonical_shape.constraints,
@@ -240,13 +233,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             "public_inputs": verifier_config.common.canonical_shape.public_inputs,
         },
         "spark_table_metadata": verifier_config.table_metadata,
-        "guest_config_id": guest_config_id,
-        "verifying_key_id": guest_config_id,
         "canonical_words": layout.total_words,
         "guest_words": words.len(),
         "guest_word_limit": MAX_FULL_ZK_GUEST_WORDS,
-        "guest_bytes": words.len() * size_of::<u32>(),
-        "bincode_proof_bytes": bincode_proof_bytes,
         "transcript_events": trace.len(),
         "proof_shape": proof_shape(&proof),
         "artifacts": {
@@ -360,7 +349,7 @@ fn proof_shape(proof: &ZkSpartanProof<QuinticExtension>) -> serde_json::Value {
         "base_case_blinded_message": proof.pcs_proof.base_case.blinded_message.len(),
         "base_case_blinded_randomness": proof.pcs_proof.base_case.blinded_randomness.len(),
         "base_case_blinded_masks": proof.pcs_proof.base_case.blinded_masks.len(),
-        "base_case_mask_openings": proof.pcs_proof.base_case.mask_openings.len(),
+        "base_case_mask_openings": proof.pcs_proof.base_case.carried_mask_openings.len(),
     })
 }
 
@@ -503,7 +492,7 @@ fn write_mutations(
         "changed_mask_opening",
         "hiding-WHIR mask opening",
         |_, proof| {
-            proof.pcs_proof.base_case.mask_openings[0].carried.rows[0][0] += QuinticExtension::ONE;
+            proof.pcs_proof.base_case.carried_mask_openings[0].rows[0][0] += QuinticExtension::ONE;
         },
     )?);
     mutations.push(write_verified_mutation(
@@ -525,7 +514,7 @@ fn write_mutations(
 
     let canonical = encode_full_zk_spark_guest_words(instance, proof)?;
     for (name, field, mutate) in [
-        ("wrong_version", "encoding version", (4usize, 2u32)),
+        ("wrong_version", "encoding version", (4usize, 3u32)),
         ("wrong_hash_profile", "hash profile", (5usize, 1u32)),
         ("wrong_matrix_closing", "matrix-closing tag", (7usize, 0u32)),
     ] {
@@ -982,10 +971,21 @@ impl<'a> LayoutReader<'a> {
         self.base(&format!("{path}.pow_witness"))?;
         self.query_opening(&format!("{path}.source_openings"))?;
         self.shared_extension_opening(&format!("{path}.fresh_main_openings"))?;
-        let openings = self.length(&format!("{path}.mask_openings_count"))?;
-        for opening in 0..openings {
-            self.shared_extension_opening(&format!("{path}.mask_openings[{opening}].carried"))?;
-            self.shared_extension_opening(&format!("{path}.mask_openings[{opening}].fresh"))?;
+        if self.words[4] == 1 {
+            let openings = self.length(&format!("{path}.mask_openings_count"))?;
+            for opening in 0..openings {
+                self.shared_extension_opening(&format!("{path}.mask_openings[{opening}].carried"))?;
+                self.shared_extension_opening(&format!("{path}.mask_openings[{opening}].fresh"))?;
+            }
+        } else {
+            let carried = self.length(&format!("{path}.carried_mask_openings_count"))?;
+            for opening in 0..carried {
+                self.shared_extension_opening(&format!("{path}.carried_mask_openings[{opening}]"))?;
+            }
+            let fresh = self.length(&format!("{path}.fresh_mask_openings_count"))?;
+            for opening in 0..fresh {
+                self.shared_extension_opening(&format!("{path}.fresh_mask_openings[{opening}]"))?;
+            }
         }
         Ok(())
     }
@@ -1028,54 +1028,8 @@ fn artifact(output: &Path, path: &Path) -> Result<Artifact, Box<dyn Error>> {
     })
 }
 
-fn locked_plonky3_revision() -> Result<String, Box<dyn Error>> {
-    let mut revisions = BTreeSet::new();
-    for line in include_str!("../../Cargo.lock").lines() {
-        let Some(source) = line
-            .strip_prefix("source = \"")
-            .and_then(|line| line.strip_suffix('"'))
-        else {
-            continue;
-        };
-        if !source.contains("/Plonky3.git?rev=") {
-            continue;
-        }
-        let revision = source
-            .rsplit_once('#')
-            .map(|(_, revision)| revision)
-            .ok_or_else(|| {
-                io::Error::other("Plonky3 Cargo.lock source has no resolved revision")
-            })?;
-        revisions.insert(revision.to_owned());
-    }
-    if revisions.len() != 1 {
-        return Err(io::Error::other(format!(
-            "expected one resolved Plonky3 revision in Cargo.lock, found {}",
-            revisions.len()
-        ))
-        .into());
-    }
-    Ok(revisions.into_iter().next().unwrap())
-}
-
-fn source_sha256(source: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(source))
-}
-
-fn required_arg(
-    args: &mut impl Iterator<Item = std::ffi::OsString>,
-    name: &str,
-) -> Result<String, Box<dyn Error>> {
-    args.next()
-        .ok_or_else(|| io::Error::other(format!("missing {name}")))?
-        .into_string()
-        .map_err(|_| io::Error::other(format!("{name} must be UTF-8")).into())
-}
-
 fn usage() -> ! {
-    eprintln!(
-        "usage: leanvm-full-zk-spark-fixture <output-directory> <spartan-whir-commit> <leanvm-upstream-base> <leanvm-branch-head> <sol-spartan-whir-commit>"
-    );
+    eprintln!("usage: leanvm-full-zk-spark-fixture <output-directory>");
     process::exit(2)
 }
 

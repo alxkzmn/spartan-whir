@@ -33,6 +33,25 @@ use crate::{
     SpartanWhirError, WhirParams, ZkWhirPcsConfig,
 };
 
+fn full_zk_protocol_id<E: FullZkPoseidonEngine>(
+    batching: crate::pcs_config::FreshMaskBatching,
+    packing: crate::pcs_config::MaskPacking,
+) -> Vec<u8>
+where
+    E::EF: ExtField,
+    E::Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    let mut id = E::FULL_ZK_PROTOCOL_ID.to_vec();
+    if batching == crate::pcs_config::FreshMaskBatching::SameHeight {
+        id.extend_from_slice(b"-fresh-mask-batching-v1");
+    }
+    if packing != crate::pcs_config::MaskPacking::Off {
+        id.extend_from_slice(b"-mask-packing-v1-");
+        id.extend_from_slice(packing.label().as_bytes());
+    }
+    id
+}
+
 pub type PoseidonSetupConfig = SpartanSnarkConfig;
 pub type PoseidonProofKind<Ext> = SpartanProofKind<PoseidonEngine<Ext>, Plonky3WhirPcs>;
 
@@ -103,10 +122,11 @@ where
     #[serde(default)]
     pub(crate) spark_table_metadata: Option<SparkTableMetadata>,
     pub(crate) domain_separator: DomainSeparator,
-    /// Setup authenticates this binding directly. Serialization omits the
-    /// marker, so a restored SPARK key must re-authenticate before use.
+    /// Setup authenticates the relation digest and, in SPARK mode, the fixed
+    /// commitments. Serialization omits the marker, so every restored key must
+    /// be authenticated once before verification.
     #[serde(skip)]
-    pub(crate) spark_fixed_commitments_authenticated: bool,
+    pub(crate) verifying_key_authenticated: bool,
     marker: PhantomData<E>,
 }
 
@@ -167,20 +187,26 @@ where
         &self.domain_separator
     }
 
-    /// Check that the key's SPARK fixed-table commitments actually commit to
-    /// the matrices of the embedded R1CS.
+    /// Authenticate a setup-created or restored key against its embedded R1CS.
     ///
-    /// A restored SPARK key cannot verify until this succeeds. It re-runs
-    /// SPARK preprocessing and committing, so it costs about as much as the
-    /// SPARK part of `setup`.
-    pub fn authenticate_spark_fixed_commitments(&mut self) -> Result<(), SpartanWhirError> {
-        self.spark_fixed_commitments_authenticated = false;
+    /// This recomputes the canonical relation digest once. In SPARK mode it
+    /// also rebuilds and checks the fixed-table commitments, which costs about
+    /// as much as the SPARK part of `setup`. Verification then reuses the
+    /// authenticated digest without scanning the matrices again.
+    pub fn authenticate(&mut self) -> Result<(), SpartanWhirError> {
+        self.verifying_key_authenticated = false;
         self.validate()?;
+        let expected_relation_digest = crate::canonical_r1cs_relation_digest(
+            &self.shape_canonical,
+            self.num_cons_unpadded,
+            self.num_vars_unpadded,
+            self.num_io,
+        )?;
+        if self.domain_separator.relation_digest != expected_relation_digest {
+            return Err(SpartanWhirError::invalid_config());
+        }
         match self.matrix_closing {
-            MatrixClosingMode::DirectSparse => {
-                self.spark_fixed_commitments_authenticated = true;
-                Ok(())
-            }
+            MatrixClosingMode::DirectSparse => {}
             MatrixClosingMode::Spark => {
                 let configs = self
                     .spark_pcs_configs
@@ -195,25 +221,30 @@ where
                     configs,
                     expected,
                 )?;
-                self.spark_fixed_commitments_authenticated = true;
-                Ok(())
             }
         }
+        self.verifying_key_authenticated = true;
+        Ok(())
     }
 
-    pub(crate) fn ensure_spark_fixed_commitments_authenticated(
-        &self,
-    ) -> Result<(), SpartanWhirError> {
-        if self.matrix_closing == MatrixClosingMode::Spark
-            && !self.spark_fixed_commitments_authenticated
-        {
+    /// Compatibility wrapper for callers that authenticated restored SPARK
+    /// keys through the previous API.
+    pub fn authenticate_spark_fixed_commitments(&mut self) -> Result<(), SpartanWhirError> {
+        self.authenticate()
+    }
+
+    pub(crate) fn ensure_authenticated(&self) -> Result<(), SpartanWhirError> {
+        if !self.verifying_key_authenticated {
             return Err(SpartanWhirError::invalid_config_reason(
-                crate::InvalidConfigReason::UnauthenticatedSparkVerifyingKey,
+                crate::InvalidConfigReason::UnauthenticatedVerifyingKey,
             ));
         }
         Ok(())
     }
 
+    /// Validate structure and configuration using the stored relation digest.
+    /// This does not recompute the relation digest; use [`Self::authenticate`]
+    /// before accepting restored key material.
     pub(crate) fn validate(&self) -> Result<Option<SparkTableMetadata>, SpartanWhirError> {
         validate_canonical_verifying_shape(
             &self.shape_canonical,
@@ -231,9 +262,13 @@ where
         {
             return Err(SpartanWhirError::invalid_config());
         }
-        let expected_domain = DomainSeparator::new_with_protocol_id(
-            E::FULL_ZK_PROTOCOL_ID,
+        let expected_domain = DomainSeparator::new_with_protocol_id_and_relation_digest(
+            &full_zk_protocol_id::<E>(
+                self.pcs_config.fresh_mask_batching,
+                self.pcs_config.mask_packing,
+            ),
             &self.shape_canonical,
+            self.domain_separator.relation_digest,
             &self.security,
             &self.whir_params,
             self.matrix_closing,
@@ -430,6 +465,50 @@ where
     StandardUniform: Distribution<E::EF>,
     Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
+    setup_poseidon_zk_with_fresh_mask_batching::<E>(
+        shape,
+        config,
+        crate::pcs_config::FreshMaskBatching::Separate,
+    )
+}
+
+pub fn setup_poseidon_zk_with_fresh_mask_batching<E>(
+    shape: R1csShape<F>,
+    config: PoseidonZkSetupConfig,
+    fresh_mask_batching: crate::pcs_config::FreshMaskBatching,
+) -> Result<(PoseidonZkProvingKeyFor<E>, PoseidonZkVerifyingKeyFor<E>), SpartanWhirError>
+where
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: CanObserve<PoseidonZkCommitmentFor<E>>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
+{
+    setup_poseidon_zk_with_mask_packing::<E>(
+        shape,
+        config,
+        fresh_mask_batching,
+        crate::pcs_config::MaskPacking::Off,
+    )
+}
+
+pub fn setup_poseidon_zk_with_mask_packing<E>(
+    shape: R1csShape<F>,
+    config: PoseidonZkSetupConfig,
+    fresh_mask_batching: crate::pcs_config::FreshMaskBatching,
+    mask_packing: crate::pcs_config::MaskPacking,
+) -> Result<(PoseidonZkProvingKeyFor<E>, PoseidonZkVerifyingKeyFor<E>), SpartanWhirError>
+where
+    E: FullZkPoseidonEngine,
+    E::EF: ExtField,
+    E::Challenger: CanObserve<PoseidonZkCommitmentFor<E>>
+        + FieldChallenger<F>
+        + GrindingChallenger<Witness = F>,
+    StandardUniform: Distribution<E::EF>,
+    Plonky3WhirPcs: FullZkPoseidonPcs<E>,
+{
     config.security.validate()?;
     shape.validate()?;
 
@@ -489,6 +568,8 @@ where
         },
         ell_zk: config.ell_zk,
         mask_log_inv_rate: config.mask_log_inv_rate,
+        fresh_mask_batching,
+        mask_packing,
     };
     let (_, [inner_shape, outer_shape, _]) = build_poseidon_full_zk_pcs::<E>(
         &pcs_config,
@@ -496,19 +577,22 @@ where
         num_variables + 1,
         config.security.effective_security_bits(),
     )?;
-    combined_application_mask_shape(inner_shape, outer_shape)?;
+    combined_application_mask_shape(inner_shape, outer_shape, mask_packing)?;
     let transcript_spark_whir_params = match config.matrix_closing {
         MatrixClosingMode::DirectSparse => None,
         MatrixClosingMode::Spark => config.spark_whir_params.clone(),
     };
     let domain_separator = DomainSeparator::new_with_protocol_id(
-        E::FULL_ZK_PROTOCOL_ID,
+        &full_zk_protocol_id::<E>(fresh_mask_batching, mask_packing),
         &shape_canonical,
+        shape.num_cons,
+        shape.num_vars,
+        shape.num_io,
         &config.security,
         &config.whir_params,
         config.matrix_closing,
         transcript_spark_whir_params,
-    );
+    )?;
     let (spark_pcs_configs, spark_fixed_setup) = match config.matrix_closing {
         MatrixClosingMode::DirectSparse => (None, None),
         MatrixClosingMode::Spark => {
@@ -564,7 +648,7 @@ where
         spark_pcs_configs,
         spark_table_metadata,
         domain_separator,
-        spark_fixed_commitments_authenticated: true,
+        verifying_key_authenticated: true,
         marker: PhantomData,
     };
     Ok((pk, vk))
@@ -655,6 +739,7 @@ where
         expected_public_inputs: &[F],
         proof: &PoseidonProof<Ext>,
     ) -> Result<(), SpartanWhirError> {
+        self.ensure_authenticated()?;
         if expected_public_inputs.len() != self.num_io()
             || proof.instance.public_inputs.len() != self.num_io()
         {
@@ -692,6 +777,28 @@ where
         config: PoseidonZkSetupConfig,
     ) -> Result<(Self, PoseidonZkVerifyingKeyFor<E>), SpartanWhirError> {
         setup_poseidon_zk_for::<E>(shape, config)
+    }
+
+    /// Set up a SPARK key with an explicit fresh-mask commitment policy.
+    pub fn setup_with_fresh_mask_batching(
+        shape: R1csShape<F>,
+        config: PoseidonZkSetupConfig,
+        batching: crate::pcs_config::FreshMaskBatching,
+    ) -> Result<(Self, PoseidonZkVerifyingKeyFor<E>), SpartanWhirError> {
+        if config.matrix_closing != MatrixClosingMode::Spark {
+            return Err(SpartanWhirError::invalid_config());
+        }
+        setup_poseidon_zk_with_fresh_mask_batching::<E>(shape, config, batching)
+    }
+
+    /// Set up a full-ZK key with authenticated physical mask packing.
+    pub fn setup_with_mask_packing(
+        shape: R1csShape<F>,
+        config: PoseidonZkSetupConfig,
+        batching: crate::pcs_config::FreshMaskBatching,
+        packing: crate::pcs_config::MaskPacking,
+    ) -> Result<(Self, PoseidonZkVerifyingKeyFor<E>), SpartanWhirError> {
+        setup_poseidon_zk_with_mask_packing::<E>(shape, config, batching, packing)
     }
 
     pub fn prove(
@@ -753,6 +860,7 @@ where
         expected_public_inputs: &[F],
         proof: &PoseidonZkProofFor<E>,
     ) -> Result<(), SpartanWhirError> {
+        self.ensure_authenticated()?;
         if expected_public_inputs.len() != self.num_io
             || proof.instance.public_inputs.len() != self.num_io
         {

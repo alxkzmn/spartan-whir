@@ -10,12 +10,14 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use sha2::{Digest, Sha256};
 use spartan_whir::{
     decode_full_zk_direct_guest_words, decode_full_zk_spark_guest_words,
-    encode_full_zk_direct_guest_words, encode_full_zk_spark_guest_words, full_zk_statement_digest,
-    full_zk_statement_digest_id, full_zk_statement_digest_preimage, generate_satisfiable_fixture,
-    pad_full_zk_guest_words, setup_poseidon_zk_for, FullZkGuestCodecError, FullZkGuestHashProfile,
-    MatrixClosingMode, Plonky3PoseidonEngine, Poseidon1QuinticEngine, PoseidonQuinticEngine,
-    PoseidonZkSetupConfig, PoseidonZkSpartanProtocolFor, SparkWhirParams, SyntheticR1csConfig,
-    FULL_ZK_STATEMENT_DOMAIN, MAX_FULL_ZK_GUEST_WORDS,
+    encode_full_zk_direct_guest_words, encode_full_zk_spark_guest_words,
+    full_zk_direct_guest_verifier_config, full_zk_spark_guest_verifier_config,
+    full_zk_statement_digest, full_zk_statement_digest_id, full_zk_statement_digest_preimage,
+    generate_satisfiable_fixture, pad_full_zk_guest_words, setup_poseidon_zk_for,
+    FullZkGuestCodecError, FullZkGuestHashProfile, InvalidConfigReason, MatrixClosingMode,
+    Plonky3PoseidonEngine, Poseidon1QuinticEngine, PoseidonQuinticEngine, PoseidonZkSetupConfig,
+    PoseidonZkSpartanProtocolFor, PoseidonZkVerifyingKeyFor, SparkWhirParams, SpartanWhirError,
+    SyntheticR1csConfig, FULL_ZK_STATEMENT_DOMAIN, MAX_FULL_ZK_GUEST_WORDS,
 };
 
 fn fixture() -> spartan_whir::SyntheticR1csFixture {
@@ -249,6 +251,46 @@ fn full_zk_spark_codec_roundtrips_both_profiles() {
 }
 
 #[test]
+fn restored_full_zk_guest_configs_require_authenticated_verifying_keys() {
+    let fixture = fixture();
+    let (_, direct_vk) = setup_poseidon_zk_for::<PoseidonQuinticEngine>(
+        fixture.shape.clone(),
+        config(MatrixClosingMode::DirectSparse),
+    )
+    .expect("full-ZK DirectSparse setup succeeds");
+    let mut restored_direct: PoseidonZkVerifyingKeyFor<PoseidonQuinticEngine> =
+        bincode::deserialize(&bincode::serialize(&direct_vk).expect("DirectSparse key serializes"))
+            .expect("DirectSparse key deserializes");
+    assert_eq!(
+        full_zk_direct_guest_verifier_config(&restored_direct).unwrap_err(),
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::UnauthenticatedVerifyingKey)
+    );
+    restored_direct
+        .authenticate()
+        .expect("restored DirectSparse key authenticates");
+    full_zk_direct_guest_verifier_config(&restored_direct)
+        .expect("authenticated DirectSparse key exports guest config");
+
+    let (_, spark_vk) = setup_poseidon_zk_for::<PoseidonQuinticEngine>(
+        fixture.shape,
+        config(MatrixClosingMode::Spark),
+    )
+    .expect("full-ZK SPARK setup succeeds");
+    let mut restored_spark: PoseidonZkVerifyingKeyFor<PoseidonQuinticEngine> =
+        bincode::deserialize(&bincode::serialize(&spark_vk).expect("SPARK key serializes"))
+            .expect("SPARK key deserializes");
+    assert_eq!(
+        full_zk_spark_guest_verifier_config(&restored_spark).unwrap_err(),
+        SpartanWhirError::InvalidConfig(InvalidConfigReason::UnauthenticatedVerifyingKey)
+    );
+    restored_spark
+        .authenticate()
+        .expect("restored SPARK key authenticates");
+    full_zk_spark_guest_verifier_config(&restored_spark)
+        .expect("authenticated SPARK key exports guest config");
+}
+
+#[test]
 fn full_zk_statement_digest_binds_domain_length_profile_and_public_inputs() {
     let first = [spartan_whir::engine::F::ZERO, spartan_whir::engine::F::ONE];
     let second = [spartan_whir::engine::F::ONE, spartan_whir::engine::F::ZERO];
@@ -294,19 +336,10 @@ fn checked_full_zk_direct_fixtures_reproduce_and_match_their_manifests() {
     } else {
         "testdata/leanvm-full-zk-direct-poseidon2"
     });
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &fs::read(checked.join("full_zk_direct_manifest.json")).expect("manifest reads"),
-    )
-    .expect("manifest decodes");
     let generated = temporary_fixture_directory();
     fs::create_dir_all(&generated).expect("temporary fixture directory creates");
     let status = Command::new(env!("CARGO_BIN_EXE_leanvm-full-zk-fixture"))
         .arg(&generated)
-        .arg(
-            manifest["source_revisions"]["spartan_whir"]
-                .as_str()
-                .expect("Spartan-WHIR revision is a string"),
-        )
         .status()
         .expect("fixture generator starts");
     assert!(status.success(), "fixture generator succeeds");
@@ -342,18 +375,6 @@ fn check_direct_manifest(fixture_dir: &Path) {
     {
         check_artifact(fixture_dir, artifact);
     }
-    for (relative, expected) in manifest["implementation_source_ids"]
-        .as_object()
-        .expect("implementation source identifiers are an object")
-    {
-        let bytes = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
-            .expect("implementation source reads");
-        assert_eq!(sha256_hex(&bytes), expected.as_str().unwrap());
-    }
-    assert_eq!(
-        manifest["source_revisions"]["plonky3_source"],
-        "spartan-whir/Cargo.lock"
-    );
 }
 
 fn check_artifact(fixture_dir: &Path, artifact: &serde_json::Value) {

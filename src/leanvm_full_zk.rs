@@ -12,7 +12,7 @@ use p3_sumcheck::zk::ZkSumcheckData;
 use p3_symmetric::MerkleCap;
 use p3_whir::pcs::{
     proof::{QueryOpenings, SharedProofOpening, WhirProof, WhirRoundProof},
-    zk::{BaseCaseZkProof, BlindedMask, MaskOpeningPair, ZkRoundProof, ZkWhirRelationProof},
+    zk::{BaseCaseZkProof, BlindedMask, ZkRoundProof, ZkWhirRelationProof},
 };
 use rand::distr::{Distribution, StandardUniform};
 use serde::Serialize;
@@ -37,6 +37,7 @@ use crate::{
 
 pub const FULL_ZK_GUEST_MAGIC: [u32; 4] = [0x4c, 0x56, 0x5a, 0x57];
 pub const FULL_ZK_GUEST_VERSION: u32 = 1;
+pub const FULL_ZK_GROUPED_GUEST_VERSION: u32 = 2;
 pub const MAX_FULL_ZK_GUEST_WORDS: usize = 1_048_576;
 pub const FULL_ZK_STATEMENT_SCHEMA_ID: &str = "sha256-digest-bits-msb-first-v1";
 pub const FULL_ZK_STATEMENT_DOMAIN: &[u8] = b"leanvm-spartan-whir-statement-v1";
@@ -70,7 +71,11 @@ pub struct FullZkGuestMaskGroupShape {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FullZkGuestRoundConfig {
+    /// Requested count from the native WHIR security configuration.
     pub num_queries: usize,
+    /// Number of distinct positions returned by the native sampler after
+    /// capping the request at the folded evaluation domain.
+    pub query_positions: usize,
     pub ood_samples: usize,
     pub num_variables: usize,
     pub folding_factor: usize,
@@ -133,6 +138,8 @@ pub struct FullZkGuestVerifierConfig {
     pub switch_masks: Vec<FullZkGuestMaskCodeShape>,
     pub external_mask_groups: Vec<FullZkGuestMaskGroupShape>,
     pub base_case_mask_groups: Vec<FullZkGuestMaskGroupShape>,
+    pub fresh_mask_batching: String,
+    pub mask_packing: String,
     pub rounds: Vec<FullZkGuestRoundConfig>,
     pub final_round: FullZkGuestRoundConfig,
     pub source_code: FullZkGuestSourceCode,
@@ -241,10 +248,15 @@ pub fn full_zk_direct_guest_verifier_config<E>(
 where
     E: FullZkPoseidonEngine<Commitment = GuestCommitment>,
     E::EF: ExtField,
-    E::Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + PoseidonTranscriptTrace,
+    E::Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + PoseidonTranscriptTrace
+        + CanObserve<GuestCommitment>,
     StandardUniform: Distribution<E::EF>,
     Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
+    verifying_key.ensure_authenticated()?;
+    verifying_key.validate()?;
     if verifying_key.matrix_closing != MatrixClosingMode::DirectSparse {
         return Err(crate::SpartanWhirError::ProofKindMismatch);
     }
@@ -257,10 +269,15 @@ pub fn full_zk_spark_guest_verifier_config<E>(
 where
     E: FullZkPoseidonEngine<Commitment = GuestCommitment>,
     E::EF: ExtField,
-    E::Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + PoseidonTranscriptTrace,
+    E::Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + PoseidonTranscriptTrace
+        + CanObserve<GuestCommitment>,
     StandardUniform: Distribution<E::EF>,
     Plonky3WhirPcs: FullZkPoseidonPcs<E>,
 {
+    verifying_key.ensure_authenticated()?;
+    verifying_key.validate()?;
     if verifying_key.matrix_closing != MatrixClosingMode::Spark {
         return Err(crate::SpartanWhirError::ProofKindMismatch);
     }
@@ -354,7 +371,11 @@ where
         num_inner_rounds,
         verifying_key.security.effective_security_bits(),
     )?;
-    let application_shape = combined_application_mask_shape(inner_shape, outer_shape)?;
+    let application_shape = combined_application_mask_shape(
+        inner_shape,
+        outer_shape,
+        verifying_key.pcs_config.mask_packing,
+    )?;
     let external_shapes = [application_shape, inner_sumcheck_shape];
 
     let mut context_prefix = verifying_key
@@ -441,6 +462,12 @@ where
             .map(mask_group_shape::<E::EF>)
             .collect(),
         base_case_mask_groups,
+        mask_packing: verifying_key.pcs_config.mask_packing.label().to_owned(),
+        fresh_mask_batching: match pcs.config.fresh_mask_batching {
+            crate::pcs_config::FreshMaskBatching::Separate => "separate",
+            crate::pcs_config::FreshMaskBatching::SameHeight => "same_height",
+        }
+        .to_owned(),
         rounds: pcs
             .config
             .round_parameters
@@ -503,8 +530,10 @@ fn mask_group_shape<Ext: ExtField>(
 }
 
 fn round_config(config: &p3_whir::parameters::RoundConfig<F>) -> FullZkGuestRoundConfig {
+    let folded_domain_size = config.domain_size >> config.folding_factor;
     FullZkGuestRoundConfig {
         num_queries: config.num_queries,
+        query_positions: config.num_queries.min(folded_domain_size),
         ood_samples: config.ood_samples,
         num_variables: config.num_variables,
         folding_factor: config.folding_factor,
@@ -606,7 +635,15 @@ where
     }
     let mut writer = WordWriter::new();
     writer.words.extend(FULL_ZK_GUEST_MAGIC);
-    writer.word(FULL_ZK_GUEST_VERSION);
+    writer.word(
+        if proof.pcs_proof.base_case.fresh_mask_openings.len()
+            < proof.pcs_proof.base_case.carried_mask_openings.len()
+        {
+            FULL_ZK_GROUPED_GUEST_VERSION
+        } else {
+            FULL_ZK_GUEST_VERSION
+        },
+    );
     writer.word(profile as u32);
     writer.len(E::EF::DIMENSION, "extension degree")?;
     writer.word(DIRECT_SPARSE_TAG);
@@ -673,7 +710,15 @@ where
     };
     let mut writer = WordWriter::new();
     writer.words.extend(FULL_ZK_GUEST_MAGIC);
-    writer.word(FULL_ZK_GUEST_VERSION);
+    writer.word(
+        if proof.pcs_proof.base_case.fresh_mask_openings.len()
+            < proof.pcs_proof.base_case.carried_mask_openings.len()
+        {
+            FULL_ZK_GROUPED_GUEST_VERSION
+        } else {
+            FULL_ZK_GUEST_VERSION
+        },
+    );
     writer.word(profile as u32);
     writer.len(E::EF::DIMENSION, "extension degree")?;
     writer.word(SPARK_TAG);
@@ -768,7 +813,8 @@ where
             return Err(FullZkGuestCodecError::InvalidHeader);
         }
     }
-    if reader.word()? != FULL_ZK_GUEST_VERSION {
+    let version = reader.word()?;
+    if version != FULL_ZK_GUEST_VERSION && version != FULL_ZK_GROUPED_GUEST_VERSION {
         return Err(FullZkGuestCodecError::InvalidHeader);
     }
     let actual_profile = FullZkGuestHashProfile::from_word(reader.word()?)?;
@@ -873,7 +919,8 @@ where
             return Err(FullZkGuestCodecError::InvalidHeader);
         }
     }
-    if reader.word()? != FULL_ZK_GUEST_VERSION {
+    let version = reader.word()?;
+    if version != FULL_ZK_GUEST_VERSION && version != FULL_ZK_GROUPED_GUEST_VERSION {
         return Err(FullZkGuestCodecError::InvalidHeader);
     }
     let actual_profile = FullZkGuestHashProfile::from_word(reader.word()?)?;
@@ -1310,10 +1357,25 @@ impl WordWriter {
         self.base(proof.pow_witness);
         self.query_opening(&proof.source_openings)?;
         self.shared_extension_opening(&proof.fresh_main_openings)?;
-        self.len(proof.mask_openings.len(), "mask openings")?;
-        for opening in &proof.mask_openings {
-            self.shared_extension_opening(&opening.carried)?;
-            self.shared_extension_opening(&opening.fresh)?;
+        if proof.carried_mask_openings.len() == proof.fresh_mask_openings.len() {
+            self.len(proof.carried_mask_openings.len(), "mask openings")?;
+            for (carried, fresh) in proof
+                .carried_mask_openings
+                .iter()
+                .zip(&proof.fresh_mask_openings)
+            {
+                self.shared_extension_opening(carried)?;
+                self.shared_extension_opening(fresh)?;
+            }
+        } else {
+            self.len(proof.carried_mask_openings.len(), "carried mask openings")?;
+            for opening in &proof.carried_mask_openings {
+                self.shared_extension_opening(opening)?;
+            }
+            self.len(proof.fresh_mask_openings.len(), "fresh mask openings")?;
+            for opening in &proof.fresh_mask_openings {
+                self.shared_extension_opening(opening)?;
+            }
         }
         Ok(())
     }
@@ -1784,13 +1846,31 @@ impl<'a> WordReader<'a> {
         let pow_witness = self.base()?;
         let source_openings = self.query_opening::<E::EF>()?;
         let fresh_main_openings = self.shared_extension_opening::<E::EF>()?;
-        let opening_count = self.length("mask openings")?;
-        let mut mask_openings = Vec::with_capacity(opening_count);
-        for _ in 0..opening_count {
-            mask_openings.push(MaskOpeningPair {
-                carried: self.shared_extension_opening::<E::EF>()?,
-                fresh: self.shared_extension_opening::<E::EF>()?,
-            });
+        let carried_count = self.length("mask openings")?;
+        let mut carried_mask_openings = Vec::with_capacity(carried_count);
+        let mut fresh_mask_openings = Vec::with_capacity(commitment_count);
+        if self.words[4] == FULL_ZK_GUEST_VERSION {
+            if carried_count != commitment_count {
+                return Err(FullZkGuestCodecError::InvalidHeader);
+            }
+            for _ in 0..carried_count {
+                carried_mask_openings.push(self.shared_extension_opening::<E::EF>()?);
+                fresh_mask_openings.push(self.shared_extension_opening::<E::EF>()?);
+            }
+        } else {
+            if carried_count <= commitment_count {
+                return Err(FullZkGuestCodecError::InvalidHeader);
+            }
+            for _ in 0..carried_count {
+                carried_mask_openings.push(self.shared_extension_opening::<E::EF>()?);
+            }
+            let fresh_count = self.length("fresh mask openings")?;
+            if fresh_count != commitment_count {
+                return Err(FullZkGuestCodecError::InvalidHeader);
+            }
+            for _ in 0..fresh_count {
+                fresh_mask_openings.push(self.shared_extension_opening::<E::EF>()?);
+            }
         }
         Ok(BaseCaseZkProof {
             fresh_main_commitment,
@@ -1802,7 +1882,8 @@ impl<'a> WordReader<'a> {
             pow_witness,
             source_openings,
             fresh_main_openings,
-            mask_openings,
+            carried_mask_openings,
+            fresh_mask_openings,
         })
     }
 
@@ -1813,6 +1894,43 @@ impl<'a> WordReader<'a> {
             Err(FullZkGuestCodecError::TrailingWords {
                 count: self.words.len() - self.cursor,
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod query_export_tests {
+    use super::*;
+
+    #[test]
+    fn exported_query_positions_are_capped_at_folded_domain() {
+        for (domain_bits, requested, expected_positions) in [
+            (1, 0, 0),
+            (1, 1, 1),
+            (1, 2, 2),
+            (1, 3, 2),
+            (3, 7, 7),
+            (3, 8, 8),
+            (3, 9, 8),
+            (15, 7, 7),
+            (24, 7, 7),
+        ] {
+            let folded_domain = 1usize << domain_bits;
+            let config = p3_whir::parameters::RoundConfig {
+                num_queries: requested,
+                domain_size: folded_domain << 1,
+                folding_factor: 1,
+                folded_domain_gen: F::two_adic_generator(domain_bits),
+                num_variables: 0,
+                log_inv_rate: 1,
+                ood_samples: 0,
+                pow_bits: 0,
+                folding_pow_bits: 0,
+            };
+            let exported = round_config(&config);
+            assert_eq!(exported.num_queries, requested);
+            assert_eq!(exported.query_positions, expected_positions);
+            assert!(exported.query_positions <= folded_domain);
         }
     }
 }

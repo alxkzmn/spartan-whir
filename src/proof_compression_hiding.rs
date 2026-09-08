@@ -53,9 +53,9 @@ where
         || !proof.base_case.fresh_main_openings.rows.is_empty()
         || proof
             .base_case
-            .mask_openings
+            .fresh_mask_openings
             .iter()
-            .any(|pair| !pair.fresh.rows.is_empty())
+            .any(|opening| !opening.rows.is_empty())
     {
         return Err(reject());
     }
@@ -72,10 +72,7 @@ where
         &mut target,
         &mut replay,
     )?;
-    mask_groups.push(MaskGroupShape {
-        shape: config.sumcheck_mask,
-        width: config.round_folding_factor(0),
-    });
+    mask_groups.push(config.sumcheck_mask_group(config.round_folding_factor(0)));
 
     // Mirror only the observations and samples in the pinned hiding verifier.
     // Every masked sumcheck observes its inherited target. Recompute that target
@@ -138,22 +135,21 @@ where
             &mut target,
             &mut replay,
         )?;
-        mask_groups.push(MaskGroupShape {
-            shape: config.sumcheck_mask,
-            width: folding,
-        });
+        mask_groups.push(config.sumcheck_mask_group(folding));
     }
 
     let final_config = config.final_round_config();
     let source_message_len = 1usize << final_config.num_variables;
     let source_domain_size = final_config.domain_size >> final_config.folding_factor;
     let base = &mut proof.base_case;
+    let batches = config.fresh_mask_batching.batches(&mask_groups);
     let num_masks: usize = mask_groups.iter().map(|group| group.width).sum();
     if base.blinded_message.len() != source_message_len
         || base.blinded_randomness.len() != config.oracle_randomness[n_rounds]
         || base.blinded_masks.len() != num_masks
-        || base.mask_openings.len() != mask_groups.len()
-        || base.fresh_mask_commitments.len() != mask_groups.len()
+        || base.carried_mask_openings.len() != mask_groups.len()
+        || base.fresh_mask_commitments.len() != batches.len()
+        || base.fresh_mask_openings.len() != batches.len()
     {
         return Err(reject());
     }
@@ -240,27 +236,43 @@ where
         })
         .collect();
 
+    let mut mask_offsets = Vec::with_capacity(mask_groups.len());
     let mut offset = 0;
-    for (group, pair) in mask_groups.iter().zip(&mut base.mask_openings) {
-        let positions = sample_queries(group.shape.domain_size, config.mask_queries, &mut replay)?;
-        check_rows(&pair.carried.rows, positions.len(), group.width)?;
-        let generator = E::EF::two_adic_generator(group.shape.domain_size.ilog2() as usize);
-        let masks = &base.blinded_masks[offset..offset + group.width];
-        pair.fresh.rows = positions
+    for group in &mask_groups {
+        mask_offsets.push(offset);
+        offset += group.width;
+    }
+    for (batch, fresh) in batches.iter().zip(&mut base.fresh_mask_openings) {
+        let positions = sample_queries(batch.domain_size, config.mask_queries, &mut replay)?;
+        let generator = E::EF::two_adic_generator(batch.domain_size.ilog2() as usize);
+        for &index in &batch.group_indices {
+            check_rows(
+                &base.carried_mask_openings[index].rows,
+                positions.len(),
+                mask_groups[index].width,
+            )?;
+        }
+        fresh.rows = positions
             .iter()
-            .zip(&pair.carried.rows)
-            .map(|(&position, carried)| {
+            .enumerate()
+            .map(|(row_index, &position)| {
                 let point = generator.exp_u64(position as u64);
-                masks
-                    .iter()
-                    .zip(carried)
-                    .map(|(mask, &value)| {
-                        eval_code(point, &mask.message, &mask.randomness) - gamma * value
-                    })
-                    .collect()
+                let mut row = Vec::with_capacity(batch.width);
+                for &index in &batch.group_indices {
+                    let offset = mask_offsets[index];
+                    let masks = &base.blinded_masks[offset..offset + mask_groups[index].width];
+                    row.extend(
+                        masks
+                            .iter()
+                            .zip(&base.carried_mask_openings[index].rows[row_index])
+                            .map(|(mask, &value)| {
+                                eval_code(point, &mask.message, &mask.randomness) - gamma * value
+                            }),
+                    );
+                }
+                row
             })
             .collect();
-        offset += group.width;
     }
     Ok(())
 }
@@ -369,6 +381,18 @@ mod tests {
     }
 
     fn fixture(seed: u64, pow_bits: usize) -> Fixture {
+        fixture_with_batching(
+            seed,
+            pow_bits,
+            p3_whir::pcs::zk::FreshMaskBatching::Separate,
+        )
+    }
+
+    fn fixture_with_batching(
+        seed: u64,
+        pow_bits: usize,
+        batching: p3_whir::pcs::zk::FreshMaskBatching,
+    ) -> Fixture {
         let config = ZkWhirConfig::new(
             12,
             ProtocolParameters {
@@ -384,7 +408,8 @@ mod tests {
                 mask_log_inv_rate: 1,
             },
         )
-        .unwrap();
+        .unwrap()
+        .with_fresh_mask_batching(batching);
         let dft = Radix2DFTSmallBatch::<F>::default();
         let mmcs = E::full_zk_mmcs();
         let prover = HidingWhirProver::new(&config, &dft, &mmcs);
@@ -455,8 +480,8 @@ mod tests {
 
     fn omit_fresh_rows(proof: &mut PoseidonZkRelationProofFor<E>) {
         proof.base_case.fresh_main_openings.rows.clear();
-        for pair in &mut proof.base_case.mask_openings {
-            pair.fresh.rows.clear();
+        for opening in &mut proof.base_case.fresh_mask_openings {
+            opening.rows.clear();
         }
     }
 
@@ -479,8 +504,13 @@ mod tests {
 
     #[test]
     fn fresh_rows_roundtrip_to_backend_proof_and_preserve_transcript() {
-        for (seed, pow_bits) in [(31, 0), (42, 3)] {
-            let fixture = fixture(seed, pow_bits);
+        for (seed, pow_bits, batching) in [
+            (31, 0, p3_whir::pcs::zk::FreshMaskBatching::Separate),
+            (42, 3, p3_whir::pcs::zk::FreshMaskBatching::Separate),
+            (31, 0, p3_whir::pcs::zk::FreshMaskBatching::SameHeight),
+            (42, 3, p3_whir::pcs::zk::FreshMaskBatching::SameHeight),
+        ] {
+            let fixture = fixture_with_batching(seed, pow_bits, batching);
             let mut restored = fixture.proof.clone();
             omit_fresh_rows(&mut restored);
             let trace_before = fixture.before.transcript_trace();
@@ -519,7 +549,7 @@ mod tests {
         let fixture = fixture(51, 0);
         let mut altered = fixture.proof.clone();
         omit_fresh_rows(&mut altered);
-        altered.base_case.mask_openings[0].carried.rows[0][0] += EF::ONE;
+        altered.base_case.carried_mask_openings[0].rows[0][0] += EF::ONE;
         restore(&fixture, &mut altered);
         assert!(HidingWhirVerifier::new(&fixture.config, &fixture.mmcs)
             .verify_relation(

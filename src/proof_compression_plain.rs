@@ -253,7 +253,7 @@ fn pivot<EF: Field>(weights: &[EF]) -> Result<usize, SpartanWhirError> {
         .ok_or(SpartanWhirError::InvalidProofShape)
 }
 
-fn replay_sumcheck<E>(
+pub(crate) fn replay_sumcheck<E>(
     data: &SumcheckData<F, E::EF>,
     count: usize,
     pow_bits: usize,

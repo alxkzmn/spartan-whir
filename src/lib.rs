@@ -6,6 +6,7 @@ pub mod config;
 pub mod domain_separator;
 pub mod engine;
 pub mod error;
+pub mod fixed_oracle_cache;
 pub mod fixtures;
 pub mod hashers;
 mod keccak_challenger;
@@ -129,7 +130,10 @@ pub use protocol::{
     VerifyingKey, ZkMatrixClosingProof, ZkMatrixClosingProofFor, ZkSparkClosingProof,
     ZkSparkClosingProofFor, ZkSpartanProof, ZkSpartanProofFor,
 };
-pub use r1cs::{R1csInstance, R1csShape, R1csWitness, SparseMatEntry, SparseMatrix};
+pub use r1cs::{
+    canonical_r1cs_relation_digest, R1csInstance, R1csShape, R1csWitness, SparseMatEntry,
+    SparseMatrix, R1CS_RELATION_DIGEST_DOMAIN, R1CS_RELATION_DIGEST_VERSION,
+};
 pub use security::{SecurityConfig, SoundnessAssumption, MAX_SECURITY_BITS, MIN_SECURITY_BITS};
 pub use spark::{
     check_spark_memory_product_equations, compare_spark_layout_profile, compare_spark_layouts,

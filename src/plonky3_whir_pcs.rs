@@ -222,6 +222,13 @@ where
         proof: &Self::PlainProof,
         final_rows: bool,
     ) -> Result<(), SpartanWhirError>;
+
+    /// Validate an explicit native transport omission of the initial fixed oracle.
+    fn validate_cached_plain_proof_shape(
+        config: &WhirPcsConfig,
+        proof: &Self::PlainProof,
+        final_rows: bool,
+    ) -> Result<(), SpartanWhirError>;
 }
 
 /// Plain WHIR operations required by the full-ZK Spartan protocol for either
@@ -336,7 +343,17 @@ where
     ) -> Result<(), SpartanWhirError> {
         config.validate()?;
         let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
-        validate_poseidon_plain_proof_shape_compressed(&pcs.config, proof, final_rows)
+        validate_poseidon_plain_proof_shape_compressed(&pcs.config, proof, final_rows, false)
+    }
+
+    fn validate_cached_plain_proof_shape(
+        config: &WhirPcsConfig,
+        proof: &Self::PlainProof,
+        final_rows: bool,
+    ) -> Result<(), SpartanWhirError> {
+        config.validate()?;
+        let pcs = build_poseidon_plain_pcs::<Ext>(config)?;
+        validate_poseidon_plain_proof_shape_compressed(&pcs.config, proof, final_rows, true)
     }
 }
 
@@ -396,7 +413,17 @@ where
     ) -> Result<(), SpartanWhirError> {
         config.validate()?;
         let pcs = build_poseidon1_plain_pcs::<Ext>(config)?;
-        validate_poseidon1_plain_proof_shape_compressed(&pcs.config, proof, final_rows)
+        validate_poseidon1_plain_proof_shape_compressed(&pcs.config, proof, final_rows, false)
+    }
+
+    fn validate_cached_plain_proof_shape(
+        config: &WhirPcsConfig,
+        proof: &Self::PlainProof,
+        final_rows: bool,
+    ) -> Result<(), SpartanWhirError> {
+        config.validate()?;
+        let pcs = build_poseidon1_plain_pcs::<Ext>(config)?;
+        validate_poseidon1_plain_proof_shape_compressed(&pcs.config, proof, final_rows, true)
     }
 }
 
@@ -442,7 +469,10 @@ where
     if proof.rounds.len() != expected_rounds
         || proof.sumchecks.len() != expected_sumchecks
         || proof.sumcheck_mask_commitments.len() != expected_sumchecks
-        || proof.base_case.fresh_mask_commitments.len() != expected_mask_groups
+        || proof.base_case.carried_mask_openings.len() != expected_mask_groups
+        || proof.base_case.fresh_mask_commitments.len() != proof.base_case.fresh_mask_openings.len()
+        || proof.base_case.fresh_mask_commitments.len() > expected_mask_groups
+        || proof.base_case.fresh_mask_commitments.is_empty()
     {
         return Err(SpartanWhirError::InvalidProofShape);
     }
@@ -548,17 +578,48 @@ fn validate_query_opening_shape<Ext>(
     }
 }
 
+fn validate_cached_query_opening_shape<Ext>(
+    openings: &QueryOpenings<F, Ext, PoseidonMultiProof>,
+    cached_initial: bool,
+    expected_base: bool,
+    expected_rows: usize,
+    expected_width: usize,
+    leaf_count: usize,
+) -> Result<(), SpartanWhirError> {
+    if cached_initial {
+        match openings {
+            QueryOpenings::Base(opening)
+                if expected_base
+                    && opening.rows.is_empty()
+                    && opening.proof.sibling_hashes.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(SpartanWhirError::InvalidProofShape),
+        }
+    } else {
+        validate_query_opening_shape(
+            openings,
+            expected_base,
+            expected_rows,
+            expected_width,
+            leaf_count,
+        )
+    }
+}
+
 pub(crate) fn validate_poseidon_plain_proof_shape<Ext: ExtField>(
     config: &PoseidonPlainWhirConfig<Ext>,
     proof: &PoseidonPlainWhirProof<Ext>,
 ) -> Result<(), SpartanWhirError> {
-    validate_poseidon_plain_proof_shape_compressed(config, proof, false)
+    validate_poseidon_plain_proof_shape_compressed(config, proof, false, false)
 }
 
 fn validate_poseidon_plain_proof_shape_compressed<Ext: ExtField>(
     config: &PoseidonPlainWhirConfig<Ext>,
     proof: &PoseidonPlainWhirProof<Ext>,
     final_rows: bool,
+    cached_initial: bool,
 ) -> Result<(), SpartanWhirError> {
     if proof.initial_ood_answers.len() != config.commitment_ood_samples
         || proof.rounds.len() != config.n_rounds()
@@ -597,8 +658,9 @@ fn validate_poseidon_plain_proof_shape_compressed<Ext: ExtField>(
             .domain_size
             .checked_shr(params.folding_factor as u32)
             .ok_or(SpartanWhirError::InvalidProofShape)?;
-        validate_query_opening_shape(
+        validate_cached_query_opening_shape(
             &round.openings,
+            cached_initial && round_index == 0,
             round_index == 0,
             params.num_queries.min(leaf_count),
             width,
@@ -624,8 +686,9 @@ fn validate_poseidon_plain_proof_shape_compressed<Ext: ExtField>(
         .domain_size
         .checked_shr(final_config.folding_factor as u32)
         .ok_or(SpartanWhirError::InvalidProofShape)?;
-    validate_query_opening_shape(
+    validate_cached_query_opening_shape(
         &proof.final_openings,
+        cached_initial && config.n_rounds() == 0,
         config.n_rounds() == 0,
         final_config.num_queries.min(final_leaf_count),
         final_width - usize::from(final_rows && config.n_rounds() != 0),
@@ -673,13 +736,14 @@ pub(crate) fn validate_poseidon1_plain_proof_shape<Ext: ExtField>(
     config: &Poseidon1PlainWhirConfig<Ext>,
     proof: &Poseidon1PlainWhirProof<Ext>,
 ) -> Result<(), SpartanWhirError> {
-    validate_poseidon1_plain_proof_shape_compressed(config, proof, false)
+    validate_poseidon1_plain_proof_shape_compressed(config, proof, false, false)
 }
 
 fn validate_poseidon1_plain_proof_shape_compressed<Ext: ExtField>(
     config: &Poseidon1PlainWhirConfig<Ext>,
     proof: &Poseidon1PlainWhirProof<Ext>,
     final_rows: bool,
+    cached_initial: bool,
 ) -> Result<(), SpartanWhirError> {
     if proof.initial_ood_answers.len() != config.commitment_ood_samples
         || proof.rounds.len() != config.n_rounds()
@@ -718,8 +782,9 @@ fn validate_poseidon1_plain_proof_shape_compressed<Ext: ExtField>(
             .domain_size
             .checked_shr(params.folding_factor as u32)
             .ok_or(SpartanWhirError::InvalidProofShape)?;
-        validate_query_opening_shape(
+        validate_cached_query_opening_shape(
             &round.openings,
+            cached_initial && round_index == 0,
             round_index == 0,
             params.num_queries.min(leaf_count),
             width,
@@ -745,8 +810,9 @@ fn validate_poseidon1_plain_proof_shape_compressed<Ext: ExtField>(
         .domain_size
         .checked_shr(final_config.folding_factor as u32)
         .ok_or(SpartanWhirError::InvalidProofShape)?;
-    validate_query_opening_shape(
+    validate_cached_query_opening_shape(
         &proof.final_openings,
+        cached_initial && config.n_rounds() == 0,
         config.n_rounds() == 0,
         final_config.num_queries.min(final_leaf_count),
         final_width - usize::from(final_rows && config.n_rounds() != 0),
@@ -844,6 +910,16 @@ pub struct Plonky3WhirProverData<Ext> {
     num_variables: usize,
 }
 
+impl<Ext> crate::fixed_oracle_cache::FixedOracleProverData<PoseidonMmcs>
+    for Plonky3WhirProverData<Ext>
+{
+    fn into_initial_tree(
+        self,
+    ) -> Result<<PoseidonMmcs as Mmcs<F>>::ProverData<DenseMatrix<F>>, SpartanWhirError> {
+        self.merkle_tree.ok_or(SpartanWhirError::InvalidProofShape)
+    }
+}
+
 impl<Ext: ExtField> Clone for Plonky3WhirProverData<Ext> {
     fn clone(&self) -> Self {
         Self {
@@ -876,6 +952,16 @@ pub struct Poseidon1WhirProverData<Ext> {
     polynomial: Vec<F>,
     ood_pairs: Vec<(Vec<Ext>, Ext)>,
     num_variables: usize,
+}
+
+impl<Ext> crate::fixed_oracle_cache::FixedOracleProverData<Poseidon1Mmcs>
+    for Poseidon1WhirProverData<Ext>
+{
+    fn into_initial_tree(
+        self,
+    ) -> Result<<Poseidon1Mmcs as Mmcs<F>>::ProverData<DenseMatrix<F>>, SpartanWhirError> {
+        self.merkle_tree.ok_or(SpartanWhirError::InvalidProofShape)
+    }
 }
 
 impl<Ext: ExtField> Clone for Poseidon1WhirProverData<Ext> {
@@ -1618,7 +1704,7 @@ where
             .collect::<Vec<_>>();
         let pcs = build_poseidon_spark_read_pcs::<Ext>(config)?;
         validate_poseidon_commitment(parsed)?;
-        validate_poseidon_plain_proof_shape_compressed(&pcs.config, proof, final_rows)?;
+        validate_poseidon_plain_proof_shape_compressed(&pcs.config, proof, final_rows, false)?;
 
         let mut proof = PcsProof {
             whir: proof.clone(),
@@ -1844,7 +1930,7 @@ where
             .collect::<Vec<_>>();
         let pcs = build_poseidon1_spark_read_pcs::<Ext>(config)?;
         validate_poseidon_commitment(parsed)?;
-        validate_poseidon1_plain_proof_shape_compressed(&pcs.config, proof, final_rows)?;
+        validate_poseidon1_plain_proof_shape_compressed(&pcs.config, proof, final_rows, false)?;
 
         let mut proof = PcsProof {
             whir: proof.clone(),
@@ -2565,6 +2651,26 @@ where
         .ok_or_else(SpartanWhirError::invalid_config)?;
     let pcs = build_poseidon_hiding_pcs::<E>(config, relation_security_level)?;
     let shapes = application_relation_shapes::<E>(&pcs, num_outer_rounds, num_inner_rounds)?;
+    let application = crate::protocol::combined_application_mask_shape(
+        shapes[0],
+        shapes[1],
+        config.mask_packing,
+    )?;
+    for group in pcs
+        .config
+        .mask_groups()
+        .into_iter()
+        .chain([application, shapes[2]])
+    {
+        if group.shape.domain_size.ilog2() as usize > E::EF::TWO_ADICITY {
+            return Err(SpartanWhirError::invalid_config_reason(
+                InvalidConfigReason::ZkWhirMaskDomainExceedsTwoAdicity {
+                    log_domain_size: group.shape.domain_size.ilog2() as usize,
+                    two_adicity: E::EF::TWO_ADICITY,
+                },
+            ));
+        }
+    }
     Ok((pcs, shapes))
 }
 
@@ -2644,10 +2750,7 @@ where
             shape: checked_mask_code_shape::<E::EF>(8, randomness_len, log_inv_rate)?,
             width: num_outer_rounds,
         },
-        MaskGroupShape {
-            shape: pcs.config.sumcheck_mask,
-            width: num_inner_rounds,
-        },
+        pcs.config.sumcheck_mask_group(num_inner_rounds),
     ])
 }
 
@@ -2811,6 +2914,10 @@ where
         },
     )
     .map_err(map_zk_config_error)?;
+    whir_config = whir_config
+        .with_fresh_mask_batching(config.fresh_mask_batching)
+        .with_sumcheck_mask_packing(config.mask_packing.sumchecks())
+        .map_err(map_zk_config_error)?;
     apply_hiding_terminal_budget(&mut whir_config)?;
     let mmcs = E::full_zk_mmcs();
     Ok(HidingWhirPcs::new(
@@ -3104,7 +3211,7 @@ where
 /// transcript position, directly before that challenge is sampled. The
 /// commitment OOD claims are excluded because the commit phase already
 /// absorbed them.
-fn observe_statement_point_claims<Ext, Challenger>(
+pub(crate) fn observe_statement_point_claims<Ext, Challenger>(
     claims: &[(Point<Ext>, Ext)],
     challenger: &mut Challenger,
 ) where
@@ -3118,7 +3225,7 @@ fn observe_statement_point_claims<Ext, Challenger>(
     }
 }
 
-fn statement_point_claims<E, Ext>(
+pub(crate) fn statement_point_claims<E, Ext>(
     statement: &PcsStatement<E>,
     num_variables: usize,
 ) -> Result<Vec<(Point<Ext>, Ext)>, SpartanWhirError>
@@ -3382,6 +3489,8 @@ mod pcs_transcript_tests {
             whir: recommended_octic_zk_whir_params(20),
         };
         let zk = ZkWhirPcsConfig {
+            fresh_mask_batching: crate::pcs_config::FreshMaskBatching::Separate,
+            mask_packing: crate::pcs_config::MaskPacking::Off,
             base: base.clone(),
             ell_zk: DEFAULT_ZK_ELL,
             mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,

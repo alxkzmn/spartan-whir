@@ -4,7 +4,7 @@
 
 This directory defines the input and statement boundary for recursively verifying Spartan-WHIR proofs in LeanVM. The verifier guest decodes a Spartan-WHIR proof from private witness words, verifies it inside the VM, recomputes the application statement digest, and exposes that digest as the public input of the LeanVM execution proof. The execution proof attests that the fixed guest accepted the child Spartan-WHIR proof for the bound application statement.
 
-The control fixture is the small no-ZK DirectSparse correctness profile. The production application and matched full-ZK DirectSparse and SPARK configurations are recorded in `protocol_manifest.json`, together with the selected Poseidon1 and SPARK profile. Both full-ZK encoders are implemented; the production SPARK guest and its complete fixture live in the sibling LeanVM checkout.
+The control fixture is the small no-ZK DirectSparse correctness profile. Both full-ZK encoders are implemented; the production SPARK guest and its complete fixture live in the sibling LeanVM checkout.
 
 The checked fixture uses:
 
@@ -83,7 +83,7 @@ The verifier assigns authority to its inputs as follows:
 | Value | Authority | Binding rule |
 | --- | --- | --- |
 | Application public inputs | Trusted expected statement supplied separately to native verification | The proof-carried copy must equal the expected slice, and the values are absorbed with the fixed domain separator before any proof-dependent challenge. |
-| Fixed R1CS shape, security configuration, WHIR parameters, and matrix-closing mode | Fixed profile and verifying key | The guest does not decode these values from the proof. The canonical verifying-key identifier commits to the shape, while the profile identifier selects the remaining fixed verifier data. |
+| Fixed R1CS shape, security configuration, WHIR parameters, and matrix-closing mode | Fixed profile and verifying key | The guest does not decode these values from the proof. The v1 context binds the canonical SHA-256 digest of the complete padded A/B/C relation and the fixed profile parameters before the first challenge. The protocol identifier has an eight-byte little-endian length prefix. |
 | Witness commitment and every Spartan or WHIR proof value | Untrusted proof data | Each value is checked by the native verifier and is absorbed before the first challenge that depends on it. |
 | Eight-element LeanVM public input | Derived from the application statement | The guest recomputes the domain-separated statement digest; the terminal adapter supplies the same digest. |
 | Guest bytecode hash | LeanVM proof statement | M1 fixes this value after the guest has been compiled. |
@@ -103,15 +103,15 @@ The challenge audit for the control profile is:
 
 #### Production input limit
 
-The candidate manifest caps a production guest input at 1,048,576 field words, or 4,194,304 bytes. The selected full-ZK SPARK encoding occupies 682,698 canonical words and pads to that fixed witness size. A larger encoding is rejected instead of allocating an unbounded guest input.
+The production guest caps its ordinary input at 1,048,576 field words, or 4,194,304 bytes. A larger encoding is rejected instead of allocating an unbounded input. The [guest documentation](../../../leanVM/crates/spartan_whir_guest/README.md) records the current ordinary and compact input sizes.
 
 #### SPARK candidate dimensions
 
-The production SHA-256 R1CS has 3,251,928 SPARK union entries, which round to a `2^22` value domain. Eight fixed-value columns give `22 + 3 = 25` variables. The `2^21` column memory dominates the `2^20` row memory, and two fixed-audit columns give a `2^22` audit domain. The ten quintic read coordinates split into eight- and two-column groups, giving 25 and 23 variables. The candidate uses the schedule selected at 25 variables for both read groups; the recorded schedule was validated for both dimensions. `protocol_manifest.json` records these inputs alongside the resulting 25-variable fixed-value, 22-variable fixed-audit, and 25-variable shared read configurations.
+The production SHA-256 R1CS has 3,251,928 SPARK union entries, which round to a `2^22` value domain. Eight fixed-value columns give `22 + 3 = 25` variables. The `2^21` column memory dominates the `2^20` row memory, and two fixed-audit columns give a `2^22` audit domain. The ten quintic read coordinates split into eight- and two-column groups, giving 25 and 23 variables. The selected schedule uses 25 variables for both read groups and is validated for both dimensions.
 
 #### LeanVM outer-proof controls
 
-The M1 control proof uses LeanVM `log_inv_rate = 2`, an inverse rate of 1/4. LeanVM's deterministic padding rule sets each table to `max(ceil(log2(non_padded_rows + 1)), profile_min_log_rows, 8)`, and memory to the next power of two covering the initialized memory, execution cycles, and the 256-cell minimum. The selected M3 profile uses a 121-bit outer target, first folding factor 9, `log_inv_rate = 1`, `2^26` memory, and execution, extension-operation, and Poseidon1 tables at `2^25`, `2^21`, and `2^17`. The protocol manifest records these values and the guest bytecode hash for the terminal verifier.
+The M1 control proof uses LeanVM `log_inv_rate = 2`, an inverse rate of 1/4. LeanVM's deterministic padding rule sets each table to `max(ceil(log2(non_padded_rows + 1)), profile_min_log_rows, 8)`, and memory to the next power of two covering the initialized memory, execution cycles, and the 256-cell minimum. The [guest documentation](../../../leanVM/crates/spartan_whir_guest/README.md) records current execution measurements and recursion results.
 
 #### Rejection fixtures
 
@@ -119,21 +119,16 @@ The `mutations` directory contains one-value changes to the application public i
 
 #### Regeneration and verification
 
-Run the generator from the `spartan-whir` checkout and pass the exact repository revisions to record. The generator reads the resolved Plonky3 dependency revision from `spartan-whir/Cargo.lock`:
+Run the generator from the `spartan-whir` checkout. Regenerate the complete fixture and copy its consumer files together:
+
 
 ```bash
-cargo run --bin leanvm-m0-fixture -- \
-  testdata/leanvm-m0 \
-  "$(git rev-parse HEAD)" \
-  "$(git -C ../leanVM merge-base HEAD origin/main)" \
-  "$(git -C ../leanVM rev-parse HEAD)" \
-  "$(git -C ../sol-spartan-whir rev-parse HEAD)"
+cargo run --release --features poseidon1 -j4 --bin leanvm-m0-fixture -- \
+  testdata/leanvm-m0
 ```
 
 Verify codec, trace, fixture reproduction, and mutations with:
 
 ```bash
-cargo test --test leanvm_m0
+cargo test --release --features poseidon1 -j4 --test leanvm_m0
 ```
-
-`protocol_manifest.json` fixes Ethereum mainnet (chain ID 1, standard EVM) as the terminal chain and records M0 as complete. M4 records the generated terminal verifier's calldata, gas, runtime bytecode, and required precompiles. M5 compares the complete verifier transaction with the current Ethereum mainnet limits and records the deployment margin.

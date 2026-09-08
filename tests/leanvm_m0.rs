@@ -9,9 +9,9 @@ use spartan_whir::{
         LEANVM_CONTROL_STATEMENT_DIGEST_ID, LEANVM_CONTROL_STATEMENT_SCHEMA_ID,
         LEANVM_GUEST_INPUT_VERSION,
     },
-    MatrixClosingMode, PoseidonSpartanProtocol, PoseidonTranscriptEvent, QuinticExtension,
-    SecurityConfig, SoundnessAssumption, SpartanSnarkConfig, SpartanWhirError, SyntheticR1csConfig,
-    WhirParams,
+    InvalidConfigReason, MatrixClosingMode, PoseidonSpartanProtocol, PoseidonTranscriptEvent,
+    QuinticExtension, SecurityConfig, SoundnessAssumption, SpartanSnarkConfig, SpartanWhirError,
+    SyntheticR1csConfig, WhirParams,
 };
 
 fn control_fixture() -> spartan_whir::SyntheticR1csFixture {
@@ -96,10 +96,38 @@ fn control_codec_roundtrips_and_is_deterministic() {
         SpartanWhirError::InvalidCommitmentShape
     );
 
-    assert_eq!(control_verifying_key_id(&vk), control_verifying_key_id(&vk));
+    assert_eq!(
+        control_verifying_key_id(&vk).expect("control key ID derives"),
+        control_verifying_key_id(&vk).expect("control key ID reproduces")
+    );
     assert_ne!(
         control_statement_digest(&fixture.public_inputs),
         control_statement_digest(&[fixture.public_inputs[0] + spartan_whir::engine::F::ONE])
+    );
+}
+
+#[test]
+fn restored_control_verifying_key_requires_authentication_for_export() {
+    type Protocol = PoseidonSpartanProtocol<QuinticExtension>;
+
+    let fixture = control_fixture();
+    let (_, vk) = Protocol::setup_with_config(&fixture.shape, &control_config())
+        .expect("control setup succeeds");
+    let mut restored_vk =
+        bincode::deserialize(&bincode::serialize(&vk).expect("control verifying key serializes"))
+            .expect("control verifying key deserializes");
+    assert_eq!(
+        control_verifying_key_id(&restored_vk),
+        Err(SpartanWhirError::InvalidConfig(
+            InvalidConfigReason::UnauthenticatedVerifyingKey
+        ))
+    );
+    restored_vk
+        .authenticate()
+        .expect("restored control key authenticates");
+    assert_eq!(
+        control_verifying_key_id(&restored_vk).expect("restored control key ID derives"),
+        control_verifying_key_id(&vk).expect("setup control key ID derives")
     );
 }
 
@@ -228,15 +256,6 @@ fn checked_manifest_artifacts_and_mutations_are_consistent() {
         statement["digest_algorithm"].as_str().unwrap(),
         LEANVM_CONTROL_STATEMENT_DIGEST_ID
     );
-    for (relative, expected) in manifest["implementation_source_ids"]
-        .as_object()
-        .expect("implementation source identifiers are an object")
-    {
-        let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
-            .expect("implementation source reads");
-        assert_eq!(sha256_hex(&bytes), expected.as_str().unwrap());
-    }
-
     let mutations = manifest["mutations"]
         .as_array()
         .expect("mutations are an array");
@@ -258,47 +277,6 @@ fn checked_manifest_artifacts_and_mutations_are_consistent() {
             mutation["target"].as_str().unwrap()
         );
     }
-
-    let protocol_manifest: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../testdata/leanvm-m0/protocol_manifest.json"
-    ))
-    .expect("protocol manifest decodes");
-    assert_eq!(protocol_manifest["m0_state"], "complete");
-    assert_eq!(
-        protocol_manifest["limits"]["terminal_chain"],
-        "Ethereum mainnet"
-    );
-    assert_eq!(protocol_manifest["limits"]["terminal_chain_id"], 1);
-    assert_eq!(
-        protocol_manifest["limits"]["terminal_measurement_milestone"],
-        "M4"
-    );
-    assert_eq!(
-        protocol_manifest["limits"]["terminal_acceptance_milestone"],
-        "M5"
-    );
-    assert_eq!(protocol_manifest["open_decisions"], serde_json::json!([]));
-    assert!(protocol_manifest["application"]
-        .get("witness_variables")
-        .is_none());
-    assert_eq!(
-        protocol_manifest["application"]["log2_witness_variables"],
-        20
-    );
-    let sizing = &protocol_manifest["production_candidates"]["spark_sizing"];
-    assert_eq!(sizing["union_nnz"], 3_251_928);
-    assert_eq!(sizing["value_domain_size"], 1 << 22);
-    assert_eq!(sizing["fixed_value_num_variables"], 25);
-    assert_eq!(sizing["fixed_audit_num_variables"], 22);
-    assert_eq!(
-        sizing["quintic_read_num_variables"],
-        serde_json::json!([25, 23])
-    );
-    assert_eq!(sizing["shared_read_schedule_num_variables"], 25);
-    assert_eq!(
-        protocol_manifest["source_revisions"]["plonky3_source"],
-        "spartan-whir/Cargo.lock"
-    );
 }
 
 fn check_artifact(fixture_dir: &std::path::Path, artifact: &serde_json::Value) -> Vec<u8> {

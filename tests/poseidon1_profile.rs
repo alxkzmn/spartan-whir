@@ -226,6 +226,20 @@ fn poseidon1_full_zk_profile_uses_its_own_transcript_id() {
     PoseidonZkSpartanProtocol::<QuarticBinExtension>::verify(&vk, &instance, &proof, &mut verifier)
         .expect("Poseidon1 full-ZK proof verifies");
 
+    let mut changed_relation_json =
+        serde_json::to_value(&vk).expect("Poseidon1 verifying key serializes");
+    let matrix_value = &mut changed_relation_json["shape_canonical"]["a"]["entries"][0]["val"];
+    let value = matrix_value
+        .as_u64()
+        .expect("matrix coefficient is an integer");
+    *matrix_value = serde_json::json!(value + 1);
+    let mut changed_relation_vk: PoseidonZkVerifyingKey<QuarticBinExtension> =
+        serde_json::from_value(changed_relation_json).expect("changed relation decodes");
+    assert!(matches!(
+        changed_relation_vk.authenticate(),
+        Err(spartan_whir::SpartanWhirError::InvalidConfig(_))
+    ));
+
     let mut tampered_instance = instance.clone();
     tampered_instance.public_inputs[0] += KoalaBear::ONE;
     let mut verifier = poseidon_zk_challenger();
@@ -325,17 +339,10 @@ fn poseidon1_full_zk_profile_uses_its_own_transcript_id() {
     wrong_profile_json["domain_separator"]["protocol_id"] =
         serde_json::to_value(spartan_whir::FULL_ZK_PROTOCOL_ID)
             .expect("default full-ZK protocol identifier serializes");
-    let wrong_profile_vk: PoseidonZkVerifyingKey<QuarticBinExtension> =
+    let mut wrong_profile_vk: PoseidonZkVerifyingKey<QuarticBinExtension> =
         serde_json::from_value(wrong_profile_json)
             .expect("verifying key with a changed protocol identifier decodes");
-    let mut verifier = poseidon_zk_challenger();
-    assert!(PoseidonZkSpartanProtocol::<QuarticBinExtension>::verify(
-        &wrong_profile_vk,
-        &instance,
-        &proof,
-        &mut verifier,
-    )
-    .is_err());
+    assert!(wrong_profile_vk.authenticate().is_err());
 
     let mut tampered = proof;
     tampered.pcs_proof.sumchecks[0].mu_tilde += QuarticBinExtension::ONE;

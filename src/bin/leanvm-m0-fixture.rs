@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     env,
     error::Error,
     fs, io,
@@ -18,44 +17,18 @@ use p3_whir::pcs::proof::QueryOpenings;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use spartan_whir::protocol::{
-    fixed_audit_column_count, fixed_value_column_count, read_table_group_column_counts,
-};
 use spartan_whir::{
-    control_statement_digest, control_statement_digest_preimage, control_verifying_key_id,
-    decode_control_guest_input, encode_control_guest_input, generate_satisfiable_fixture,
-    recommended_quintic_spark_fixed_whir_params, recommended_quintic_spark_read_whir_params,
-    recommended_quintic_spark_zk_whir_params, recommended_quintic_zk_whir_params,
-    verify_control_with_trace, MatrixClosingMode, PoseidonProof, PoseidonSpartanProof,
-    PoseidonSpartanProtocol, PoseidonTranscriptEvent, PoseidonZkSetupConfig, QuinticExtension,
-    SecurityConfig, SoundnessAssumption, SparkWhirParams, SpartanProofKind, SpartanSnarkConfig,
-    SyntheticR1csConfig, WhirParams, DEFAULT_ZK_ELL, DEFAULT_ZK_MASK_LOG_INV_RATE,
+    control_statement_digest, control_statement_digest_preimage, decode_control_guest_input,
+    encode_control_guest_input, generate_satisfiable_fixture, verify_control_with_trace,
+    MatrixClosingMode, PoseidonProof, PoseidonSpartanProof, PoseidonSpartanProtocol,
+    PoseidonTranscriptEvent, QuinticExtension, SecurityConfig, SoundnessAssumption,
+    SpartanProofKind, SpartanSnarkConfig, SyntheticR1csConfig, WhirParams,
     LEANVM_CONTROL_PROFILE_ID, LEANVM_CONTROL_PROFILE_NUMBER, LEANVM_CONTROL_STATEMENT_DIGEST_ID,
     LEANVM_CONTROL_STATEMENT_SCHEMA_ID, LEANVM_GUEST_INPUT_VERSION, MAX_CONTROL_GUEST_WORDS,
 };
 
 type ControlProof = PoseidonProof<QuinticExtension>;
 type ControlDirectProof = PoseidonSpartanProof<QuinticExtension>;
-
-const APPLICATION_R1CS_SHA256: &str =
-    "1f1c6beae387e938d86b5ca433abc024945f14c2763db0c29638613ebb206627";
-const APPLICATION_RAW_VARIABLES: usize = 593_120;
-const APPLICATION_LOG2_WITNESS_VARIABLES: usize = 20;
-const APPLICATION_PADDED_WITNESS_VARIABLES: usize = 1 << APPLICATION_LOG2_WITNESS_VARIABLES;
-const APPLICATION_SPARK_RAW_ABC_ENTRIES: usize = 4_850_245;
-const APPLICATION_SPARK_UNION_NNZ: usize = 3_251_928;
-const MAX_PRODUCTION_GUEST_WORDS: usize = 1 << 20;
-const M1_CONTROL_WHIR_LOG_INV_RATE: usize = 2;
-
-#[derive(Debug, Serialize)]
-struct SourceRevisions {
-    spartan_whir: String,
-    leanvm_upstream_base: String,
-    leanvm_branch_head: String,
-    sol_spartan_whir: String,
-    plonky3: String,
-    plonky3_source: &'static str,
-}
 
 #[derive(Debug, Serialize)]
 struct ArtifactRecord {
@@ -81,14 +54,6 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let output_dir = args.next().map(PathBuf::from).unwrap_or_else(|| usage());
-    let revisions = SourceRevisions {
-        spartan_whir: required_arg(&mut args, "spartan-whir commit")?,
-        leanvm_upstream_base: required_arg(&mut args, "leanVM upstream base commit")?,
-        leanvm_branch_head: required_arg(&mut args, "leanVM branch HEAD")?,
-        sol_spartan_whir: required_arg(&mut args, "sol-spartan-whir commit")?,
-        plonky3: locked_plonky3_revision()?,
-        plonky3_source: "spartan-whir/Cargo.lock",
-    };
     if args.next().is_some() {
         usage();
     }
@@ -241,14 +206,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         &trailing,
     )?);
 
-    let verifying_key_id = control_verifying_key_id(&vk);
     let fixture_manifest = json!({
         "manifest_version": 1,
         "profile_id": LEANVM_CONTROL_PROFILE_ID,
         "profile_number": LEANVM_CONTROL_PROFILE_NUMBER,
         "guest_input_version": LEANVM_GUEST_INPUT_VERSION,
-        "source_revisions": revisions,
-        "implementation_source_ids": implementation_source_ids(),
         "field": {
             "base": "KoalaBear",
             "modulus": spartan_whir::engine::F::ORDER_U32,
@@ -272,7 +234,6 @@ fn run() -> Result<(), Box<dyn Error>> {
             "variables": vk.shape_canonical().num_vars,
             "public_inputs": vk.shape_canonical().num_io,
         },
-        "verifying_key_id": hex(&verifying_key_id),
         "guest_input": guest_input,
         "guest_input_words": guest_words.len(),
         "guest_input_word_limit": MAX_CONTROL_GUEST_WORDS,
@@ -288,8 +249,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         &fixture_manifest,
     )?;
 
-    let protocol_manifest = protocol_manifest(revisions_value(&fixture_manifest))?;
-    write_json(&output_dir, "protocol_manifest.json", &protocol_manifest)?;
     println!("wrote LeanVM M0 fixtures to {}", output_dir.display());
     Ok(())
 }
@@ -299,8 +258,9 @@ fn control_guest_constants(
     trace: &[PoseidonTranscriptEvent],
     public_inputs: &[spartan_whir::engine::F],
 ) -> Result<serde_json::Value, Box<dyn Error>> {
+    let spartan_domain_separator_len = verifying_key.domain_separator().to_bytes().len();
     let spartan_domain_separator = trace
-        .get(..83)
+        .get(..spartan_domain_separator_len)
         .ok_or_else(|| io::Error::other("control trace is missing the Spartan domain separator"))?
         .iter()
         .map(|event| match event {
@@ -310,7 +270,7 @@ fn control_guest_constants(
             )),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    match trace.get(83) {
+    match trace.get(spartan_domain_separator_len) {
         Some(PoseidonTranscriptEvent::Observe { values })
             if values == &canonical(public_inputs) => {}
         _ => {
@@ -320,7 +280,7 @@ fn control_guest_constants(
             .into());
         }
     }
-    let whir_domain_separator = match trace.get(84) {
+    let whir_domain_separator = match trace.get(spartan_domain_separator_len + 1) {
         Some(PoseidonTranscriptEvent::Observe { values }) => values.clone(),
         _ => {
             return Err(io::Error::other(
@@ -451,233 +411,6 @@ fn canonical_2d<const ROWS: usize, const COLUMNS: usize>(
     values: &[[spartan_whir::engine::F; COLUMNS]; ROWS],
 ) -> Vec<Vec<u32>> {
     values.iter().map(|row| canonical(row)).collect()
-}
-
-fn protocol_manifest(
-    source_revisions: serde_json::Value,
-) -> Result<serde_json::Value, Box<dyn Error>> {
-    let value_domain_size = APPLICATION_SPARK_UNION_NNZ.next_power_of_two();
-    let value_domain_log2 = exact_log2(value_domain_size, "SPARK value domain")?;
-    let fixed_value_columns = fixed_value_column_count();
-    let fixed_value_num_variables =
-        value_domain_log2 + exact_log2(fixed_value_columns, "SPARK fixed-value column count")?;
-    let row_memory_size = APPLICATION_PADDED_WITNESS_VARIABLES;
-    let col_memory_size = APPLICATION_PADDED_WITNESS_VARIABLES * 2;
-    let fixed_audit_columns = fixed_audit_column_count();
-    let fixed_audit_domain_size = row_memory_size.max(col_memory_size) * fixed_audit_columns;
-    let fixed_audit_num_variables = exact_log2(fixed_audit_domain_size, "SPARK audit domain")?;
-    let read_group_columns =
-        read_table_group_column_counts::<QuinticExtension>().map_err(protocol_error)?;
-    let read_num_variables = read_group_columns
-        .iter()
-        .map(|&columns| {
-            Ok(value_domain_log2 + exact_log2(columns, "SPARK read-group column count")?)
-        })
-        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-    let shared_read_num_variables = read_num_variables
-        .iter()
-        .copied()
-        .max()
-        .ok_or_else(|| io::Error::other("SPARK read groups are empty"))?;
-
-    let security = SecurityConfig {
-        security_level_bits: 116,
-        merkle_security_bits: 116,
-        soundness_assumption: SoundnessAssumption::JohnsonBound,
-    };
-    let spark_whir_params = SparkWhirParams {
-        fixed_value: recommended_quintic_spark_fixed_whir_params(fixed_value_num_variables),
-        fixed_audit: recommended_quintic_spark_fixed_whir_params(fixed_audit_num_variables),
-        read: recommended_quintic_spark_read_whir_params(shared_read_num_variables),
-    };
-    let direct = PoseidonZkSetupConfig {
-        matrix_closing: MatrixClosingMode::DirectSparse,
-        security,
-        whir_params: recommended_quintic_zk_whir_params(20),
-        spark_whir_params: None,
-        ell_zk: DEFAULT_ZK_ELL,
-        mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
-    };
-    let spark = PoseidonZkSetupConfig {
-        matrix_closing: MatrixClosingMode::Spark,
-        security,
-        whir_params: recommended_quintic_spark_zk_whir_params(20),
-        spark_whir_params: Some(spark_whir_params),
-        ell_zk: DEFAULT_ZK_ELL,
-        mask_log_inv_rate: DEFAULT_ZK_MASK_LOG_INV_RATE,
-    };
-
-    Ok(json!({
-        "manifest_version": 1,
-        "m0_state": "complete",
-        "source_revisions": source_revisions,
-        "implementation_source_ids": implementation_source_ids(),
-        "application": {
-            "id": "sha256-2048-byte-optimized-v1",
-            "circuit_source": "tests/circuits/optimized/sha256_2048b.circom",
-            "r1cs_sha256": APPLICATION_R1CS_SHA256,
-            "raw_constraints": 605424,
-            "padded_rows": 1048576,
-            "raw_variables": APPLICATION_RAW_VARIABLES,
-            "log2_witness_variables": APPLICATION_LOG2_WITNESS_VARIABLES,
-            "padded_witness_variables": APPLICATION_PADDED_WITNESS_VARIABLES,
-            "public_statement": {
-                "schema": "sha256-digest-bits-msb-first-v1",
-                "fields": 256,
-                "values": "boolean KoalaBear elements",
-            },
-        },
-        "control_profile": {
-            "id": LEANVM_CONTROL_PROFILE_ID,
-            "encoding": "leanvm-control-field-words-v1",
-            "fixture_manifest": "control_fixture_manifest.json",
-        },
-        "production_candidates": {
-            "privacy": "full_zk",
-            "base_field": "KoalaBear",
-            "extension": "X^5 + X^2 - 1",
-            "selected_hash_profile": "spartan-whir-poseidon1-v1",
-            "selected_matrix_closing": "spark",
-            "hash_candidates": [
-                "spartan-whir-poseidon2-leanvm-instructions-v1",
-                "spartan-whir-poseidon1-v1",
-                "spartan-whir-poseidon2-leanvm-precompile-v1"
-            ],
-            "matrix_closing": {
-                "direct_sparse": direct,
-                "spark": spark,
-            },
-            "spark_sizing": {
-                "raw_abc_entries": APPLICATION_SPARK_RAW_ABC_ENTRIES,
-                "union_nnz": APPLICATION_SPARK_UNION_NNZ,
-                "value_domain_size": value_domain_size,
-                "value_domain_log2": value_domain_log2,
-                "fixed_value_columns": fixed_value_columns,
-                "fixed_value_num_variables": fixed_value_num_variables,
-                "row_memory_size": row_memory_size,
-                "column_memory_size": col_memory_size,
-                "fixed_audit_columns": fixed_audit_columns,
-                "fixed_audit_num_variables": fixed_audit_num_variables,
-                "quintic_read_group_columns": read_group_columns,
-                "quintic_read_num_variables": read_num_variables,
-                "shared_read_schedule_num_variables": shared_read_num_variables,
-                "derivation": "The application has 3251928 SPARK union entries, which round to a 2^22 value domain. Eight fixed-value columns give 22 + 3 = 25 variables. The 2^21 column memory dominates the 2^20 row memory, and two audit columns give a 2^22 audit domain. The ten quintic read coordinates split into eight- and two-column groups, giving 25 and 23 variables; the shared read schedule is selected at 25 and validated for both groups.",
-                "measurement_source": "benchmark-results/2026-08-27-sha256-2048b-schedule-refresh.md"
-            },
-            "proof_encoding_ids": {
-                "direct_sparse": {
-                    "id": "leanvm-full-zk-direct-field-words-v1",
-                    "status": "implemented; production guest rejected by LeanVM limits",
-                    "rust_proof_type": "PoseidonZkProof with DirectSparse matrix closing",
-                    "runtime_matrix_closing_tag": false
-                },
-                "spark": {
-                    "id": "leanvm-full-zk-spark-field-words-v1",
-                    "status": "implemented and selected",
-                    "rust_proof_type": "PoseidonZkProof with SPARK matrix closing",
-                    "runtime_matrix_closing_tag": false
-                }
-            },
-        },
-        "outer_profile": {
-            "profile_id": "spartan-whir-poseidon1-quintic-full-zk-spark-leanvm-v1",
-            "proof_system": "LeanVM execution proof",
-            "transcript_and_merkle": "LeanVM Poseidon1",
-            "security_bits": 121,
-            "pow_bits": 16,
-            "whir_initial_folding_factor": 9,
-            "whir_subsequent_folding_factor": 5,
-            "rs_domain_initial_reduction_factor": 5,
-            "public_input_elements": 8,
-            "statement_digest_delivery": "fixed application adapter supplies the canonical digest",
-            "guest_bytecode_hash": [1029837421_u32, 1341148120, 691546331, 261592802, 1374499229, 1181121684, 850759154, 277945311],
-            "m1_control_whir_log_inverse_rate": M1_CONTROL_WHIR_LOG_INV_RATE,
-            "supported_whir_log_inverse_rates": [1, 2, 3, 4],
-            "production_whir_log_inverse_rate": 1,
-            "table_padding": {
-                "log_rows_rule": "max(ceil(log2(non_padded_rows + 1)), profile_min_log_rows, 8)",
-                "m1_control_profile_min_log_rows": {},
-                "memory_rule": "next_power_of_two(max(memory_cells_after_padding_constants, execution_cycles, 256))",
-                "maximum_log_rows": {
-                    "execution": 26,
-                    "extension_op": 22,
-                    "poseidon16": 22
-                }
-            },
-            "memory_log_size": 26,
-            "table_log_rows": {
-                "execution": 25,
-                "extension_op": 21,
-                "poseidon16": 17
-            },
-        },
-        "limits": {
-            "control_guest_input_words": MAX_CONTROL_GUEST_WORDS,
-            "production_guest_input_words": MAX_PRODUCTION_GUEST_WORDS,
-            "production_guest_input_bytes": MAX_PRODUCTION_GUEST_WORDS * 4,
-            "production_guest_input_limit_basis": "The selected full-ZK SPARK proof uses 682698 canonical field words and pads to the fixed 1048576-word LeanVM witness.",
-            "terminal_chain": "Ethereum mainnet",
-            "terminal_chain_id": 1,
-            "terminal_execution_environment": "standard EVM",
-            "terminal_runtime_bytecode_bytes": 24576,
-            "terminal_measurement_milestone": "M4",
-            "terminal_acceptance_milestone": "M5",
-            "terminal_acceptance_rule": "The complete verifier transaction must fit the current Ethereum mainnet block gas limit. M4 records calldata bytes, calldata gas, execution gas, total transaction gas, runtime bytecode, and required precompiles; M5 records the measured margin and accepts or rejects the deployment profile.",
-        },
-        "open_decisions": []
-    }))
-}
-
-fn implementation_source_ids() -> serde_json::Value {
-    json!({
-        "Cargo.lock": source_sha256(include_bytes!("../../Cargo.lock")),
-        "src/bin/leanvm-m0-fixture.rs": source_sha256(include_bytes!("leanvm-m0-fixture.rs")),
-        "src/engine.rs": source_sha256(include_bytes!("../engine.rs")),
-        "src/leanvm.rs": source_sha256(include_bytes!("../leanvm.rs")),
-        "src/lib.rs": source_sha256(include_bytes!("../lib.rs")),
-        "src/poseidon_trace.rs": source_sha256(include_bytes!("../poseidon_trace.rs")),
-    })
-}
-
-fn exact_log2(value: usize, name: &str) -> Result<usize, Box<dyn Error>> {
-    if value == 0 || !value.is_power_of_two() {
-        return Err(io::Error::other(format!("{name} must be a non-zero power of two")).into());
-    }
-    Ok(value.ilog2() as usize)
-}
-
-fn locked_plonky3_revision() -> Result<String, Box<dyn Error>> {
-    let mut revisions = BTreeSet::new();
-    for line in include_str!("../../Cargo.lock").lines() {
-        let Some(source) = line
-            .strip_prefix("source = \"")
-            .and_then(|line| line.strip_suffix('"'))
-        else {
-            continue;
-        };
-        if !source.contains("/Plonky3.git?rev=") {
-            continue;
-        }
-        let revision = source
-            .rsplit_once('#')
-            .map(|(_, revision)| revision)
-            .ok_or_else(|| {
-                io::Error::other("Plonky3 Cargo.lock source has no resolved revision")
-            })?;
-        revisions.insert(revision.to_owned());
-    }
-    if revisions.len() != 1 {
-        return Err(io::Error::other(format!(
-            "expected one resolved Plonky3 revision in Cargo.lock, found {}",
-            revisions.len()
-        ))
-        .into());
-    }
-    Ok(revisions.into_iter().next().unwrap())
-}
-
-fn source_sha256(source: &[u8]) -> String {
-    hex(&Sha256::digest(source))
 }
 
 fn control_config() -> SpartanSnarkConfig {
@@ -812,10 +545,6 @@ fn canonical(values: &[spartan_whir::engine::F]) -> Vec<u32> {
     values.iter().map(PrimeField32::as_canonical_u32).collect()
 }
 
-fn revisions_value(fixture_manifest: &serde_json::Value) -> serde_json::Value {
-    fixture_manifest["source_revisions"].clone()
-}
-
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -830,19 +559,7 @@ fn protocol_error(error: spartan_whir::SpartanWhirError) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-fn required_arg(
-    args: &mut impl Iterator<Item = std::ffi::OsString>,
-    name: &str,
-) -> Result<String, Box<dyn Error>> {
-    args.next()
-        .ok_or_else(|| io::Error::other(format!("missing {name}")))?
-        .into_string()
-        .map_err(|_| io::Error::other(format!("{name} must be UTF-8")).into())
-}
-
 fn usage() -> ! {
-    eprintln!(
-        "usage: leanvm-m0-fixture <output-dir> <spartan-whir-commit> <leanvm-upstream-base> <leanvm-branch-head> <sol-spartan-whir-commit>"
-    );
+    eprintln!("usage: leanvm-m0-fixture <output-dir>");
     process::exit(2);
 }

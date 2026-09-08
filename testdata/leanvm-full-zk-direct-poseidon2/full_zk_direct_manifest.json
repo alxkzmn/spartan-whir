@@ -1,45 +1,45 @@
 {
   "artifacts": {
     "guest_constants": {
-      "bytes": 6124,
+      "bytes": 6545,
       "file": "full_zk_direct_guest_constants.json",
-      "sha256": "f332977e2221ec6db0b24bd29f137820e0a91db9abc0218dea40b6694a7fe3a5"
+      "sha256": "1d9efdf1634057bec5ce5e6c4ff5608e67fd657dfb452ec7df1650aa3a907bef"
     },
     "guest_input": {
-      "bytes": 53460,
+      "bytes": 52884,
       "file": "full_zk_direct_guest_input.words",
-      "sha256": "f8203559070d83a4ec34be0e7d4b5fbaf86c3d63fb44dc340ea13db959a000ce"
+      "sha256": "27356502c30a5ebd78af5f2c3e2d511a4fe7b19d85c5a345340405cb0970e7d1"
     },
     "mutations": [
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_public_input.words",
-        "sha256": "1808a145e936b9943ea21b0992e91daad8efe82df2ff3579290188223c98808d"
+        "sha256": "039fb9a78720062fc0e903b876bb811cca64602e6c9b54c70c505b9209c18f97"
       },
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_witness_commitment.words",
-        "sha256": "ae1dade95ce45661261bf3fb341263fcc5a4f9e45f6b5876f95d1881a75a22f9"
+        "sha256": "d82b6a603a32c400f72c46da0acffa9fed615cdc2eb20c52cd7b6c525f6a4e8d"
       },
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_application_mask_commitment.words",
-        "sha256": "2abae7651f658021d6de88ac42e806f588a1850082d0c75dbbcef469b6e1b4af"
+        "sha256": "6b14d7ff407d9fa9392bc4f2bd7ba0635f243f7969053eea5b648342018884ad"
       },
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_outer_sumcheck.words",
-        "sha256": "0d086420d866a2bb767e4c91633536363ea4954958740dda54a6f35e773ce283"
+        "sha256": "e7f2db09f5f68f1339ba642ddcb20a9d9af9b5a77766011ce219f9f26e84dd1c"
       },
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_inner_sumcheck.words",
-        "sha256": "d7bc178965617f9611be9e1a7b8cf5f008f01392157f55a168b1699747426502"
+        "sha256": "8d1903f9dda04ce033ab4d18b67577410cd401cca3433a2e796c9ffdf8c1cf2a"
       },
       {
-        "bytes": 53460,
+        "bytes": 52884,
         "file": "mutations/changed_hiding_whir_base_claim.words",
-        "sha256": "0af58d78b5c06c6f956ce6cdcb5ea495a2eed82f4e00c12658f4e2772dd80754"
+        "sha256": "d66334e09d7433e04c13d4b777e71a8863bcd3df5d4cabbe73f06ef7974a58cb"
       }
     ],
     "statement": {
@@ -48,14 +48,14 @@
       "sha256": "636809db864edc9d039dc1a70e15bcfe8a3c9a3599a723200eb56612dc1dbb8d"
     },
     "transcript_trace": {
-      "bytes": 33497,
+      "bytes": 35620,
       "file": "full_zk_direct_transcript_trace.json",
-      "sha256": "fa2c787aceff6e2cde57051dd142b295825f377947d40ece735d8a8a93712a8f"
+      "sha256": "1e50cc4600e21f7252453d117fbf77e32806571e9aa5fab3ff6d11d1d8f0db77"
     },
     "verifying_key": {
-      "bytes": 3909,
+      "bytes": 4345,
       "file": "full_zk_direct_verifying_key.json",
-      "sha256": "c1c311571933f9406cdbd9766de61a6eeddf46f17ad4bddb1961a0726ff96d22"
+      "sha256": "a643e325f5dbe5344d510c3500ba1fb1ec3b10c18794d49ccb653a3fe1e17c95"
     }
   },
   "extension_degree": 5,
@@ -68,19 +68,8 @@
     "target_log2_witness_poly": 3
   },
   "fixture_seed": 131549106474,
-  "guest_words": 13365,
+  "guest_words": 13221,
   "hash_profile": "poseidon2-width16-width24",
-  "implementation_source_ids": {
-    "Cargo.lock": "ad3ae13738d09443b16298ff218fafb941a701415f0758569e6b7679cfe6d898",
-    "src/bin/leanvm-full-zk-fixture.rs": "60d381218feb72eb44120a959c41d4647f83aad583cd54b4fd294f1b321cad1d",
-    "src/domain_separator.rs": "6d38e1ef5df72f65fe1841ac89416c2e4cb83d8bd32d418a44575c25b2d3420a",
-    "src/engine.rs": "50d412e6ce6aa3e141d0249a4609ff05e65a8be50da50ee1a3d7c2347e060365",
-    "src/leanvm_full_zk.rs": "21aef4e8d1144ba5766f71c0b117b0a2e2bc8013a626de65ee11280637424895",
-    "src/plonky3_whir_pcs.rs": "524c5ecc814cfd282c4b55d936ab30922a46e2bd17dee28e852f91ae4d0c3eda",
-    "src/poseidon.rs": "f9401e7ae73ed9ffe2adde369032f4b935db529471ef5805b91de983d0ab14f0",
-    "src/poseidon_trace.rs": "a350e8dd73a7d67f4865ded48d1f004b996b27c90be2e0864b8f895ed45a6a35",
-    "src/protocol.rs": "bd22fb5ce8f2c1d909a01b19304ee169ce6c3d5cfc426c9cd10b387134b60c9e"
-  },
   "matrix_closing": "direct_sparse",
   "proof_seed": 1031080120782,
   "proof_shape": {
@@ -125,10 +114,5 @@
       "starting_log_inv_rate": 8
     }
   },
-  "source_revisions": {
-    "plonky3": "f64ae15da3807388b1a4e0a89a4fde8fdcdff515",
-    "plonky3_source": "spartan-whir/Cargo.lock",
-    "spartan_whir": "f82eb92e44dc8f4de796ddbad07b1ad3added506"
-  },
-  "transcript_events": 353
+  "transcript_events": 387
 }

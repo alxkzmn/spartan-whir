@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     env,
     error::Error,
     fs::{self, File},
@@ -45,13 +44,6 @@ struct Artifact {
     sha256: String,
 }
 
-#[derive(Serialize)]
-struct SourceRevisions {
-    spartan_whir: String,
-    plonky3: String,
-    plonky3_source: &'static str,
-}
-
 fn main() {
     if let Err(error) = run() {
         eprintln!("error: {error}");
@@ -62,11 +54,6 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let output = args.next().map(PathBuf::from).unwrap_or_else(|| usage());
-    let source_revisions = SourceRevisions {
-        spartan_whir: required_arg(&mut args, "spartan-whir commit")?,
-        plonky3: locked_plonky3_revision()?,
-        plonky3_source: "spartan-whir/Cargo.lock",
-    };
     if args.next().is_some() {
         usage();
     }
@@ -158,8 +145,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         "extension_degree": 5,
         "fixture_seed": FIXTURE_SEED,
         "proof_seed": PROOF_SEED,
-        "source_revisions": source_revisions,
-        "implementation_source_ids": implementation_source_ids(),
         "fixture": {
             "target_log2_witness_poly": fixture_config.target_log2_witness_poly,
             "num_constraints": fixture_config.num_constraints,
@@ -271,7 +256,7 @@ fn proof_shape(proof: &ZkSpartanProof<QuinticExtension>) -> serde_json::Value {
         "base_case_blinded_message": proof.pcs_proof.base_case.blinded_message.len(),
         "base_case_blinded_randomness": proof.pcs_proof.base_case.blinded_randomness.len(),
         "base_case_blinded_masks": proof.pcs_proof.base_case.blinded_masks.len(),
-        "base_case_mask_openings": proof.pcs_proof.base_case.mask_openings.len(),
+        "base_case_mask_openings": proof.pcs_proof.base_case.carried_mask_openings.len(),
     })
 }
 
@@ -308,67 +293,8 @@ fn artifact(output: &Path, path: &Path) -> Result<Artifact, Box<dyn Error>> {
     })
 }
 
-fn implementation_source_ids() -> serde_json::Value {
-    json!({
-        "Cargo.lock": source_sha256(include_bytes!("../../Cargo.lock")),
-        "src/bin/leanvm-full-zk-fixture.rs": source_sha256(include_bytes!("leanvm-full-zk-fixture.rs")),
-        "src/domain_separator.rs": source_sha256(include_bytes!("../domain_separator.rs")),
-        "src/engine.rs": source_sha256(include_bytes!("../engine.rs")),
-        "src/leanvm_full_zk.rs": source_sha256(include_bytes!("../leanvm_full_zk.rs")),
-        "src/plonky3_whir_pcs.rs": source_sha256(include_bytes!("../plonky3_whir_pcs.rs")),
-        "src/poseidon.rs": source_sha256(include_bytes!("../poseidon.rs")),
-        "src/poseidon_trace.rs": source_sha256(include_bytes!("../poseidon_trace.rs")),
-        "src/protocol.rs": source_sha256(include_bytes!("../protocol.rs")),
-    })
-}
-
-fn locked_plonky3_revision() -> Result<String, Box<dyn Error>> {
-    let lock = std::str::from_utf8(include_bytes!("../../Cargo.lock"))?;
-    let mut revisions = BTreeSet::new();
-    for line in lock.lines() {
-        let Some(source) = line.trim().strip_prefix("source = \"") else {
-            continue;
-        };
-        let Some(source) = source.strip_suffix('"') else {
-            continue;
-        };
-        if !source.contains("/Plonky3.git?rev=") {
-            continue;
-        }
-        let revision = source
-            .rsplit_once('#')
-            .map(|(_, revision)| revision)
-            .ok_or_else(|| {
-                io::Error::other("Plonky3 Cargo.lock source has no resolved revision")
-            })?;
-        revisions.insert(revision.to_owned());
-    }
-    if revisions.len() != 1 {
-        return Err(io::Error::other(format!(
-            "expected one resolved Plonky3 revision in Cargo.lock, found {}",
-            revisions.len()
-        ))
-        .into());
-    }
-    Ok(revisions.into_iter().next().unwrap())
-}
-
-fn source_sha256(source: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(source))
-}
-
-fn required_arg(
-    args: &mut impl Iterator<Item = std::ffi::OsString>,
-    name: &str,
-) -> Result<String, Box<dyn Error>> {
-    args.next()
-        .ok_or_else(|| io::Error::other(format!("missing {name}")))?
-        .into_string()
-        .map_err(|_| io::Error::other(format!("{name} must be UTF-8")).into())
-}
-
 fn usage() -> ! {
-    eprintln!("usage: leanvm-full-zk-fixture <output-directory> <spartan-whir-commit>");
+    eprintln!("usage: leanvm-full-zk-fixture <output-directory>");
     process::exit(2)
 }
 

@@ -1469,9 +1469,15 @@ fn direct_merkle_component_security_bits(
 fn direct_commitment_binding_events(args: &Args, witness_rounds: usize) -> Result<usize, String> {
     match args.proof_mode {
         ProofMode::NoZk => witness_rounds.checked_add(1),
+        // Keep the separate-tree upper bound used by setup, including when
+        // the SPARK consumer batches fresh masks at an unchanged schedule.
         ProofMode::FullZk => witness_rounds
-            .checked_mul(5)
-            .and_then(|rounds| rounds.checked_add(8)),
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(3))
+            .and_then(|fresh| {
+                spartan_whir::security::full_zk_witness_commitment_events(witness_rounds, fresh)
+                    .ok()
+            }),
     }
     .ok_or_else(|| "DirectSparse commitment event count overflows".to_owned())
 }
@@ -2290,10 +2296,10 @@ mod tests {
         let args = direct_security_test_args(ProofMode::FullZk, 116);
         assert_eq!(
             direct_commitment_binding_events(&args, 5).expect("commitment count fits"),
-            33
+            34
         );
         assert_eq!(
-            three_way_budget_slack(33).expect("slack calculation fits"),
+            three_way_budget_slack(34).expect("slack calculation fits"),
             7
         );
     }

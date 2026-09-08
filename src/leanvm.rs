@@ -163,6 +163,7 @@ pub fn verify_control_with_trace(
     expected_public_inputs: &[F],
     proof: &ControlProof,
 ) -> Result<Vec<PoseidonTranscriptEvent>, SpartanWhirError> {
+    verifying_key.ensure_authenticated()?;
     if verifying_key.matrix_closing() != MatrixClosingMode::DirectSparse {
         return Err(SpartanWhirError::ProofKindMismatch);
     }
@@ -188,8 +189,15 @@ pub fn verify_control_with_trace(
 /// Canonical identifier for the fixed DirectSparse control verifying key.
 ///
 /// The identifier binds the transcript parameters and the complete canonical
-/// R1CS shape. DirectSparse has no setup commitment outside those values.
-pub fn control_verifying_key_id(verifying_key: &ControlVerifyingKey) -> [u8; 32] {
+/// R1CS shape. DirectSparse has no setup commitment outside those values. A
+/// restored key must be authenticated before deriving this identifier.
+pub fn control_verifying_key_id(
+    verifying_key: &ControlVerifyingKey,
+) -> Result<[u8; 32], SpartanWhirError> {
+    verifying_key.ensure_authenticated()?;
+    if verifying_key.matrix_closing() != MatrixClosingMode::DirectSparse {
+        return Err(SpartanWhirError::ProofKindMismatch);
+    }
     let mut hasher = Sha256::new();
     hasher.update(VERIFYING_KEY_ID_DOMAIN);
     let domain = verifying_key.domain_separator().to_bytes();
@@ -212,7 +220,7 @@ pub fn control_verifying_key_id(verifying_key: &ControlVerifyingKey) -> [u8; 32]
             hasher.update(entry.val.as_canonical_u32().to_le_bytes());
         }
     }
-    hasher.finalize().into()
+    Ok(hasher.finalize().into())
 }
 
 fn update_security(hasher: &mut Sha256, security: SecurityConfig) {

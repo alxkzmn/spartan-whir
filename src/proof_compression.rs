@@ -15,7 +15,7 @@ use crate::plonky3_whir_pcs::{FullZkPoseidonEngine, FullZkPoseidonPcs};
 use crate::spark::CompactSparkBatchedMemoryProductsProof;
 use crate::{Plonky3WhirPcs, SpartanWhirError, ZkMatrixClosingProofFor, ZkSpartanProofFor};
 
-const MAGIC: &[u8; 4] = b"SPC1";
+const MAGIC: &[u8; 4] = b"SPC2";
 const MAX_EXPANDED_FIELDS: usize = 1 << 24;
 const MAX_ROW_WIDTH: usize = 1 << 16;
 
@@ -165,8 +165,8 @@ where
         }
         if options.fresh_rows {
             proof.pcs_proof.base_case.fresh_main_openings.rows.clear();
-            for pair in &mut proof.pcs_proof.base_case.mask_openings {
-                pair.fresh.rows.clear();
+            for opening in &mut proof.pcs_proof.base_case.fresh_mask_openings {
+                opening.rows.clear();
             }
         }
         if options.factored_rounds {
